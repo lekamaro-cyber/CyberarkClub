@@ -136,33 +136,71 @@ if (Test-Path $Files.PrivMembers) {
 }
 
 # --- 4. PROCESS ALL_PASS (Shadow/Passwd) ---
+# Build a password status index first, then update existing entries and add new ones
 Write-Host "########"
 Write-Host "ALL_PASS"
 Write-Host "########"
+$passwdMap = @{}
 if (Test-Path $Files.Passwd) {
     Get-Content $Files.Passwd | ForEach-Object {
         $line = $_.Trim()
-        $parts = $line -split '\s+\.\s+'
-        if ($parts.Count -ge 5) {
-            $user = $parts[0].Trim()
-            $server = $parts[4].Trim()
+        # Format: USERNAME XX DATE ... (Password set/locked), SERVERNAME
+        if ($line -match '^(\S+)\s+.+,\s*(\S+)\s*$') {
+            $pUser = $matches[1].Trim()
+            $pServer = $matches[2].Trim()
             $isLocked = if ($line -match "Password locked") { "Locked" } else { "Active" }
+            $pKey = ("$pUser|$pServer").ToLower().Trim()
+            $passwdMap[$pKey] = $isLocked
+        }
+    }
 
-            # If account already exists, update its status; otherwise add as "Shadow"
-            $key = ("$user|$server").ToLower().Trim()
-            if ($results.ContainsKey($key)) {
-                $results[$key].AccountStatus = $isLocked
-            } else {
-                # Only add here if you want ALL accounts, including non-privileged ones
-                # Otherwise, skip to keep only privilege audit entries
-                if ($isLocked -eq "Active") {
-                    Write-Host "ALL_PASS: Found  $user"
-                    Add-AuditEntry -user $user -server $server -source "Shadow"
-                }
+    # Update AccountStatus for all accounts already in $results
+    foreach ($entry in $results.GetEnumerator()) {
+        if ($passwdMap.ContainsKey($entry.Key)) {
+            $entry.Value.AccountStatus = $passwdMap[$entry.Key]
+        }
+    }
+
+    # Also add shadow-only active accounts
+    foreach ($pEntry in $passwdMap.GetEnumerator()) {
+        if (-not $results.ContainsKey($pEntry.Key)) {
+            if ($pEntry.Value -eq "Active") {
+                $parts = $pEntry.Key -split '\|'
+                Write-Host "ALL_PASS: Found  $($parts[0])"
+                Add-AuditEntry -user $parts[0] -server $parts[1] -source "Shadow"
+                $results[$pEntry.Key].AccountStatus = $pEntry.Value
             }
         }
     }
 }
+
+# --- 4b. PASSWORD STATUS REPORT FOR PRIVILEGED GROUP MEMBERS ---
+Write-Host ""
+Write-Host "###################################"
+Write-Host "PASSWORD STATUS FOR GROUP MEMBERS"
+Write-Host "###################################"
+$groupMembers = $results.Values | Where-Object { $_.Source -match "Group:" }
+$activeGroupCount = 0
+$lockedGroupCount = 0
+$unknownGroupCount = 0
+foreach ($member in $groupMembers) {
+    $mKey = ("$($member.UserSam)|$($member.Server)").ToLower().Trim()
+    if ($passwdMap.ContainsKey($mKey)) {
+        $member.AccountStatus = $passwdMap[$mKey]
+        if ($passwdMap[$mKey] -eq "Active") {
+            $activeGroupCount++
+            Write-Host "  [ACTIVE]  $($member.UserSam) on $($member.Server) (Source: $($member.Source))" -ForegroundColor Green
+        } else {
+            $lockedGroupCount++
+            Write-Host "  [LOCKED]  $($member.UserSam) on $($member.Server) (Source: $($member.Source))" -ForegroundColor DarkGray
+        }
+    } else {
+        $unknownGroupCount++
+        $member.AccountStatus = "Unknown"
+        Write-Host "  [UNKNOWN] $($member.UserSam) on $($member.Server) (Source: $($member.Source)) - not found in passwd file" -ForegroundColor Yellow
+    }
+}
+Write-Host "`nGroup members summary: $activeGroupCount Active, $lockedGroupCount Locked, $unknownGroupCount Unknown" -ForegroundColor Cyan
 
 # --- 5. PROCESS ALL_ROOT_MEMBERS (UID 0) ---
 Write-Host "########"
