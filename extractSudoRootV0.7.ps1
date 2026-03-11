@@ -261,22 +261,10 @@ if (Test-Path $Files.Passwd) {
         }
     }
 
-    # Update AccountStatus for all accounts already in $results
+    # Update AccountStatus for all privileged accounts already in $results
     foreach ($entry in $results.GetEnumerator()) {
         if ($passwdMap.ContainsKey($entry.Key)) {
             $entry.Value.AccountStatus = $passwdMap[$entry.Key]
-        }
-    }
-
-    # Also add shadow-only active accounts
-    foreach ($pEntry in $passwdMap.GetEnumerator()) {
-        if (-not $results.ContainsKey($pEntry.Key)) {
-            if ($pEntry.Value -eq "Active") {
-                $parts = $pEntry.Key -split '\|'
-                Write-Host "ALL_PASS: Found  $($parts[0])"
-                Add-AuditEntry -user $parts[0] -server $parts[1] -source "Shadow"
-                $results[$pEntry.Key].AccountStatus = $pEntry.Value
-            }
         }
     }
 }
