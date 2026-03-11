@@ -220,7 +220,7 @@ if (Test-Path $Files.PrivHost) {
         if ($line -match "ALL=") {
             $isNoPass = if ($line -match "NOPASSWD") { "YES" } else { "NO" }
             $idBlock = ($line -split "ALL=")[0].Trim()
-            if ($idBlock -match '(.+)-([^-]+)$') {
+            if ($idBlock -match '(.+)\s+(\S+)$') {
                 $key = ("$($matches[2])|$($matches[1])").ToLower().Trim()
                 $sudoIndex[$key] = $isNoPass
             }
