@@ -203,10 +203,12 @@ Write-Host "########"
 if (Test-Path $Files.Passwd) {
     Get-Content $Files.Passwd | ForEach-Object {
         $line = $_.Trim()
-        # Format: USERNAME STATUS DATE ... (Password info.) SERVERNAME
-        if ($line -match '^(\S+)\s+.*\)\s+(\S+)\s*$') {
-            $pUser = $matches[1].Trim()
-            $pServer = $matches[2].Trim()
+        # Format: USERNAME . STATUS . DATE . ... (Password info.) . SERVERNAME
+        # Fields separated by " . " (space-dot-space) — Notepad++ shows spaces as dots
+        $parts = $line -split '\s+\.\s+'
+        if ($parts.Count -ge 5) {
+            $pUser = $parts[0].Trim()
+            $pServer = $parts[4].Trim()
             $isLocked = if ($line -match "Password locked") { "Locked" } else { "Active" }
             Write-Host "ALL_PASS: $pUser on $pServer [$isLocked]"
             Add-AuditEntry -user $pUser -server $pServer -source "" -noPass "NO"
@@ -226,8 +228,9 @@ if (Test-Path $Files.PrivHost) {
         $line = $_.Trim()
         if ($line -match 'ALL=') {
             $isNoPass = if ($line -match "NOPASSWD") { "YES" } else { "NO" }
+            # Extract block before ALL= then split on last hyphen (SERVER-NAME-USER)
             $idBlock = ($line -split 'ALL=')[0].Trim()
-            if ($idBlock -match '^([^\.]+)\.(.+)$') {
+            if ($idBlock -match '(.+)-([^\-]+)$') {
                 $srv = $matches[1].Trim()
                 $usr = $matches[2].Trim()
                 $pKey = ("$usr|$srv").ToLower().Trim()
@@ -271,8 +274,8 @@ Write-Host "################"
 $privMembersIndex = @{}
 if (Test-Path $Files.PrivMembers) {
     Get-Content $Files.PrivMembers | ForEach-Object {
-        # Format: SERVER.group:x:GID:members
-        if ($_ -match '^([^\.]+)\.([^\:]+):([^\:]+):([^\:]+):(.*)') {
+        # Format: SERVER-group:x:GID:members (hyphen separates server from group)
+        if ($_ -match '^([^\:]+)-([^\:]+):([^\:]+):([^\:]+):(.*)') {
             $srv = $matches[1]; $grp = $matches[2]
             $matches[5] -split ',' | ForEach-Object {
                 if ($_.Trim()) {
