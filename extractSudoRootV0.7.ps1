@@ -211,13 +211,8 @@ if (Test-Path $Files.PrivHost) {
             if ($idBlock -match '^([^\.]+)\.(.+)$') {
                 $srv = $matches[1].Trim()
                 $usr = $matches[2].Trim()
-                # Skip %group entries (handled by all_priv_members)
-                if ($usr -match '^%') {
-                    Write-Host "ALL_PRIV_HOST: [SKIP GROUP] $usr on $srv" -ForegroundColor DarkGray
-                } else {
-                    Write-Host "ALL_PRIV_HOST:  $usr on $srv"
-                    Add-AuditEntry -user $usr -server $srv -source "Sudoers" -noPass $isNoPass
-                }
+                Write-Host "ALL_PRIV_HOST:  $usr on $srv"
+                Add-AuditEntry -user $usr -server $srv -source "Sudoers" -noPass $isNoPass
             }
         }
     }
