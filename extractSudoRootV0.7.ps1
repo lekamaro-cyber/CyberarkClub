@@ -236,21 +236,32 @@ if (Test-Path $Files.PrivHost) {
         }
     }
 
-    # Enrich existing entries from all_pass
+    # Enrich existing entries or create new ones for accounts not in all_pass
     $sudoersFound = 0
-    foreach ($entry in $results.GetEnumerator()) {
-        if ($privHostIndex.ContainsKey($entry.Key)) {
+    $sudoersNew = 0
+    foreach ($pKey in $privHostIndex.Keys) {
+        $isNoPass = $privHostIndex[$pKey]
+        # Extract user and server from the key
+        $parts = $pKey -split '\|'
+        $usr = $parts[0]; $srv = $parts[1]
+
+        if ($results.ContainsKey($pKey)) {
+            # Account exists in all_pass — enrich it
             $sudoersFound++
-            if ($entry.Value.Source -eq "") {
-                $entry.Value.Source = "Sudoers"
-            } elseif ($entry.Value.Source -notmatch "Sudoers") {
-                $entry.Value.Source += ";Sudoers"
+            if ($results[$pKey].Source -eq "") {
+                $results[$pKey].Source = "Sudoers"
+            } elseif ($results[$pKey].Source -notmatch "Sudoers") {
+                $results[$pKey].Source += ";Sudoers"
             }
-            if ($privHostIndex[$entry.Key] -eq "YES") { $entry.Value.NoPasswd = "YES" }
-            Write-Host "ALL_PRIV_HOST:  $($entry.Value.UserSam) on $($entry.Value.Server)"
+            if ($isNoPass -eq "YES") { $results[$pKey].NoPasswd = "YES" }
+        } else {
+            # Account NOT in all_pass — create it
+            $sudoersNew++
+            Add-AuditEntry -user $usr -server $srv -source "Sudoers" -noPass $isNoPass
         }
+        Write-Host "ALL_PRIV_HOST:  $usr on $srv"
     }
-    Write-Host "  $sudoersFound comptes enrichis avec Sudoers" -ForegroundColor Cyan
+    Write-Host "  $sudoersFound enrichis, $sudoersNew nouveaux (absents de all_pass)" -ForegroundColor Cyan
 }
 
 # --- 4. ENRICH WITH ALL_PRIV_MEMBERS (Wheel/Sudo Groups) ---
@@ -273,21 +284,28 @@ if (Test-Path $Files.PrivMembers) {
         }
     }
 
-    # Enrich existing entries from all_pass
+    # Enrich existing entries or create new ones for accounts not in all_pass
     $groupFound = 0
-    foreach ($entry in $results.GetEnumerator()) {
-        if ($privMembersIndex.ContainsKey($entry.Key)) {
+    $groupNew = 0
+    foreach ($pKey in $privMembersIndex.Keys) {
+        $grpName = "Group:$($privMembersIndex[$pKey])"
+        $parts = $pKey -split '\|'
+        $usr = $parts[0]; $srv = $parts[1]
+
+        if ($results.ContainsKey($pKey)) {
             $groupFound++
-            $grpName = "Group:$($privMembersIndex[$entry.Key])"
-            if ($entry.Value.Source -eq "") {
-                $entry.Value.Source = $grpName
-            } elseif ($entry.Value.Source -notmatch [regex]::Escape($grpName)) {
-                $entry.Value.Source += ";$grpName"
+            if ($results[$pKey].Source -eq "") {
+                $results[$pKey].Source = $grpName
+            } elseif ($results[$pKey].Source -notmatch [regex]::Escape($grpName)) {
+                $results[$pKey].Source += ";$grpName"
             }
-            Write-Host "ALL_PRIV_MEMBERS: $($entry.Value.UserSam) on $($entry.Value.Server) ($grpName)"
+        } else {
+            $groupNew++
+            Add-AuditEntry -user $usr -server $srv -source $grpName
         }
+        Write-Host "ALL_PRIV_MEMBERS: $usr on $srv ($grpName)"
     }
-    Write-Host "  $groupFound comptes enrichis avec groupes privilegies" -ForegroundColor Cyan
+    Write-Host "  $groupFound enrichis, $groupNew nouveaux (absents de all_pass)" -ForegroundColor Cyan
 }
 
 # --- 5. ENRICH WITH ALL_ROOT_MEMBERS (UID 0) ---
@@ -305,20 +323,27 @@ if (Test-Path $Files.RootMembers) {
         }
     }
 
-    # Enrich existing entries from all_pass
+    # Enrich existing entries or create new ones for accounts not in all_pass
     $rootFound = 0
-    foreach ($entry in $results.GetEnumerator()) {
-        if ($rootIndex.ContainsKey($entry.Key)) {
+    $rootNew = 0
+    foreach ($pKey in $rootIndex.Keys) {
+        $parts = $pKey -split '\|'
+        $usr = $parts[0]; $srv = $parts[1]
+
+        if ($results.ContainsKey($pKey)) {
             $rootFound++
-            if ($entry.Value.Source -eq "") {
-                $entry.Value.Source = "Root_Equivalent"
-            } elseif ($entry.Value.Source -notmatch "Root_Equivalent") {
-                $entry.Value.Source += ";Root_Equivalent"
+            if ($results[$pKey].Source -eq "") {
+                $results[$pKey].Source = "Root_Equivalent"
+            } elseif ($results[$pKey].Source -notmatch "Root_Equivalent") {
+                $results[$pKey].Source += ";Root_Equivalent"
             }
-            Write-Host "ALL_ROOT: $($entry.Value.UserSam) on $($entry.Value.Server)"
+        } else {
+            $rootNew++
+            Add-AuditEntry -user $usr -server $srv -source "Root_Equivalent"
         }
+        Write-Host "ALL_ROOT: $usr on $srv"
     }
-    Write-Host "  $rootFound comptes enrichis avec Root_Equivalent" -ForegroundColor Cyan
+    Write-Host "  $rootFound enrichis, $rootNew nouveaux (absents de all_pass)" -ForegroundColor Cyan
 }
 
 # --- 5b. SUMMARY ---
