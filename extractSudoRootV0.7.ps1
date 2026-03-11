@@ -1,3 +1,6 @@
+# --- TLS CONFIGURATION ---
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
 # --- FILE PATH CONFIGURATION ---
 $Files = @{
     PrivHost        = "$PSScriptRoot\Input\all_priv_host"
