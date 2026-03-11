@@ -1,10 +1,12 @@
 # --- FILE PATH CONFIGURATION ---
 $Files = @{
-    PrivHost     = "$PSScriptRoot\Input\all_priv_host"
-    RootMembers  = "$PSScriptRoot\Input\all_root_members"
-    Passwd       = "$PSScriptRoot\Input\all_pass"
-    PrivMembers  = "$PSScriptRoot\Input\all_priv_members"
-    Inventory    = "$PSScriptRoot\request.csv"
+    PrivHost        = "$PSScriptRoot\Input\all_priv_host"
+    RootMembers     = "$PSScriptRoot\Input\all_root_members"
+    Passwd          = "$PSScriptRoot\Input\all_pass"
+    PrivMembers     = "$PSScriptRoot\Input\all_priv_members"
+    Inventory       = "$PSScriptRoot\request.csv"
+    CyberArkAccounts   = "$PSScriptRoot\Input\cyberark_accounts.csv"
+    CyberArkCompliance = "$PSScriptRoot\Input\cyberark_compliance.csv"
 }
 
 $OutCsv = "$PSScriptRoot\output\Audit_Privileges_Unix_$(Get-Date -Format 'yyyy-MM').csv"
@@ -215,7 +217,90 @@ if (Test-Path $Files.RootMembers) {
     }
 }
 
+# --- 6. CYBERARK CROSS-REFERENCE ---
+# 6a. Build CyberArk accounts index (UserName + Address -> found)
+Write-Host ""
+Write-Host "######################"
+Write-Host "CYBERARK CROSS-CHECK"
+Write-Host "######################"
+
+$cyberArkIndex = @{}
+if (Test-Path $Files.CyberArkAccounts) {
+    # --- COLUMN NAMES TO ADJUST ---
+    # Expected CSV columns: UserName, Address (server)
+    # Delimiter: comma by default, change if needed
+    Import-Csv $Files.CyberArkAccounts -Delimiter "," | ForEach-Object {
+        $caUser   = $_.UserName.Trim()
+        $caServer = $_.Address.Trim()
+        if ($caUser -and $caServer) {
+            $caKey = ("$caUser|$caServer").ToLower()
+            $cyberArkIndex[$caKey] = $true
+        }
+    }
+    Write-Host "  Loaded $($cyberArkIndex.Count) accounts from CyberArk accounts export." -ForegroundColor Cyan
+} else {
+    Write-Host "  [WARNING] CyberArk accounts file not found: $($Files.CyberArkAccounts)" -ForegroundColor Red
+    Write-Host "  FoundInCyberArk column will remain empty." -ForegroundColor Yellow
+}
+
+# 6b. Build CyberArk compliance index (CPM-managed = compliant)
+$cyberArkCompliance = @{}
+if (Test-Path $Files.CyberArkCompliance) {
+    # --- COLUMN NAMES TO ADJUST ---
+    # Expected CSV columns: UserName, Address, CPMStatus
+    # CPMStatus = "success" means CPM manages the password -> compliant
+    Import-Csv $Files.CyberArkCompliance -Delimiter "," | ForEach-Object {
+        $ccUser   = $_.UserName.Trim()
+        $ccServer = $_.Address.Trim()
+        $ccCPM    = $_.CPMStatus.Trim()
+        if ($ccUser -and $ccServer) {
+            $ccKey = ("$ccUser|$ccServer").ToLower()
+            # Compliant if CPM status indicates active management
+            $cyberArkCompliance[$ccKey] = $ccCPM
+        }
+    }
+    Write-Host "  Loaded $($cyberArkCompliance.Count) entries from CyberArk compliance report." -ForegroundColor Cyan
+} else {
+    Write-Host "  [WARNING] CyberArk compliance file not found: $($Files.CyberArkCompliance)" -ForegroundColor Red
+    Write-Host "  CA_Compliant column will remain empty." -ForegroundColor Yellow
+}
+
+# 6c. Update results with CyberArk data
+$caFoundCount = 0
+$caCompliantCount = 0
+$caNotFoundCount = 0
+foreach ($entry in $results.GetEnumerator()) {
+    $lookupKey = $entry.Key
+
+    # FoundInCyberArk
+    if ($cyberArkIndex.ContainsKey($lookupKey)) {
+        $entry.Value.FoundInCyberArk = "YES"
+        $caFoundCount++
+    } elseif ($cyberArkIndex.Count -gt 0) {
+        $entry.Value.FoundInCyberArk = "NO"
+        $caNotFoundCount++
+    }
+
+    # CA_Compliant (based on CPM status)
+    if ($cyberArkCompliance.ContainsKey($lookupKey)) {
+        $cpmStatus = $cyberArkCompliance[$lookupKey]
+        if ($cpmStatus -match "^(success|Success)$") {
+            $entry.Value.CA_Compliant = "YES"
+            $caCompliantCount++
+        } else {
+            $entry.Value.CA_Compliant = "NO"
+        }
+    } elseif ($cyberArkCompliance.Count -gt 0) {
+        $entry.Value.CA_Compliant = "NO"
+    }
+}
+
+Write-Host ""
+Write-Host "CyberArk summary:" -ForegroundColor Cyan
+Write-Host "  Found in CyberArk: $caFoundCount | Not found: $caNotFoundCount" -ForegroundColor Cyan
+Write-Host "  CPM Compliant: $caCompliantCount | Non-compliant: $($results.Count - $caCompliantCount)" -ForegroundColor Cyan
+
 # --- FINAL EXPORT ---
 $finalData = $results.Values | Sort-Object UserSam, Server
 $finalData | Export-Csv -Path $OutCsv -NoTypeInformation -Encoding UTF8 -Delimiter ";"
-Write-Host "Audit complete. NOPASSWD column added. Output file: $OutCsv" -ForegroundColor Cyan
+Write-Host "`nAudit complete. Output file: $OutCsv" -ForegroundColor Cyan
