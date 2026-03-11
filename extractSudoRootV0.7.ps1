@@ -14,8 +14,6 @@ $OutCsv = "$PSScriptRoot\output\Audit_Privileges_Unix_$(Get-Date -Format 'yyyy-M
 # --- PVWA CONFIGURATION ---
 $PVWAUrl   = "https://pvwa.yourcompany.com"   # <-- ADAPTER: URL du PVWA
 $AuthMethod = "CyberArk"                       # CyberArk, LDAP, or RADIUS
-# Platform filter for Unix accounts (adapt to your platform IDs)
-$UnixPlatformFilter = "PAM_UNIX"
 
 # --- PVWA FUNCTIONS ---
 function Connect-PVWA {
@@ -59,9 +57,9 @@ function Disconnect-PVWA {
 }
 
 function Get-PVWAAccounts {
-    param([string]$BaseUrl, [string]$Token, [string]$PlatformFilter)
+    param([string]$BaseUrl, [string]$Token)
 
-    Write-Host "  Recuperation des comptes Unix depuis le PVWA..." -ForegroundColor Cyan
+    Write-Host "  Recuperation des comptes depuis le PVWA..." -ForegroundColor Cyan
     $headers = @{ Authorization = $Token }
     $allAccounts = @()
     $offset = 0
@@ -69,9 +67,6 @@ function Get-PVWAAccounts {
 
     do {
         $uri = "$BaseUrl/PasswordVault/api/Accounts?limit=$limit&offset=$offset"
-        if ($PlatformFilter) {
-            $uri += "&filter=platformId co $PlatformFilter"
-        }
         try {
             $response = Invoke-RestMethod -Uri $uri -Method GET -Headers $headers -ContentType "application/json"
             $allAccounts += $response.value
@@ -325,7 +320,7 @@ $cyberArkCompliance = @{}
 
 if ($pvwaToken) {
     # Fetch all Unix accounts from PVWA
-    $pvwaAccounts = Get-PVWAAccounts -BaseUrl $PVWAUrl -Token $pvwaToken -PlatformFilter $UnixPlatformFilter
+    $pvwaAccounts = Get-PVWAAccounts -BaseUrl $PVWAUrl -Token $pvwaToken
 
     if ($pvwaAccounts.Count -gt 0) {
         # Save a local copy for traceability
