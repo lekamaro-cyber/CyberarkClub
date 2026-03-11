@@ -153,10 +153,12 @@ Write-Host "All input files are valid. Starting audit...`n" -ForegroundColor Gre
 # --- INITIALIZATION ---
 $results = @{}
 $statusMap = @{}
+$sudoIndex = @{}    # key = "user|server" -> "YES"/"NO" (NOPASSWD)
+$groupIndex = @{}   # key = "user|server" -> "wheel,sudo,..."
+$rootIndex = @{}    # key = "user|server" -> $true
 
 # --- 1. LOAD INVENTORY (request.csv) ---
 if (Test-Path $Files.Inventory) {
-    # Auto-detect delimiter (French CSV often uses ";")
     $firstLine = Get-Content $Files.Inventory -TotalCount 1
     $csvDelimiter = if ($firstLine -match ";") { ";" } else { "," }
     Write-Host "  Chargement inventaire (delimiter='$csvDelimiter')..." -ForegroundColor Cyan
@@ -167,82 +169,7 @@ if (Test-Path $Files.Inventory) {
     Write-Host "  $($statusMap.Count) serveurs charges depuis request.csv" -ForegroundColor Cyan
 }
 
-# --- CORE FUNCTION: ADD AND MERGE AUDIT DATA ---
-function Add-AuditEntry($user, $server, $source, $noPass = "NO") {
-    if (!$user -or !$server) { return }
-
-    $key = ("$user|$server").ToLower().Trim()
-    $srvKey = $server.ToLower().Trim()
-    $invStatus = if ($statusMap.ContainsKey($srvKey)) { $statusMap[$srvKey] } else { "Inconnu" }
-
-    if ($results.ContainsKey($key)) {
-        # Merge sources (avoid duplicate sources)
-        if ($results[$key].Source -notmatch [regex]::Escape($source)) {
-            $results[$key].Source += ",$source"
-        }
-        # If a line indicates NOPASSWD, enable it for this account
-        if ($noPass -eq "YES") { $results[$key].NoPasswd = "YES" }
-    } else {
-        $results[$key] = [PSCustomObject]@{
-            UserSam         = $user.Trim() # PRESERVE CASE
-            Server          = $server.Trim()
-            InventoryStatus = $invStatus
-            Source          = $source
-            NoPasswd        = $noPass
-            AccountStatus   = "Active" # Default
-            FoundInCyberArk = ""
-            CA_Compliant    = ""
-        }
-    }
-}
-
-# --- 2. PROCESS ALL_PRIV_HOST (Sudoers) ---
-Write-Host "###############"
-Write-Host "ALL_PRIV_HOST"
-Write-Host "###############"
-if (Test-Path $Files.PrivHost) {
-    Get-Content $Files.PrivHost | ForEach-Object {
-        $line = $_.Trim()
-        if ($line -match "ALL=") {
-            $isNoPass = if ($line -match "NOPASSWD") { "YES" } else { "NO" }
-            $idBlock = ($line -split "ALL=")[0].Trim()
-            if ($idBlock -match '(.+)-([^-]+)$') {
-                Write-Host "ALL_PRIV_HOST: $($matches[2])"
-                Add-AuditEntry `
-                    -user $matches[2] `
-                    -server $matches[1] `
-                    -source "Sudoers" `
-                    -noPass $isNoPass
-            }
-        }
-    }
-    Write-Host "  $($results.Count) comptes apres Sudoers" -ForegroundColor Cyan
-}
-
-# --- 3. PROCESS ALL_PRIV_MEMBERS (Wheel/Sudo Groups) ---
-Write-Host "`n###############"
-Write-Host "ALL_PRIV_MEMBERS"
-Write-Host "###############"
-if (Test-Path $Files.PrivMembers) {
-    Get-Content $Files.PrivMembers | ForEach-Object {
-        if ($_ -match '^([^:]+)-([^:]+):[^:]*:(.*)$') {
-            $srv = $matches[1]
-            $grp = $matches[2]
-            $matches[3].Split(",") | ForEach-Object {
-                if ($_.Trim()) {
-                    Write-Host "ALL_PRIV_MEMBERS: Found $($_.Trim())"
-                    Add-AuditEntry `
-                        -user $_.Trim() `
-                        -server $srv `
-                        -source "Group:$grp"
-                }
-            }
-        }
-    }
-    Write-Host "  $($results.Count) comptes apres Groups" -ForegroundColor Cyan
-}
-
-# --- 4. PROCESS ALL_PASS (Shadow/Passwd — enrich status only) ---
+# --- 2. PARSE ALL_PASS (source principale) ---
 Write-Host "`n###############"
 Write-Host "ALL_PASS"
 Write-Host "###############"
@@ -253,56 +180,135 @@ if (Test-Path $Files.Passwd) {
         if ($parts.Count -ge 5) {
             $user = $parts[0].Trim()
             $server = $parts[4].Trim()
-            $isLocked = if ($line -match "Password locked") { "Locked" } else { "Active" }
+
+            # Determine password status
+            $pwdStatus = "Unknown"
+            if     ($line -match "Password set")              { $pwdStatus = "Password set" }
+            elseif ($line -match "Password locked")           { $pwdStatus = "Password locked" }
+            elseif ($line -match "Alternate authentication")  { $pwdStatus = "Alternate authentication" }
+            elseif ($line -match "Empty password")            { $pwdStatus = "Empty password" }
+            elseif ($line -match "Password not set")          { $pwdStatus = "Password not set" }
+
             $key = ("$user|$server").ToLower().Trim()
-            if ($results.ContainsKey($key)) {
-                # Account already known from privilege sources — update status
-                $results[$key].AccountStatus = $isLocked
-            } else {
-                # Account not in privilege sources — add only if Active
-                if ($isLocked -eq "Active") {
-                    Write-Host "ALL_PASS: Found $user"
-                    Add-AuditEntry `
-                        -user $user `
-                        -server $server `
-                        -source "Shadow"
+            $srvKey = $server.ToLower().Trim()
+            $invStatus = if ($statusMap.ContainsKey($srvKey)) { $statusMap[$srvKey] } else { "Inconnu" }
+
+            $results[$key] = [PSCustomObject]@{
+                UserSam         = $user
+                Server          = $server
+                PasswordStatus  = $pwdStatus
+                InventoryStatus = $invStatus
+                Sudo            = "NO"
+                SudoNoPasswd    = "NO"
+                PrivGroup       = ""
+                RootEquivalent  = "NO"
+                FoundInCyberArk = ""
+                CA_Compliant    = ""
+            }
+        }
+    }
+    Write-Host "  $($results.Count) comptes charges depuis all_pass" -ForegroundColor Cyan
+}
+
+# --- 3. BUILD SUDO INDEX from ALL_PRIV_HOST ---
+Write-Host "`n###############"
+Write-Host "ALL_PRIV_HOST"
+Write-Host "###############"
+if (Test-Path $Files.PrivHost) {
+    Get-Content $Files.PrivHost | ForEach-Object {
+        $line = $_.Trim()
+        if ($line -match "ALL=") {
+            $isNoPass = if ($line -match "NOPASSWD") { "YES" } else { "NO" }
+            $idBlock = ($line -split "ALL=")[0].Trim()
+            if ($idBlock -match '(.+)-([^-]+)$') {
+                $key = ("$($matches[2])|$($matches[1])").ToLower().Trim()
+                $sudoIndex[$key] = $isNoPass
+            }
+        }
+    }
+    Write-Host "  $($sudoIndex.Count) entrees sudo chargees" -ForegroundColor Cyan
+}
+
+# --- 4. BUILD GROUP INDEX from ALL_PRIV_MEMBERS ---
+Write-Host "`n###############"
+Write-Host "ALL_PRIV_MEMBERS"
+Write-Host "###############"
+if (Test-Path $Files.PrivMembers) {
+    Get-Content $Files.PrivMembers | ForEach-Object {
+        if ($_ -match '^([^:]+)-([^:]+):[^:]*:(.*)$') {
+            $srv = $matches[1]
+            $grp = $matches[2]
+            $matches[3].Split(",") | ForEach-Object {
+                $member = $_.Trim()
+                if ($member) {
+                    $key = ("$member|$srv").ToLower().Trim()
+                    if ($groupIndex.ContainsKey($key)) {
+                        $groupIndex[$key] += ",$grp"
+                    } else {
+                        $groupIndex[$key] = $grp
+                    }
                 }
             }
         }
     }
-    Write-Host "  $($results.Count) comptes apres all_pass" -ForegroundColor Cyan
+    Write-Host "  $($groupIndex.Count) entrees groupe chargees" -ForegroundColor Cyan
 }
 
-# --- 5. PROCESS ALL_ROOT_MEMBERS (UID 0) ---
+# --- 5. BUILD ROOT INDEX from ALL_ROOT_MEMBERS ---
 Write-Host "`n###############"
-Write-Host "ALL_ROOT"
+Write-Host "ALL_ROOT_MEMBERS"
 Write-Host "###############"
 if (Test-Path $Files.RootMembers) {
     Get-Content $Files.RootMembers | ForEach-Object {
         if ($_ -match '^([^:]+)-([^:]+).*\(([^)]+)\)$') {
-            Write-Host "ALL_ROOT: Found $($matches[1])"
-            Add-AuditEntry `
-                -user $matches[1] `
-                -server $matches[2] `
-                -source "Root_Equivalent"
+            $key = ("$($matches[1])|$($matches[2])").ToLower().Trim()
+            $rootIndex[$key] = $true
         }
     }
-    Write-Host "  $($results.Count) comptes apres Root" -ForegroundColor Cyan
+    Write-Host "  $($rootIndex.Count) entrees root chargees" -ForegroundColor Cyan
 }
 
-# --- 5b. SUMMARY ---
+# --- 6. ENRICH RESULTS (lookup sudo, group, root for each account) ---
 Write-Host "`n###################################"
-Write-Host "SUMMARY"
+Write-Host "ENRICHISSEMENT"
 Write-Host "###################################"
-Write-Host "  Total comptes privilegies: $($results.Count)" -ForegroundColor Cyan
+foreach ($entry in $results.GetEnumerator()) {
+    $key = $entry.Key
 
-# --- 6. CYBERARK CROSS-REFERENCE (via PVWA API) ---
+    if ($sudoIndex.ContainsKey($key)) {
+        $entry.Value.Sudo = "YES"
+        $entry.Value.SudoNoPasswd = $sudoIndex[$key]
+    }
+
+    if ($groupIndex.ContainsKey($key)) {
+        $entry.Value.PrivGroup = $groupIndex[$key]
+    }
+
+    if ($rootIndex.ContainsKey($key)) {
+        $entry.Value.RootEquivalent = "YES"
+    }
+}
+
+# Summary
+$totalAccounts = $results.Count
+$sudoCount = ($results.Values | Where-Object { $_.Sudo -eq "YES" }).Count
+$groupCount = ($results.Values | Where-Object { $_.PrivGroup -ne "" }).Count
+$rootCount = ($results.Values | Where-Object { $_.RootEquivalent -eq "YES" }).Count
+$notSetCount = ($results.Values | Where-Object { $_.PasswordStatus -eq "Password not set" }).Count
+
+Write-Host "  Total comptes:         $totalAccounts" -ForegroundColor Cyan
+Write-Host "  Avec Sudo:             $sudoCount" -ForegroundColor Cyan
+Write-Host "  Dans groupe privilegie: $groupCount" -ForegroundColor Cyan
+Write-Host "  Root equivalent:       $rootCount" -ForegroundColor Cyan
+Write-Host "  Password not set:      $notSetCount (flaggues)" -ForegroundColor Yellow
+
+# --- 7. CYBERARK CROSS-REFERENCE (via PVWA API) ---
 Write-Host ""
 Write-Host "######################"
 Write-Host "CYBERARK CROSS-CHECK"
 Write-Host "######################"
 
-# 6a. Connect to PVWA and download accounts
+# 7a. Connect to PVWA and download accounts
 $pvwaToken = Connect-PVWA -BaseUrl $PVWAUrl -AuthType $AuthMethod
 
 $cyberArkIndex = @{}
@@ -316,7 +322,7 @@ if ($pvwaToken) {
         # Save a local copy for traceability
         Export-PVWAAccountsToCsv -Accounts $pvwaAccounts -OutputPath $Files.CyberArkAccounts
 
-        # 6b. Build indexes from API data
+        # 7b. Build indexes from API data
         foreach ($acct in $pvwaAccounts) {
             $caUser   = $acct.userName
             $caServer = $acct.address
@@ -390,7 +396,7 @@ if ($pvwaToken) {
     }
 }
 
-# 6c. Update results with CyberArk data
+# 7c. Update results with CyberArk data
 $caFoundCount = 0
 $caCompliantCount = 0
 $caNotFoundCount = 0
