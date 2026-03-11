@@ -203,7 +203,7 @@ Write-Host "##############"
 if (Test-Path $Files.PrivHost) {
     Get-Content $Files.PrivHost | ForEach-Object {
         $line = $_.Trim()
-        if ($line -match 'ALL=.*\bALL\s*$') {
+        if ($line -match 'ALL=') {
             $isNoPass = if ($line -match "NOPASSWD") { "YES" } else { "NO" }
             # Extract the block before ALL= (format: SERVER.USER ALL=...)
             $idBlock = ($line -split 'ALL=')[0].Trim()
