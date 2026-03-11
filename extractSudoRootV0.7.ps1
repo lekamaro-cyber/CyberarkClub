@@ -11,6 +11,100 @@ $Files = @{
 
 $OutCsv = "$PSScriptRoot\output\Audit_Privileges_Unix_$(Get-Date -Format 'yyyy-MM').csv"
 
+# --- PVWA CONFIGURATION ---
+$PVWAUrl   = "https://pvwa.yourcompany.com"   # <-- ADAPTER: URL du PVWA
+$AuthMethod = "CyberArk"                       # CyberArk, LDAP, or RADIUS
+# Platform filter for Unix accounts (adapt to your platform IDs)
+$UnixPlatformFilter = "PAM_UNIX"
+
+# --- PVWA FUNCTIONS ---
+function Connect-PVWA {
+    param([string]$BaseUrl, [string]$AuthType)
+
+    Write-Host "`n==============================" -ForegroundColor Cyan
+    Write-Host "  CONNEXION AU PVWA" -ForegroundColor Cyan
+    Write-Host "==============================" -ForegroundColor Cyan
+
+    $cred = Get-Credential -Message "Entrez vos identifiants PVWA ($AuthType)"
+    if (-not $cred) {
+        Write-Host "[ERROR] Aucun identifiant fourni. Abandon." -ForegroundColor Red
+        return $null
+    }
+
+    $body = @{
+        username = $cred.UserName
+        password = $cred.GetNetworkCredential().Password
+    } | ConvertTo-Json
+
+    $logonUrl = "$BaseUrl/PasswordVault/api/auth/$AuthType/Logon"
+    try {
+        $token = Invoke-RestMethod -Uri $logonUrl -Method POST -Body $body -ContentType "application/json"
+        Write-Host "  Connexion reussie." -ForegroundColor Green
+        return $token
+    } catch {
+        Write-Host "[ERROR] Echec de connexion au PVWA: $($_.Exception.Message)" -ForegroundColor Red
+        return $null
+    }
+}
+
+function Disconnect-PVWA {
+    param([string]$BaseUrl, [string]$Token)
+    try {
+        Invoke-RestMethod -Uri "$BaseUrl/PasswordVault/api/auth/Logoff" -Method POST `
+            -Headers @{ Authorization = $Token } -ContentType "application/json" | Out-Null
+        Write-Host "  Deconnexion PVWA OK." -ForegroundColor Green
+    } catch {
+        Write-Host "  [WARNING] Echec deconnexion PVWA: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
+function Get-PVWAAccounts {
+    param([string]$BaseUrl, [string]$Token, [string]$PlatformFilter)
+
+    Write-Host "  Recuperation des comptes Unix depuis le PVWA..." -ForegroundColor Cyan
+    $headers = @{ Authorization = $Token }
+    $allAccounts = @()
+    $offset = 0
+    $limit = 1000
+
+    do {
+        $uri = "$BaseUrl/PasswordVault/api/Accounts?limit=$limit&offset=$offset"
+        if ($PlatformFilter) {
+            $uri += "&filter=platformId co $PlatformFilter"
+        }
+        try {
+            $response = Invoke-RestMethod -Uri $uri -Method GET -Headers $headers -ContentType "application/json"
+            $allAccounts += $response.value
+            $offset += $limit
+            Write-Host "    ... $($allAccounts.Count) comptes charges" -ForegroundColor Gray
+        } catch {
+            Write-Host "  [ERROR] Erreur API Accounts: $($_.Exception.Message)" -ForegroundColor Red
+            break
+        }
+    } while ($response.value.Count -eq $limit)
+
+    Write-Host "  Total: $($allAccounts.Count) comptes Unix recuperes." -ForegroundColor Cyan
+    return $allAccounts
+}
+
+function Export-PVWAAccountsToCsv {
+    param($Accounts, [string]$OutputPath)
+
+    $csvData = $Accounts | ForEach-Object {
+        [PSCustomObject]@{
+            "Coffre-fort"                = $_.safeName
+            "ID de la plateforme"        = $_.platformId
+            "Adresse"                    = $_.address
+            "Nom de l'utilisateur"       = $_.userName
+            "Derniere modification par"  = $_.secretManagement.lastModifiedTime
+            "CPMManaged"                 = $_.secretManagement.automaticManagementEnabled
+            "CPMStatus"                  = $_.secretManagement.status
+        }
+    }
+    $csvData | Export-Csv -Path $OutputPath -NoTypeInformation -Encoding UTF8 -Delimiter ","
+    Write-Host "  Export sauvegarde: $OutputPath" -ForegroundColor Green
+}
+
 # --- 0. INPUT FILE FRESHNESS CHECK ---
 $now = Get-Date
 $currentMonth = $now.Month
@@ -217,52 +311,98 @@ if (Test-Path $Files.RootMembers) {
     }
 }
 
-# --- 6. CYBERARK CROSS-REFERENCE ---
-# 6a. Build CyberArk accounts index (UserName + Address -> found)
+# --- 6. CYBERARK CROSS-REFERENCE (via PVWA API) ---
 Write-Host ""
 Write-Host "######################"
 Write-Host "CYBERARK CROSS-CHECK"
 Write-Host "######################"
 
-$cyberArkIndex = @{}
-if (Test-Path $Files.CyberArkAccounts) {
-    # --- COLUMN NAMES TO ADJUST ---
-    # Expected CSV columns: UserName, Address (server)
-    # Delimiter: comma by default, change if needed
-    Import-Csv $Files.CyberArkAccounts -Delimiter "," | ForEach-Object {
-        $caUser   = $_.UserName.Trim()
-        $caServer = $_.Address.Trim()
-        if ($caUser -and $caServer) {
-            $caKey = ("$caUser|$caServer").ToLower()
-            $cyberArkIndex[$caKey] = $true
-        }
-    }
-    Write-Host "  Loaded $($cyberArkIndex.Count) accounts from CyberArk accounts export." -ForegroundColor Cyan
-} else {
-    Write-Host "  [WARNING] CyberArk accounts file not found: $($Files.CyberArkAccounts)" -ForegroundColor Red
-    Write-Host "  FoundInCyberArk column will remain empty." -ForegroundColor Yellow
-}
+# 6a. Connect to PVWA and download accounts
+$pvwaToken = Connect-PVWA -BaseUrl $PVWAUrl -AuthType $AuthMethod
 
-# 6b. Build CyberArk compliance index (CPM-managed = compliant)
+$cyberArkIndex = @{}
 $cyberArkCompliance = @{}
-if (Test-Path $Files.CyberArkCompliance) {
-    # --- COLUMN NAMES TO ADJUST ---
-    # Expected CSV columns: UserName, Address, CPMStatus
-    # CPMStatus = "success" means CPM manages the password -> compliant
-    Import-Csv $Files.CyberArkCompliance -Delimiter "," | ForEach-Object {
-        $ccUser   = $_.UserName.Trim()
-        $ccServer = $_.Address.Trim()
-        $ccCPM    = $_.CPMStatus.Trim()
-        if ($ccUser -and $ccServer) {
-            $ccKey = ("$ccUser|$ccServer").ToLower()
-            # Compliant if CPM status indicates active management
-            $cyberArkCompliance[$ccKey] = $ccCPM
+
+if ($pvwaToken) {
+    # Fetch all Unix accounts from PVWA
+    $pvwaAccounts = Get-PVWAAccounts -BaseUrl $PVWAUrl -Token $pvwaToken -PlatformFilter $UnixPlatformFilter
+
+    if ($pvwaAccounts.Count -gt 0) {
+        # Save a local copy for traceability
+        Export-PVWAAccountsToCsv -Accounts $pvwaAccounts -OutputPath $Files.CyberArkAccounts
+
+        # 6b. Build indexes from API data
+        foreach ($acct in $pvwaAccounts) {
+            $caUser   = $acct.userName
+            $caServer = $acct.address
+            if ($caUser -and $caServer) {
+                $caKey = ("$caUser|$caServer").ToLower().Trim()
+
+                # Accounts index (FoundInCyberArk)
+                $cyberArkIndex[$caKey] = $true
+
+                # Compliance index (CA_Compliant based on CPM)
+                # Compliant = CPM enabled AND last operation successful
+                $cpmEnabled = $acct.secretManagement.automaticManagementEnabled
+                $cpmStatus  = $acct.secretManagement.status
+                if ($cpmEnabled -eq $true -and $cpmStatus -match "^success$") {
+                    $cyberArkCompliance[$caKey] = "Compliant"
+                } else {
+                    $cyberArkCompliance[$caKey] = "Non-Compliant"
+                }
+            }
         }
+        Write-Host "  Index construit: $($cyberArkIndex.Count) comptes, $($cyberArkCompliance.Count) entrees compliance." -ForegroundColor Cyan
     }
-    Write-Host "  Loaded $($cyberArkCompliance.Count) entries from CyberArk compliance report." -ForegroundColor Cyan
+
+    # Disconnect from PVWA
+    Disconnect-PVWA -BaseUrl $PVWAUrl -Token $pvwaToken
+
 } else {
-    Write-Host "  [WARNING] CyberArk compliance file not found: $($Files.CyberArkCompliance)" -ForegroundColor Red
-    Write-Host "  CA_Compliant column will remain empty." -ForegroundColor Yellow
+    # Fallback: try to use local CSV files if PVWA connection failed
+    Write-Host "  Connexion PVWA echouee. Tentative de lecture des CSV locaux..." -ForegroundColor Yellow
+
+    if (Test-Path $Files.CyberArkAccounts) {
+        # Inventory report columns (French): "Nom de l'utilisateur", "Adresse"
+        # "Derniere modification par" = "PasswordManager" means CPM-managed
+        Import-Csv $Files.CyberArkAccounts -Delimiter "," | ForEach-Object {
+            $caUser   = $_."Nom de l'utilisateur"
+            $caServer = $_."Adresse"
+            if (-not $caUser) { $caUser = $_.UserName }
+            if (-not $caServer) { $caServer = $_.Address }
+            if ($caUser -and $caServer) {
+                $caKey = ("$($caUser.Trim())|$($caServer.Trim())").ToLower()
+                $cyberArkIndex[$caKey] = $true
+            }
+        }
+        Write-Host "  Charge $($cyberArkIndex.Count) comptes depuis le CSV local (inventaire)." -ForegroundColor Cyan
+    } else {
+        Write-Host "  [WARNING] Fichier inventaire introuvable: $($Files.CyberArkAccounts)" -ForegroundColor Red
+    }
+
+    if (Test-Path $Files.CyberArkCompliance) {
+        # Compliance report columns (French):
+        #   "Nom de l'utilisateur du systeme cible", "Adresse du systeme",
+        #   "Statut de la conformite"
+        Import-Csv $Files.CyberArkCompliance -Delimiter "," | ForEach-Object {
+            $ccUser   = $_."Nom de l'utilisateur du systeme cible"
+            $ccServer = $_."Adresse du systeme"
+            $ccStatus = $_."Statut de la conformite"
+            if (-not $ccUser) { $ccUser = $_."Nom de l'utilisateur du système cible" }
+            if (-not $ccServer) { $ccServer = $_."Adresse du système" }
+            if ($ccUser -and $ccServer) {
+                $ccKey = ("$($ccUser.Trim())|$($ccServer.Trim())").ToLower()
+                if ($ccStatus -match "conforme" -and $ccStatus -notmatch "Non") {
+                    $cyberArkCompliance[$ccKey] = "Compliant"
+                } else {
+                    $cyberArkCompliance[$ccKey] = "Non-Compliant"
+                }
+            }
+        }
+        Write-Host "  Charge $($cyberArkCompliance.Count) entrees depuis le CSV local (compliance)." -ForegroundColor Cyan
+    } else {
+        Write-Host "  [WARNING] Fichier compliance introuvable: $($Files.CyberArkCompliance)" -ForegroundColor Red
+    }
 }
 
 # 6c. Update results with CyberArk data
@@ -281,26 +421,29 @@ foreach ($entry in $results.GetEnumerator()) {
         $caNotFoundCount++
     }
 
-    # CA_Compliant (based on CPM status)
+    # CA_Compliant (based on CPM management)
     if ($cyberArkCompliance.ContainsKey($lookupKey)) {
-        $cpmStatus = $cyberArkCompliance[$lookupKey]
-        if ($cpmStatus -match "^(success|Success)$") {
+        if ($cyberArkCompliance[$lookupKey] -eq "Compliant") {
             $entry.Value.CA_Compliant = "YES"
             $caCompliantCount++
         } else {
             $entry.Value.CA_Compliant = "NO"
         }
-    } elseif ($cyberArkCompliance.Count -gt 0) {
+    } elseif ($entry.Value.FoundInCyberArk -eq "YES") {
+        # In CyberArk but not in compliance report = non-compliant
+        $entry.Value.CA_Compliant = "NO"
+    } elseif ($cyberArkIndex.Count -gt 0) {
+        # Not in CyberArk at all = not compliant
         $entry.Value.CA_Compliant = "NO"
     }
 }
 
 Write-Host ""
-Write-Host "CyberArk summary:" -ForegroundColor Cyan
-Write-Host "  Found in CyberArk: $caFoundCount | Not found: $caNotFoundCount" -ForegroundColor Cyan
+Write-Host "Resume CyberArk:" -ForegroundColor Cyan
+Write-Host "  Trouve dans CyberArk: $caFoundCount | Absent: $caNotFoundCount" -ForegroundColor Cyan
 Write-Host "  CPM Compliant: $caCompliantCount | Non-compliant: $($results.Count - $caCompliantCount)" -ForegroundColor Cyan
 
 # --- FINAL EXPORT ---
 $finalData = $results.Values | Sort-Object UserSam, Server
 $finalData | Export-Csv -Path $OutCsv -NoTypeInformation -Encoding UTF8 -Delimiter ";"
-Write-Host "`nAudit complete. Output file: $OutCsv" -ForegroundColor Cyan
+Write-Host "`nAudit termine. Fichier de sortie: $OutCsv" -ForegroundColor Cyan
