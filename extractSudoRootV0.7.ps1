@@ -3,10 +3,10 @@
 
 # --- FILE PATH CONFIGURATION ---
 $Files = @{
-    PrivHost        = "$PSScriptRoot\Input\all_priv_host"
-    RootMembers     = "$PSScriptRoot\Input\all_root_members"
-    Passwd          = "$PSScriptRoot\Input\all_pass"
-    PrivMembers     = "$PSScriptRoot\Input\all_priv_members"
+    PrivHost        = "$PSScriptRoot\Input\all_priv_host.txt"
+    RootMembers     = "$PSScriptRoot\Input\all_root_members.txt"
+    Passwd          = "$PSScriptRoot\Input\all_pass.txt"
+    PrivMembers     = "$PSScriptRoot\Input\all_priv_members.txt"
     Inventory       = "$PSScriptRoot\Input\request.csv"
     CyberArkAccounts   = "$PSScriptRoot\Input\cyberark_accounts.csv"
     CyberArkCompliance = "$PSScriptRoot\Input\cyberark_compliance.csv"
@@ -173,12 +173,12 @@ function Add-AuditEntry($user, $server, $source, $noPass = "NO") {
 
     $key = ("$user|$server").ToLower().Trim()
     $srvKey = $server.ToLower().Trim()
-    $invStatus = if ($statusMap.ContainsKey($srvKey)) { $statusMap[$srvKey] } else { "Unknown" }
+    $invStatus = if ($statusMap.ContainsKey($srvKey)) { $statusMap[$srvKey] } else { "Inconnu" }
 
     if ($results.ContainsKey($key)) {
         # Merge sources (avoid duplicate sources)
         if ($results[$key].Source -notmatch [regex]::Escape($source)) {
-            $results[$key].Source += ";$source"
+            $results[$key].Source += ",$source"
         }
         # If a line indicates NOPASSWD, enable it for this account
         if ($noPass -eq "YES") { $results[$key].NoPasswd = "YES" }
