@@ -1,4 +1,4 @@
-# --- CONFIGURATION DES CHEMINS ---
+# --- FILE PATH CONFIGURATION ---
 $Files = @{
     PrivHost     = "D:\Cyberark\Majide\PAM Script\KPI\UnixAcctsCyberark\all_priv_host.txt"
     RootMembers  = "D:\Cyberark\Majide\PAM Script\KPI\UnixAcctsCyberark\all_root_members.txt"
@@ -9,7 +9,7 @@ $Files = @{
 
 $OutCsv = ".\Audit_Privileges_Unix.csv"
 
-# --- 0. VERIFICATION DE LA FRAICHEUR DES FICHIERS INPUT ---
+# --- 0. INPUT FILE FRESHNESS CHECK ---
 $now = Get-Date
 $currentMonth = $now.Month
 $currentYear = $now.Year
@@ -22,81 +22,81 @@ foreach ($entry in $Files.GetEnumerator()) {
         $fileYear = $fileInfo.LastWriteTime.Year
         if ($fileMonth -ne $currentMonth -or $fileYear -ne $currentYear) {
             $oldFiles += [PSCustomObject]@{
-                Nom           = $entry.Key
-                Fichier       = Split-Path $entry.Value -Leaf
-                DerniereModif = $fileInfo.LastWriteTime.ToString("yyyy-MM-dd HH:mm")
-                MoisFichier   = $fileInfo.LastWriteTime.ToString("MMMM yyyy")
+                Name         = $entry.Key
+                FileName     = Split-Path $entry.Value -Leaf
+                LastModified = $fileInfo.LastWriteTime.ToString("yyyy-MM-dd HH:mm")
+                FileMonth    = $fileInfo.LastWriteTime.ToString("MMMM yyyy")
             }
         }
     } else {
-        Write-Host "[ATTENTION] Fichier introuvable : $($entry.Key) -> $($entry.Value)" -ForegroundColor Red
+        Write-Host "[WARNING] File not found: $($entry.Key) -> $($entry.Value)" -ForegroundColor Red
     }
 }
 
 if ($oldFiles.Count -gt 0) {
     Write-Host "`n========================================" -ForegroundColor Yellow
-    Write-Host "  ATTENTION : FICHIERS HORS MOIS EN COURS" -ForegroundColor Yellow
+    Write-Host "  WARNING: FILES NOT FROM CURRENT MONTH" -ForegroundColor Yellow
     Write-Host "========================================" -ForegroundColor Yellow
-    Write-Host "Mois en cours : $($now.ToString('MMMM yyyy'))" -ForegroundColor Yellow
-    Write-Host "Les fichiers suivants n'ont PAS ete modifies ce mois-ci :`n" -ForegroundColor Yellow
+    Write-Host "Current month: $($now.ToString('MMMM yyyy'))" -ForegroundColor Yellow
+    Write-Host "The following files were NOT modified this month:`n" -ForegroundColor Yellow
 
     foreach ($f in $oldFiles) {
-        Write-Host "  - $($f.Nom) ($($f.Fichier)) : derniere modif le $($f.DerniereModif) ($($f.MoisFichier))" -ForegroundColor Yellow
+        Write-Host "  - $($f.Name) ($($f.FileName)): last modified $($f.LastModified) ($($f.FileMonth))" -ForegroundColor Yellow
     }
 
-    Write-Host "`nCes fichiers datent d'un mois precedent et pourraient etre obsoletes." -ForegroundColor Yellow
-    Write-Host "Voulez-vous continuer l'audit malgre tout ? (O/N) " -ForegroundColor Cyan -NoNewline
+    Write-Host "`nThese files may be outdated." -ForegroundColor Yellow
+    Write-Host "Do you want to continue the audit anyway? (Y/N) " -ForegroundColor Cyan -NoNewline
     $response = Read-Host
-    if ($response -notin @("O", "o", "Y", "y", "Oui", "oui", "Yes", "yes")) {
-        Write-Host "Audit annule par l'utilisateur." -ForegroundColor Red
+    if ($response -notin @("Y", "y", "Yes", "yes")) {
+        Write-Host "Audit cancelled by user." -ForegroundColor Red
         exit
     }
     Write-Host ""
 }
 
-Write-Host "Tous les fichiers sont valides. Lancement de l'audit...`n" -ForegroundColor Green
+Write-Host "All input files are valid. Starting audit...`n" -ForegroundColor Green
 
-# --- INITIALISATION ---
+# --- INITIALIZATION ---
 $results = @{}
 $statusMap = @{}
 
-# --- 1. CHARGEMENT DE L'INVENTAIRE (request.csv) ---
+# --- 1. LOAD INVENTORY (request.csv) ---
 if (Test-Path $Files.Inventory) {
     Import-Csv $Files.Inventory -Delimiter "," | ForEach-Object {
         if ($_.NAME_SERVER) { $statusMap[$_.NAME_SERVER.ToLower().Trim()] = $_.NAME_STATUS }
     }
 }
 
-# --- FONCTION COEUR : AJOUT ET FUSION DES DONNEES ---
+# --- CORE FUNCTION: ADD AND MERGE AUDIT DATA ---
 function Add-AuditEntry($user, $server, $source, $noPass = "NO") {
     if (!$user -or !$server) { return }
 
     $key = ("$user|$server").ToLower().Trim()
     $srvKey = $server.ToLower().Trim()
-    $invStatus = if ($statusMap.ContainsKey($srvKey)) { $statusMap[$srvKey] } else { "Inconnu" }
+    $invStatus = if ($statusMap.ContainsKey($srvKey)) { $statusMap[$srvKey] } else { "Unknown" }
 
     if ($results.ContainsKey($key)) {
-        # Fusion des sources (eviter les doublons de source)
+        # Merge sources (avoid duplicate sources)
         if ($results[$key].Source -notmatch [regex]::Escape($source)) {
             $results[$key].Source += ";$source"
         }
-        # Si une ligne indique NOPASSWD, on l'active pour ce compte
+        # If a line indicates NOPASSWD, enable it for this account
         if ($noPass -eq "YES") { $results[$key].NoPasswd = "YES" }
     } else {
         $results[$key] = [PSCustomObject]@{
-            UserSam         = $user.Trim() # PRESERVE LA CASSE
+            UserSam         = $user.Trim() # PRESERVE CASE
             Server          = $server.Trim()
             InventoryStatus = $invStatus
             Source          = $source
             NoPasswd        = $noPass
-            AccountStatus   = "Active" # Par defaut
+            AccountStatus   = "Active" # Default
             FoundInCyberArk = ""
             CA_Compliant    = ""
         }
     }
 }
 
-# --- 2. MOULINETTE ALL_PRIV_HOST (Sudoers) ---
+# --- 2. PROCESS ALL_PRIV_HOST (Sudoers) ---
 Write-Host "##############"
 Write-Host "ALL_PRIV_HOST"
 Write-Host "##############"
@@ -105,9 +105,9 @@ if (Test-Path $Files.PrivHost) {
         $line = $_.Trim()
         if ($line -match 'ALL=') {
             $isNoPass = if ($line -match "NOPASSWD") { "YES" } else { "NO" }
-            # Extraction du bloc avant ALL=
+            # Extract the block before ALL=
             $idBlock = ($line -split 'ALL=')[0].Trim()
-            # On cherche le dernier tiret pour separer Serveur et User
+            # Find the last hyphen to separate Server and User
             if ($idBlock -match '(.+)-([^\-]+)$') {
                 Write-Host "ALL_PRIV_HOST:  $($matches[2])"
                 Add-AuditEntry -user $matches[2] -server $matches[1] -source "Sudoers" -noPass $isNoPass
@@ -116,13 +116,13 @@ if (Test-Path $Files.PrivHost) {
     }
 }
 
-# --- 3. MOULINETTE ALL_PRIV_MEMBERS (Wheel/Sudo Groups) ---
+# --- 3. PROCESS ALL_PRIV_MEMBERS (Wheel/Sudo Groups) ---
 Write-Host "################"
 Write-Host "ALL_PRIV_MEMBERS"
 Write-Host "################"
 if (Test-Path $Files.PrivMembers) {
     Get-Content $Files.PrivMembers | ForEach-Object {
-        # Format: SERVEUR-groupe:x:ID:membres
+        # Format: SERVER-group:x:ID:members
         if ($_ -match '^([^\:]+)-([^\:]+):([^\:]+):([^\:]+):(.*)') {
             $srv = $matches[1]; $grp = $matches[2]
             $matches[5] -split ',' | ForEach-Object {
@@ -135,7 +135,7 @@ if (Test-Path $Files.PrivMembers) {
     }
 }
 
-# --- 4. MOULINETTE ALL_PASS (Shadow/Passwd) ---
+# --- 4. PROCESS ALL_PASS (Shadow/Passwd) ---
 Write-Host "########"
 Write-Host "ALL_PASS"
 Write-Host "########"
@@ -148,14 +148,14 @@ if (Test-Path $Files.Passwd) {
             $server = $parts[4].Trim()
             $isLocked = if ($line -match "Password locked") { "Locked" } else { "Active" }
 
-            # Si le compte existe deja, on met a jour son statut, sinon on l'ajoute comme "Shadow"
+            # If account already exists, update its status; otherwise add as "Shadow"
             $key = ("$user|$server").ToLower().Trim()
             if ($results.ContainsKey($key)) {
                 $results[$key].AccountStatus = $isLocked
             } else {
-                # On ne rajoute ici que si vous voulez TOUS les comptes, meme non privilegies
-                # Sinon, on ignore pour ne garder que l'audit du privilege
-                if ($isLocked -eq "Actif") {
+                # Only add here if you want ALL accounts, including non-privileged ones
+                # Otherwise, skip to keep only privilege audit entries
+                if ($isLocked -eq "Active") {
                     Write-Host "ALL_PASS: Found  $user"
                     Add-AuditEntry -user $user -server $server -source "Shadow"
                 }
@@ -164,7 +164,7 @@ if (Test-Path $Files.Passwd) {
     }
 }
 
-# --- 5. MOULINETTE ALL_ROOT_MEMBERS (UID 0) ---
+# --- 5. PROCESS ALL_ROOT_MEMBERS (UID 0) ---
 Write-Host "########"
 Write-Host "ALL_ROOT"
 Write-Host "########"
@@ -177,7 +177,7 @@ if (Test-Path $Files.RootMembers) {
     }
 }
 
-# --- EXPORT FINAL ---
+# --- FINAL EXPORT ---
 $finalData = $results.Values | Sort-Object UserSam, Server
 $finalData | Export-Csv -Path $OutCsv -NoTypeInformation -Encoding UTF8 -Delimiter ";"
-Write-Host "Audit termine. Colonne NOPASSWD ajoutee. Fichier : $OutCsv" -ForegroundColor Cyan
+Write-Host "Audit complete. NOPASSWD column added. Output file: $OutCsv" -ForegroundColor Cyan
