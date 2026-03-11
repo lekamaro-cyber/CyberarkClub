@@ -1,13 +1,13 @@
 # --- FILE PATH CONFIGURATION ---
 $Files = @{
-    PrivHost     = "D:\Cyberark\Majide\PAM Script\KPI\UnixAcctsCyberark\all_priv_host.txt"
-    RootMembers  = "D:\Cyberark\Majide\PAM Script\KPI\UnixAcctsCyberark\all_root_members.txt"
-    Passwd       = "D:\Cyberark\Majide\PAM Script\KPI\UnixAcctsCyberark\all_pass.txt"
-    PrivMembers  = "D:\Cyberark\Majide\PAM Script\KPI\UnixAcctsCyberark\all_priv_members.txt"
-    Inventory    = "D:\Cyberark\Majide\PAM Script\KPI\request.csv"
+    PrivHost     = ".\Input\all_priv_host"
+    RootMembers  = ".\Input\all_root_members"
+    Passwd       = ".\Input\all_pass"
+    PrivMembers  = ".\Input\all_priv_members"
+    Inventory    = ".\request.csv"
 }
 
-$OutCsv = ".\Audit_Privileges_Unix_$(Get-Date -Format 'yyyy-MM').csv"
+$OutCsv = ".\output\Audit_Privileges_Unix_$(Get-Date -Format 'yyyy-MM').csv"
 
 # --- 0. INPUT FILE FRESHNESS CHECK ---
 $now = Get-Date
