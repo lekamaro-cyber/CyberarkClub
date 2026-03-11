@@ -10,20 +10,22 @@ $Files = @{
 $OutCsv = ".\Audit_Privileges_Unix.csv"
 
 # --- 0. VERIFICATION DE LA FRAICHEUR DES FICHIERS INPUT ---
-$maxAgeDays = 30  # Seuil d'alerte en jours
 $now = Get-Date
+$currentMonth = $now.Month
+$currentYear = $now.Year
 $oldFiles = @()
 
 foreach ($entry in $Files.GetEnumerator()) {
     if (Test-Path $entry.Value) {
         $fileInfo = Get-Item $entry.Value
-        $ageDays = ($now - $fileInfo.LastWriteTime).Days
-        if ($ageDays -gt $maxAgeDays) {
+        $fileMonth = $fileInfo.LastWriteTime.Month
+        $fileYear = $fileInfo.LastWriteTime.Year
+        if ($fileMonth -ne $currentMonth -or $fileYear -ne $currentYear) {
             $oldFiles += [PSCustomObject]@{
                 Nom           = $entry.Key
                 Fichier       = Split-Path $entry.Value -Leaf
                 DerniereModif = $fileInfo.LastWriteTime.ToString("yyyy-MM-dd HH:mm")
-                AgeDays       = $ageDays
+                MoisFichier   = $fileInfo.LastWriteTime.ToString("MMMM yyyy")
             }
         }
     } else {
@@ -33,15 +35,16 @@ foreach ($entry in $Files.GetEnumerator()) {
 
 if ($oldFiles.Count -gt 0) {
     Write-Host "`n========================================" -ForegroundColor Yellow
-    Write-Host "  ATTENTION : FICHIERS POTENTIELLEMENT OBSOLETES" -ForegroundColor Yellow
+    Write-Host "  ATTENTION : FICHIERS HORS MOIS EN COURS" -ForegroundColor Yellow
     Write-Host "========================================" -ForegroundColor Yellow
-    Write-Host "Les fichiers suivants ont ete modifies il y a plus de $maxAgeDays jours :`n" -ForegroundColor Yellow
+    Write-Host "Mois en cours : $($now.ToString('MMMM yyyy'))" -ForegroundColor Yellow
+    Write-Host "Les fichiers suivants n'ont PAS ete modifies ce mois-ci :`n" -ForegroundColor Yellow
 
     foreach ($f in $oldFiles) {
-        Write-Host "  - $($f.Nom) ($($f.Fichier)) : modifie le $($f.DerniereModif) (il y a $($f.AgeDays) jours)" -ForegroundColor Yellow
+        Write-Host "  - $($f.Nom) ($($f.Fichier)) : derniere modif le $($f.DerniereModif) ($($f.MoisFichier))" -ForegroundColor Yellow
     }
 
-    Write-Host "`nIl est possible que ces fichiers ne soient plus a jour." -ForegroundColor Yellow
+    Write-Host "`nCes fichiers datent d'un mois precedent et pourraient etre obsoletes." -ForegroundColor Yellow
     Write-Host "Voulez-vous continuer l'audit malgre tout ? (O/N) " -ForegroundColor Cyan -NoNewline
     $response = Read-Host
     if ($response -notin @("O", "o", "Y", "y", "Oui", "oui", "Yes", "yes")) {
