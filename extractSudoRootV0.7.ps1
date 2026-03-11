@@ -156,9 +156,15 @@ $statusMap = @{}
 
 # --- 1. LOAD INVENTORY (request.csv) ---
 if (Test-Path $Files.Inventory) {
-    Import-Csv $Files.Inventory -Delimiter "," | ForEach-Object {
+    # Auto-detect delimiter (French CSV often uses ";")
+    $firstLine = Get-Content $Files.Inventory -TotalCount 1
+    $csvDelimiter = if ($firstLine -match ";") { ";" } else { "," }
+    Write-Host "  Chargement inventaire (delimiter='$csvDelimiter')..." -ForegroundColor Cyan
+
+    Import-Csv $Files.Inventory -Delimiter $csvDelimiter | ForEach-Object {
         if ($_.NAME_SERVER) { $statusMap[$_.NAME_SERVER.ToLower().Trim()] = $_.NAME_STATUS }
     }
+    Write-Host "  $($statusMap.Count) serveurs charges depuis request.csv" -ForegroundColor Cyan
 }
 
 # --- CORE FUNCTION: ADD AND MERGE AUDIT DATA ---
