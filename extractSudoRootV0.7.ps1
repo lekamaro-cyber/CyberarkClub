@@ -7,7 +7,7 @@ $Files = @{
     RootMembers     = "$PSScriptRoot\Input\all_root_members"
     Passwd          = "$PSScriptRoot\Input\all_pass"
     PrivMembers     = "$PSScriptRoot\Input\all_priv_members"
-    Inventory       = "$PSScriptRoot\request.csv"
+    Inventory       = "$PSScriptRoot\Input\request.csv"
     CyberArkAccounts   = "$PSScriptRoot\Input\cyberark_accounts.csv"
     CyberArkCompliance = "$PSScriptRoot\Input\cyberark_compliance.csv"
 }
