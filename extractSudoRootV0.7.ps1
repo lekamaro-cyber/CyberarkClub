@@ -196,168 +196,105 @@ function Add-AuditEntry($user, $server, $source, $noPass = "NO") {
     }
 }
 
-# --- 2. PROCESS ALL_PASS (Base list — every account) ---
-Write-Host "########"
-Write-Host "ALL_PASS"
-Write-Host "########"
-if (Test-Path $Files.Passwd) {
-    Get-Content $Files.Passwd | ForEach-Object {
-        $line = $_.Trim()
-        # Format: USERNAME . STATUS . DATE . ... (Password info.) . SERVERNAME
-        # Fields separated by " . " (space-dot-space) — Notepad++ shows spaces as dots
-        $parts = $line -split '\s+\.\s+'
-        if ($parts.Count -ge 5) {
-            $pUser = $parts[0].Trim()
-            $pServer = $parts[4].Trim()
-            $isLocked = if ($line -match "Password locked") { "Locked" } else { "Active" }
-            Write-Host "ALL_PASS: $pUser on $pServer [$isLocked]"
-            Add-AuditEntry -user $pUser -server $pServer -source "" -noPass "NO"
-            $results[("$pUser|$pServer").ToLower().Trim()].AccountStatus = $isLocked
-        }
-    }
-    Write-Host "  Base: $($results.Count) comptes charges depuis all_pass" -ForegroundColor Cyan
-}
-
-# --- 3. ENRICH WITH ALL_PRIV_HOST (Sudoers) ---
-Write-Host "`n##############"
+# --- 2. PROCESS ALL_PRIV_HOST (Sudoers) ---
+Write-Host "###############"
 Write-Host "ALL_PRIV_HOST"
-Write-Host "##############"
-$privHostIndex = @{}
+Write-Host "###############"
 if (Test-Path $Files.PrivHost) {
     Get-Content $Files.PrivHost | ForEach-Object {
         $line = $_.Trim()
-        if ($line -match 'ALL=') {
+        if ($line -match "ALL=") {
             $isNoPass = if ($line -match "NOPASSWD") { "YES" } else { "NO" }
-            # Extract block before ALL= then split on last hyphen (SERVER-NAME-USER)
-            $idBlock = ($line -split 'ALL=')[0].Trim()
-            if ($idBlock -match '(.+)-([^\-]+)$') {
-                $srv = $matches[1].Trim()
-                $usr = $matches[2].Trim()
-                $pKey = ("$usr|$srv").ToLower().Trim()
-                $privHostIndex[$pKey] = $isNoPass
+            $idBlock = ($line -split "ALL=")[0].Trim()
+            if ($idBlock -match '(.+)-([^-]+)$') {
+                Write-Host "ALL_PRIV_HOST: $($matches[2])"
+                Add-AuditEntry `
+                    -user $matches[2] `
+                    -server $matches[1] `
+                    -source "Sudoers" `
+                    -noPass $isNoPass
             }
         }
     }
-
-    # Enrich existing entries or create new ones for accounts not in all_pass
-    $sudoersFound = 0
-    $sudoersNew = 0
-    foreach ($pKey in $privHostIndex.Keys) {
-        $isNoPass = $privHostIndex[$pKey]
-        # Extract user and server from the key
-        $parts = $pKey -split '\|'
-        $usr = $parts[0]; $srv = $parts[1]
-
-        if ($results.ContainsKey($pKey)) {
-            # Account exists in all_pass — enrich it
-            $sudoersFound++
-            if ($results[$pKey].Source -eq "") {
-                $results[$pKey].Source = "Sudoers"
-            } elseif ($results[$pKey].Source -notmatch "Sudoers") {
-                $results[$pKey].Source += ";Sudoers"
-            }
-            if ($isNoPass -eq "YES") { $results[$pKey].NoPasswd = "YES" }
-        } else {
-            # Account NOT in all_pass — create it
-            $sudoersNew++
-            Add-AuditEntry -user $usr -server $srv -source "Sudoers" -noPass $isNoPass
-        }
-        Write-Host "ALL_PRIV_HOST:  $usr on $srv"
-    }
-    Write-Host "  $sudoersFound enrichis, $sudoersNew nouveaux (absents de all_pass)" -ForegroundColor Cyan
+    Write-Host "  $($results.Count) comptes apres Sudoers" -ForegroundColor Cyan
 }
 
-# --- 4. ENRICH WITH ALL_PRIV_MEMBERS (Wheel/Sudo Groups) ---
-Write-Host "`n################"
+# --- 3. PROCESS ALL_PRIV_MEMBERS (Wheel/Sudo Groups) ---
+Write-Host "`n###############"
 Write-Host "ALL_PRIV_MEMBERS"
-Write-Host "################"
-$privMembersIndex = @{}
+Write-Host "###############"
 if (Test-Path $Files.PrivMembers) {
     Get-Content $Files.PrivMembers | ForEach-Object {
-        # Format: SERVER-group:x:GID:members (hyphen separates server from group)
-        if ($_ -match '^([^\:]+)-([^\:]+):([^\:]+):([^\:]+):(.*)') {
-            $srv = $matches[1]; $grp = $matches[2]
-            $matches[5] -split ',' | ForEach-Object {
+        if ($_ -match '^([^:]+)-([^:]+):[^:]*:(.*)$') {
+            $srv = $matches[1]
+            $grp = $matches[2]
+            $matches[3].Split(",") | ForEach-Object {
                 if ($_.Trim()) {
-                    $usr = $_.Trim()
-                    $pKey = ("$usr|$srv").ToLower().Trim()
-                    $privMembersIndex[$pKey] = $grp
+                    Write-Host "ALL_PRIV_MEMBERS: Found $($_.Trim())"
+                    Add-AuditEntry `
+                        -user $_.Trim() `
+                        -server $srv `
+                        -source "Group:$grp"
                 }
             }
         }
     }
-
-    # Enrich existing entries or create new ones for accounts not in all_pass
-    $groupFound = 0
-    $groupNew = 0
-    foreach ($pKey in $privMembersIndex.Keys) {
-        $grpName = "Group:$($privMembersIndex[$pKey])"
-        $parts = $pKey -split '\|'
-        $usr = $parts[0]; $srv = $parts[1]
-
-        if ($results.ContainsKey($pKey)) {
-            $groupFound++
-            if ($results[$pKey].Source -eq "") {
-                $results[$pKey].Source = $grpName
-            } elseif ($results[$pKey].Source -notmatch [regex]::Escape($grpName)) {
-                $results[$pKey].Source += ";$grpName"
-            }
-        } else {
-            $groupNew++
-            Add-AuditEntry -user $usr -server $srv -source $grpName
-        }
-        Write-Host "ALL_PRIV_MEMBERS: $usr on $srv ($grpName)"
-    }
-    Write-Host "  $groupFound enrichis, $groupNew nouveaux (absents de all_pass)" -ForegroundColor Cyan
+    Write-Host "  $($results.Count) comptes apres Groups" -ForegroundColor Cyan
 }
 
-# --- 5. ENRICH WITH ALL_ROOT_MEMBERS (UID 0) ---
-Write-Host "`n########"
+# --- 4. PROCESS ALL_PASS (Shadow/Passwd — enrich status only) ---
+Write-Host "`n###############"
+Write-Host "ALL_PASS"
+Write-Host "###############"
+if (Test-Path $Files.Passwd) {
+    Get-Content $Files.Passwd | ForEach-Object {
+        $line = $_.Trim()
+        $parts = $line -split "\s+\|\s+"
+        if ($parts.Count -ge 5) {
+            $user = $parts[0].Trim()
+            $server = $parts[4].Trim()
+            $isLocked = if ($line -match "Password locked") { "Locked" } else { "Active" }
+            $key = ("$user|$server").ToLower().Trim()
+            if ($results.ContainsKey($key)) {
+                # Account already known from privilege sources — update status
+                $results[$key].AccountStatus = $isLocked
+            } else {
+                # Account not in privilege sources — add only if Active
+                if ($isLocked -eq "Active") {
+                    Write-Host "ALL_PASS: Found $user"
+                    Add-AuditEntry `
+                        -user $user `
+                        -server $server `
+                        -source "Shadow"
+                }
+            }
+        }
+    }
+    Write-Host "  $($results.Count) comptes apres all_pass" -ForegroundColor Cyan
+}
+
+# --- 5. PROCESS ALL_ROOT_MEMBERS (UID 0) ---
+Write-Host "`n###############"
 Write-Host "ALL_ROOT"
-Write-Host "########"
-$rootIndex = @{}
+Write-Host "###############"
 if (Test-Path $Files.RootMembers) {
     Get-Content $Files.RootMembers | ForEach-Object {
-        if ($_ -match '^([^\:]+):([^\:]+):0:.*:([^\:]+)$') {
-            $usr = $matches[1].Trim()
-            $srv = $matches[3].Trim()
-            $pKey = ("$usr|$srv").ToLower().Trim()
-            $rootIndex[$pKey] = $true
+        if ($_ -match '^([^:]+)-([^:]+).*\(([^)]+)\)$') {
+            Write-Host "ALL_ROOT: Found $($matches[1])"
+            Add-AuditEntry `
+                -user $matches[1] `
+                -server $matches[2] `
+                -source "Root_Equivalent"
         }
     }
-
-    # Enrich existing entries or create new ones for accounts not in all_pass
-    $rootFound = 0
-    $rootNew = 0
-    foreach ($pKey in $rootIndex.Keys) {
-        $parts = $pKey -split '\|'
-        $usr = $parts[0]; $srv = $parts[1]
-
-        if ($results.ContainsKey($pKey)) {
-            $rootFound++
-            if ($results[$pKey].Source -eq "") {
-                $results[$pKey].Source = "Root_Equivalent"
-            } elseif ($results[$pKey].Source -notmatch "Root_Equivalent") {
-                $results[$pKey].Source += ";Root_Equivalent"
-            }
-        } else {
-            $rootNew++
-            Add-AuditEntry -user $usr -server $srv -source "Root_Equivalent"
-        }
-        Write-Host "ALL_ROOT: $usr on $srv"
-    }
-    Write-Host "  $rootFound enrichis, $rootNew nouveaux (absents de all_pass)" -ForegroundColor Cyan
+    Write-Host "  $($results.Count) comptes apres Root" -ForegroundColor Cyan
 }
 
 # --- 5b. SUMMARY ---
 Write-Host "`n###################################"
 Write-Host "SUMMARY"
 Write-Host "###################################"
-$privilegedCount = ($results.Values | Where-Object { $_.Source -ne "" }).Count
-$nonPrivilegedCount = ($results.Values | Where-Object { $_.Source -eq "" }).Count
-Write-Host "  Total comptes (all_pass): $($results.Count)" -ForegroundColor Cyan
-Write-Host "  Comptes privilegies: $privilegedCount" -ForegroundColor Yellow
-Write-Host "  Comptes non-privilegies: $nonPrivilegedCount" -ForegroundColor Green
+Write-Host "  Total comptes privilegies: $($results.Count)" -ForegroundColor Cyan
 
 # --- 6. CYBERARK CROSS-REFERENCE (via PVWA API) ---
 Write-Host ""
