@@ -1,13 +1,13 @@
 # --- FILE PATH CONFIGURATION ---
 $Files = @{
-    PrivHost     = ".\Input\all_priv_host"
-    RootMembers  = ".\Input\all_root_members"
-    Passwd       = ".\Input\all_pass"
-    PrivMembers  = ".\Input\all_priv_members"
-    Inventory    = ".\request.csv"
+    PrivHost     = "$PSScriptRoot\Input\all_priv_host"
+    RootMembers  = "$PSScriptRoot\Input\all_root_members"
+    Passwd       = "$PSScriptRoot\Input\all_pass"
+    PrivMembers  = "$PSScriptRoot\Input\all_priv_members"
+    Inventory    = "$PSScriptRoot\request.csv"
 }
 
-$OutCsv = ".\output\Audit_Privileges_Unix_$(Get-Date -Format 'yyyy-MM').csv"
+$OutCsv = "$PSScriptRoot\output\Audit_Privileges_Unix_$(Get-Date -Format 'yyyy-MM').csv"
 
 # --- 0. INPUT FILE FRESHNESS CHECK ---
 $now = Get-Date
