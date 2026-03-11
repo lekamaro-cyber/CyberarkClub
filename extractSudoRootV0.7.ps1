@@ -7,7 +7,7 @@ $Files = @{
     Inventory    = "D:\Cyberark\Majide\PAM Script\KPI\request.csv"
 }
 
-$OutCsv = ".\Audit_Privileges_Unix.csv"
+$OutCsv = ".\Audit_Privileges_Unix_$(Get-Date -Format 'yyyy-MM').csv"
 
 # --- 0. INPUT FILE FRESHNESS CHECK ---
 $now = Get-Date
