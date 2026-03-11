@@ -199,12 +199,19 @@ if (Test-Path $Files.PrivHost) {
         $line = $_.Trim()
         if ($line -match 'ALL=') {
             $isNoPass = if ($line -match "NOPASSWD") { "YES" } else { "NO" }
-            # Extract the block before ALL=
+            # Extract the block before ALL= (format: SERVER.USER ALL=...)
             $idBlock = ($line -split 'ALL=')[0].Trim()
-            # Find the last hyphen to separate Server and User
-            if ($idBlock -match '(.+)-([^\-]+)$') {
-                Write-Host "ALL_PRIV_HOST:  $($matches[2])"
-                Add-AuditEntry -user $matches[2] -server $matches[1] -source "Sudoers" -noPass $isNoPass
+            # Split on first dot to separate Server and User
+            if ($idBlock -match '^([^\.]+)\.(.+)$') {
+                $srv = $matches[1].Trim()
+                $usr = $matches[2].Trim()
+                # Skip %group entries (handled by all_priv_members)
+                if ($usr -match '^%') {
+                    Write-Host "ALL_PRIV_HOST: [SKIP GROUP] $usr on $srv" -ForegroundColor DarkGray
+                } else {
+                    Write-Host "ALL_PRIV_HOST:  $usr on $srv"
+                    Add-AuditEntry -user $usr -server $srv -source "Sudoers" -noPass $isNoPass
+                }
             }
         }
     }
@@ -216,8 +223,8 @@ Write-Host "ALL_PRIV_MEMBERS"
 Write-Host "################"
 if (Test-Path $Files.PrivMembers) {
     Get-Content $Files.PrivMembers | ForEach-Object {
-        # Format: SERVER-group:x:ID:members
-        if ($_ -match '^([^\:]+)-([^\:]+):([^\:]+):([^\:]+):(.*)') {
+        # Format: SERVER.group:x:GID:members
+        if ($_ -match '^([^\.]+)\.([^\:]+):([^\:]+):([^\:]+):(.*)') {
             $srv = $matches[1]; $grp = $matches[2]
             $matches[5] -split ',' | ForEach-Object {
                 if ($_.Trim()) {
@@ -238,8 +245,8 @@ $passwdMap = @{}
 if (Test-Path $Files.Passwd) {
     Get-Content $Files.Passwd | ForEach-Object {
         $line = $_.Trim()
-        # Format: USERNAME XX DATE ... (Password set/locked), SERVERNAME
-        if ($line -match '^(\S+)\s+.+,\s*(\S+)\s*$') {
+        # Format: USERNAME STATUS DATE ... (Password info.) SERVERNAME
+        if ($line -match '^(\S+)\s+.*\)\s+(\S+)\s*$') {
             $pUser = $matches[1].Trim()
             $pServer = $matches[2].Trim()
             $isLocked = if ($line -match "Password locked") { "Locked" } else { "Active" }
