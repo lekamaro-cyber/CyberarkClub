@@ -1,3 +1,5 @@
+# --- DEBUG MODE --- (set to $true to enable verbose debug output)  # DEBUG_TAG
+$DebugMode = $true  # DEBUG_TAG
 # --- TLS CONFIGURATION ---
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 # --- FILE PATH CONFIGURATION ---
@@ -164,7 +166,7 @@ if (Test-Path $Files.Passwd) {
             $dbgParsed++  # DEBUG_TAG
             $user = $line[0]
             $server = $line[-1]
-            if ($dbgParsed -le 5) { Write-Host "[DEBUG_TAG] PARSED line $dbgTotal : fields=$($line.Count) user='$user' server='$server' raw='$($_.Substring(0, [Math]::Min(80, $_.Length)))...'" -ForegroundColor Yellow }  # DEBUG_TAG
+            if ($DebugMode -and $dbgParsed -le 5) { Write-Host "[DEBUG] ALL_PASS PARSED #$dbgTotal : fields=$($line.Count) user='$user' server='$server' raw='$($_.Substring(0, [Math]::Min(80, $_.Length)))'" -ForegroundColor Yellow }  # DEBUG_TAG
             # Determine password status
             $pwdStatus = "Unknown"
             if     ($_.Split("(").split(")") -match "Password set")                 { $pwdStatus = "Password set" }
@@ -193,10 +195,10 @@ if (Test-Path $Files.Passwd) {
         }
         else {  # DEBUG_TAG
             $dbgSkipped++  # DEBUG_TAG
-            if ($dbgSkipped -le 10) { Write-Host "[DEBUG_TAG] SKIPPED line $dbgTotal : fields=$($line.Count) raw='$($_.Substring(0, [Math]::Min(80, $_.Length)))...'" -ForegroundColor Red }  # DEBUG_TAG
+            if ($DebugMode -and $dbgSkipped -le 10) { Write-Host "[DEBUG] ALL_PASS SKIPPED #$dbgTotal : fields=$($line.Count) raw='$($_.Substring(0, [Math]::Min(80, $_.Length)))'" -ForegroundColor Red }  # DEBUG_TAG
         }  # DEBUG_TAG
     }
-    Write-Host "[DEBUG_TAG] TOTAL=$dbgTotal PARSED=$dbgParsed SKIPPED=$dbgSkipped" -ForegroundColor Magenta  # DEBUG_TAG
+    if ($DebugMode) { Write-Host "[DEBUG] ALL_PASS SUMMARY: total=$dbgTotal parsed=$dbgParsed skipped=$dbgSkipped" -ForegroundColor Magenta }  # DEBUG_TAG
     Write-Host " $($results.Count) comptes charges depuis all_pass" -ForegroundColor Cyan
 }
 # --- 3. BUILD SUDO INDEX from ALL_PRIV_HOST ---
@@ -204,15 +206,24 @@ Write-Host "`n##############"
 Write-Host "ALL_PRIV_HOST"
 Write-Host "##############"
 if (Test-Path $Files.PrivHost) {
+    $dbgTotal = 0; $dbgParsed = 0; $dbgSkipped = 0  # DEBUG_TAG
     Get-Content $Files.PrivHost | ForEach-Object {
+        $dbgTotal++  # DEBUG_TAG
         $line = $_.Trim()
         if ($line -match "ALL=") {
+            $dbgParsed++  # DEBUG_TAG
             $isNoPass = if ($line -match "NOPASSWD") { "YES" } else { "NO" }
             $idBlock = ($line -split "ALL=")[0].Trim()
             $key = ("$($idBlock.split()[1])|$($idBlock.split()[0])").ToLower().Trim()
             $sudoIndex[$key] = $isNoPass
+            if ($DebugMode -and $dbgParsed -le 5) { Write-Host "[DEBUG] PRIV_HOST PARSED #$dbgTotal : key='$key' nopasswd=$isNoPass" -ForegroundColor Yellow }  # DEBUG_TAG
         }
+        else {  # DEBUG_TAG
+            $dbgSkipped++  # DEBUG_TAG
+            if ($DebugMode -and $dbgSkipped -le 5) { Write-Host "[DEBUG] PRIV_HOST SKIPPED #$dbgTotal : raw='$($line.Substring(0, [Math]::Min(80, $line.Length)))'" -ForegroundColor Red }  # DEBUG_TAG
+        }  # DEBUG_TAG
     }
+    if ($DebugMode) { Write-Host "[DEBUG] PRIV_HOST SUMMARY: total=$dbgTotal parsed=$dbgParsed skipped=$dbgSkipped" -ForegroundColor Magenta }  # DEBUG_TAG
     Write-Host " $($sudoIndex.Count) entrees sudo chargees" -ForegroundColor Cyan
 }
 # --- 4. BUILD GROUP INDEX from ALL_PRIV_MEMBERS ---
@@ -220,10 +231,14 @@ Write-Host "`n##############"
 Write-Host "ALL_PRIV_MEMBERS"
 Write-Host "##############"
 if (Test-Path $Files.PrivMembers) {
+    $dbgTotal = 0; $dbgParsed = 0; $dbgSkipped = 0  # DEBUG_TAG
     Get-Content $Files.PrivMembers | ForEach-Object {
+        $dbgTotal++  # DEBUG_TAG
         if ($_ -match '^(\S+)\s+([^:]+):[^:]*:(\d+):(.+)$') {
+            $dbgParsed++  # DEBUG_TAG
             $srv = $_.split()[0]
             $grp = $_.Split()[1].split(":")[0]
+            if ($DebugMode -and $dbgParsed -le 5) { Write-Host "[DEBUG] PRIV_MEMBERS PARSED #$dbgTotal : server='$srv' group='$grp' members='$($_.Split(':')[-1])'" -ForegroundColor Yellow }  # DEBUG_TAG
             $_.Split(':')[-1].split(",") | ForEach-Object {
                 $member = $_.Trim()
                 if ($member) {
@@ -237,7 +252,12 @@ if (Test-Path $Files.PrivMembers) {
                 }
             }
         }
+        else {  # DEBUG_TAG
+            $dbgSkipped++  # DEBUG_TAG
+            if ($DebugMode -and $dbgSkipped -le 5) { Write-Host "[DEBUG] PRIV_MEMBERS SKIPPED #$dbgTotal : raw='$($_.Substring(0, [Math]::Min(80, $_.Length)))'" -ForegroundColor Red }  # DEBUG_TAG
+        }  # DEBUG_TAG
     }
+    if ($DebugMode) { Write-Host "[DEBUG] PRIV_MEMBERS SUMMARY: total=$dbgTotal parsed=$dbgParsed skipped=$dbgSkipped" -ForegroundColor Magenta }  # DEBUG_TAG
     Write-Host " $($groupIndex.Count) entrees groupe chargees" -ForegroundColor Cyan
 }
 # --- 5. BUILD ROOT INDEX from ALL_ROOT_MEMBERS ---
@@ -245,13 +265,17 @@ Write-Host "`n##############"
 Write-Host "ALL_ROOT_MEMBERS"
 Write-Host "##############"
 if (Test-Path $Files.RootMembers) {
+    $dbgTotal = 0; $dbgParsed = 0; $dbgSkipped = 0  # DEBUG_TAG
     Get-Content $Files.RootMembers | ForEach-Object {
+        $dbgTotal++  # DEBUG_TAG
         if ($_ -match '^root:[^:]*:0:([^:]*):(.+)$') {
+            $dbgParsed++  # DEBUG_TAG
             $srv = $_.split(':')[-1].Trim()
             # Always index root itself
             $rootIndex[("root|$srv").ToLower().Trim()] = $true
             # Also index any additional members (field 3, e.g. smuser)
             $members = $_.split(':')[3]
+            if ($DebugMode -and $dbgParsed -le 5) { Write-Host "[DEBUG] ROOT_MEMBERS PARSED #$dbgTotal : server='$srv' members='$members'" -ForegroundColor Yellow }  # DEBUG_TAG
             if ($members) {
                 $members.Split(",") | ForEach-Object {
                     $m = $_.Trim()
@@ -261,26 +285,36 @@ if (Test-Path $Files.RootMembers) {
                 }
             }
         }
+        else {  # DEBUG_TAG
+            $dbgSkipped++  # DEBUG_TAG
+            if ($DebugMode -and $dbgSkipped -le 5) { Write-Host "[DEBUG] ROOT_MEMBERS SKIPPED #$dbgTotal : raw='$($_.Substring(0, [Math]::Min(80, $_.Length)))'" -ForegroundColor Red }  # DEBUG_TAG
+        }  # DEBUG_TAG
     }
+    if ($DebugMode) { Write-Host "[DEBUG] ROOT_MEMBERS SUMMARY: total=$dbgTotal parsed=$dbgParsed skipped=$dbgSkipped" -ForegroundColor Magenta }  # DEBUG_TAG
     Write-Host " $($rootIndex.Count) entrees root chargees" -ForegroundColor Cyan
 }
 # --- 6. ENRICH RESULTS (lookup sudo, group, root for each account) ---
 Write-Host "`n##############################"
 Write-Host "ENRICHISSEMENT"
 Write-Host "##############################"
+$dbgEnrichSudo = 0; $dbgEnrichGrp = 0; $dbgEnrichRoot = 0  # DEBUG_TAG
 foreach ($entry in $results.GetEnumerator()) {
     $key = $entry.Key
     if ($sudoIndex.ContainsKey($key)) {
         $entry.Value.Sudo = "YES"
         $entry.Value.SudoNoPasswd = $sudoIndex[$key]
+        $dbgEnrichSudo++  # DEBUG_TAG
     }
     if ($groupIndex.ContainsKey($key)) {
         $entry.Value.PrivGroup = $groupIndex[$key]
+        $dbgEnrichGrp++  # DEBUG_TAG
     }
     if ($rootIndex.ContainsKey($key)) {
         $entry.Value.RootEquivalent = "YES"
+        $dbgEnrichRoot++  # DEBUG_TAG
     }
 }
+if ($DebugMode) { Write-Host "[DEBUG] ENRICH SUMMARY: sudo_matches=$dbgEnrichSudo group_matches=$dbgEnrichGrp root_matches=$dbgEnrichRoot" -ForegroundColor Magenta }  # DEBUG_TAG
 # Summary
 $totalAccounts = $results.Count
 $sudoCount     = ($results.Values | Where-Object { $_.Sudo -eq "YES" }).Count
