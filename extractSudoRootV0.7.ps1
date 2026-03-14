@@ -144,33 +144,34 @@ $rootIndex  = @{}   # key = "user|server" -> $true
 $ipToHost   = @{}   # key = IP -> hostname (from request.csv)
 $hostToIp   = @{}   # key = hostname -> IP (from request.csv)
 # --- DNS RESOLUTION FUNCTION ---
-function Resolve-ServerAddress {
-    param([string]$Address)
-    $addr = $Address.ToLower().Trim()
-    # If it looks like an IP, try to resolve to hostname
-    if ($addr -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') {
-        # 1. Check request.csv mapping first
-        if ($ipToHost.ContainsKey($addr)) {
-            if ($DebugMode) { Write-Host "[DEBUG] DNS: IP '$addr' -> hostname '$($ipToHost[$addr])' (from request.csv)" -ForegroundColor DarkYellow }  # DEBUG_TAG
-            return $ipToHost[$addr]
-        }
-        # 2. Fallback: reverse DNS lookup via .NET
-        try {
-            $hostEntry = [System.Net.Dns]::GetHostEntry($addr)
-            $resolved = $hostEntry.HostName.ToLower().Trim()
-            if ($resolved -and $resolved -ne $addr) {
-                # Cache for future lookups
-                $ipToHost[$addr] = $resolved
-                if ($DebugMode) { Write-Host "[DEBUG] DNS: IP '$addr' -> hostname '$resolved' (from DNS)" -ForegroundColor DarkYellow }  # DEBUG_TAG
-                return $resolved
-            }
-        }
-        catch {
-            if ($DebugMode) { Write-Host "[DEBUG] DNS: Failed to resolve IP '$addr': $($_.Exception.Message)" -ForegroundColor Red }  # DEBUG_TAG
+# Resolves a hostname to its IP address (for matching when CyberArk stores IPs)
+# Returns $null if resolution fails
+function Resolve-HostnameToIP {
+    param([string]$Hostname)
+    $host_ = $Hostname.ToLower().Trim()
+    # Skip if already an IP
+    if ($host_ -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') { return $host_ }
+    # 1. Check request.csv mapping first
+    if ($hostToIp.ContainsKey($host_)) {
+        if ($DebugMode) { Write-Host "[DEBUG] DNS: hostname '$host_' -> IP '$($hostToIp[$host_])' (from request.csv)" -ForegroundColor DarkYellow }  # DEBUG_TAG
+        return $hostToIp[$host_]
+    }
+    # 2. Fallback: Resolve-DnsName hostname -> IP
+    try {
+        $dns = Resolve-DnsName -Name $host_ -Type A -ErrorAction Stop | Where-Object { $_.Type -eq 'A' } | Select-Object -First 1
+        if ($dns.IPAddress) {
+            $resolvedIP = $dns.IPAddress.ToLower().Trim()
+            # Cache for future lookups
+            $hostToIp[$host_] = $resolvedIP
+            $ipToHost[$resolvedIP] = $host_
+            if ($DebugMode) { Write-Host "[DEBUG] DNS: hostname '$host_' -> IP '$resolvedIP' (from DNS)" -ForegroundColor DarkYellow }  # DEBUG_TAG
+            return $resolvedIP
         }
     }
-    # Not an IP or resolution failed, return as-is
-    return $addr
+    catch {
+        if ($DebugMode) { Write-Host "[DEBUG] DNS: Failed to resolve hostname '$host_': $($_.Exception.Message)" -ForegroundColor Red }  # DEBUG_TAG
+    }
+    return $null
 }
 # --- 1. LOAD INVENTORY (request.csv) ---
 if (Test-Path $Files.Inventory) {
@@ -377,31 +378,21 @@ Write-Host "########################"
 $pvwaToken = Connect-PVWA -BaseUrl $PVWAUrl -AuthType $AuthMethod
 $cyberArkIndex      = @{}
 $cyberArkCompliance = @{}
-$cyberArkResolvedIP = @{}   # key = "user|hostname" -> original IP (when address was an IP resolved to hostname)
 if ($pvwaToken) {
     # Fetch all Unix accounts from PVWA
     $pvwaAccounts = Get-PVWAAccounts -BaseUrl $PVWAUrl -Token $pvwaToken
     if ($pvwaAccounts.Count -gt 0) {
         # Save a local copy for traceability
         Export-PVWAAccountsToCsv -Accounts $pvwaAccounts -OutputPath $Files.CyberArkAccounts
-        # 7b. Build indexes from API data (with DNS normalization)
-        $dbgDnsResolved = 0  # DEBUG_TAG
+        # 7b. Build indexes from API data (address kept as-is: hostname or IP)
         foreach ($acct in $pvwaAccounts) {
-            $caUser      = $acct.userName
-            $caServerRaw = $acct.address
-            if ($caUser -and $caServerRaw) {
-                $caServer = Resolve-ServerAddress -Address $caServerRaw
-                $caRawLower = $caServerRaw.ToLower().Trim()
-                if ($caServer -ne $caRawLower) { $dbgDnsResolved++ }  # DEBUG_TAG
+            $caUser   = $acct.userName
+            $caServer = $acct.address
+            if ($caUser -and $caServer) {
                 $caKey = ("$caUser|$caServer").ToLower().Trim()
-                # Track if this was an IP that got resolved
-                if ($caServer -ne $caRawLower -and $caRawLower -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') {
-                    $cyberArkResolvedIP[$caKey] = $caRawLower
-                }
                 # Accounts index (FoundInCyberArk)
                 $cyberArkIndex[$caKey] = $true
                 # Compliance index (CA_Compliant based on CPM)
-                # Compliant = CPM enabled AND last operation successful
                 $cpmEnabled = $acct.secretManagement.automaticManagementEnabled
                 $cpmStatus  = $acct.secretManagement.status
                 if ($cpmEnabled -eq $true -and $cpmStatus -match "^success$") {
@@ -413,7 +404,6 @@ if ($pvwaToken) {
             }
         }
         Write-Host " Index construit: $($cyberArkIndex.Count) comptes, $($cyberArkCompliance.Count) entrees compliance." -ForegroundColor Cyan
-        if ($DebugMode) { Write-Host "[DEBUG] CYBERARK PVWA: $dbgDnsResolved adresses resolues IP->hostname" -ForegroundColor Magenta }  # DEBUG_TAG
     }
     # Disconnect from PVWA
     Disconnect-PVWA -BaseUrl $PVWAUrl -Token $pvwaToken
@@ -430,13 +420,8 @@ else {
             if (-not $caUser)   { $caUser   = $_.UserName }
             if (-not $caServer) { $caServer = $_.Address }
             if ($caUser -and $caServer) {
-                $caServerRaw = $caServer.Trim().ToLower()
-                $caServerResolved = Resolve-ServerAddress -Address $caServer
-                $caKey = ("$($caUser.Trim())|$caServerResolved").ToLower()
+                $caKey = ("$($caUser.Trim())|$($caServer.Trim())").ToLower()
                 $cyberArkIndex[$caKey] = $true
-                if ($caServerResolved -ne $caServerRaw -and $caServerRaw -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') {
-                    $cyberArkResolvedIP[$caKey] = $caServerRaw
-                }
             }
         }
         Write-Host " Charge $($cyberArkIndex.Count) comptes depuis le CSV local (inventaire)." -ForegroundColor Cyan
@@ -455,8 +440,7 @@ else {
             if (-not $ccUser)   { $ccUser   = $_."Nom de l'utilisateur du système cible" }
             if (-not $ccServer) { $ccServer = $_."Adresse du système" }
             if ($ccUser -and $ccServer) {
-                $ccServerResolved = Resolve-ServerAddress -Address $ccServer
-                $ccKey = ("$($ccUser.Trim())|$ccServerResolved").ToLower()
+                $ccKey = ("$($ccUser.Trim())|$($ccServer.Trim())").ToLower()
                 if ($ccStatus -match "conforme" -and $ccStatus -notmatch "Non") {
                     $cyberArkCompliance[$ccKey] = "Compliant"
                 }
@@ -472,27 +456,45 @@ else {
     }
 }
 # 7c. Update results with CyberArk data
+# Strategy: lookup by "user|hostname" first, then resolve hostname->IP and try "user|ip"
 $caFoundCount     = 0
 $caCompliantCount = 0
 $caNotFoundCount  = 0
+$caFoundByIP      = 0  # DEBUG_TAG
 foreach ($entry in $results.GetEnumerator()) {
-    $lookupKey = $entry.Key
-    # FoundInCyberArk
+    $lookupKey = $entry.Key   # "user|hostname"
+    $matchedKey = $null
+    $matchedByIP = $false
+    # 1. Try direct match by hostname
     if ($cyberArkIndex.ContainsKey($lookupKey)) {
+        $matchedKey = $lookupKey
+    }
+    else {
+        # 2. Resolve hostname -> IP and try "user|ip"
+        $server = $entry.Value.Server
+        $resolvedIP = Resolve-HostnameToIP -Hostname $server
+        if ($resolvedIP) {
+            $ipKey = ("$($entry.Value.UserSam)|$resolvedIP").ToLower().Trim()
+            if ($cyberArkIndex.ContainsKey($ipKey)) {
+                $matchedKey = $ipKey
+                $matchedByIP = $true
+                $entry.Value.CA_ResolvedIP = $resolvedIP
+                $caFoundByIP++  # DEBUG_TAG
+            }
+        }
+    }
+    # FoundInCyberArk
+    if ($matchedKey) {
         $entry.Value.FoundInCyberArk = "YES"
         $caFoundCount++
-        # Track if CyberArk had this account under an IP (resolved to hostname)
-        if ($cyberArkResolvedIP.ContainsKey($lookupKey)) {
-            $entry.Value.CA_ResolvedIP = $cyberArkResolvedIP[$lookupKey]
-        }
     }
     elseif ($cyberArkIndex.Count -gt 0) {
         $entry.Value.FoundInCyberArk = "NO"
         $caNotFoundCount++
     }
     # CA_Compliant (based on CPM management)
-    if ($cyberArkCompliance.ContainsKey($lookupKey)) {
-        if ($cyberArkCompliance[$lookupKey] -eq "Compliant") {
+    if ($matchedKey -and $cyberArkCompliance.ContainsKey($matchedKey)) {
+        if ($cyberArkCompliance[$matchedKey] -eq "Compliant") {
             $entry.Value.CA_Compliant = "YES"
             $caCompliantCount++
         }
@@ -509,6 +511,7 @@ foreach ($entry in $results.GetEnumerator()) {
         $entry.Value.CA_Compliant = "NO"
     }
 }
+if ($DebugMode) { Write-Host "[DEBUG] CYBERARK CROSS-CHECK: $caFoundByIP comptes trouves par resolution IP" -ForegroundColor Magenta }  # DEBUG_TAG
 Write-Host ""
 Write-Host "Resume CyberArk:" -ForegroundColor Cyan
 Write-Host " Trouve dans CyberArk: $caFoundCount | Absent: $caNotFoundCount" -ForegroundColor Cyan
