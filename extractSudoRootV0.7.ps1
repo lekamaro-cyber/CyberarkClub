@@ -154,11 +154,11 @@ function Resolve-ServerAddress {
             if ($DebugMode) { Write-Host "[DEBUG] DNS: IP '$addr' -> hostname '$($ipToHost[$addr])' (from request.csv)" -ForegroundColor DarkYellow }  # DEBUG_TAG
             return $ipToHost[$addr]
         }
-        # 2. Fallback: Resolve-DnsName
+        # 2. Fallback: reverse DNS lookup via .NET
         try {
-            $dns = Resolve-DnsName -Name $addr -Type PTR -ErrorAction Stop
-            $resolved = ($dns.NameHost -replace '\.$','').ToLower().Trim()
-            if ($resolved) {
+            $hostEntry = [System.Net.Dns]::GetHostEntry($addr)
+            $resolved = $hostEntry.HostName.ToLower().Trim()
+            if ($resolved -and $resolved -ne $addr) {
                 # Cache for future lookups
                 $ipToHost[$addr] = $resolved
                 if ($DebugMode) { Write-Host "[DEBUG] DNS: IP '$addr' -> hostname '$resolved' (from DNS)" -ForegroundColor DarkYellow }  # DEBUG_TAG
