@@ -158,9 +158,8 @@ Write-Host "##############"
 if (Test-Path $Files.Passwd) {
     Get-Content $Files.Passwd | ForEach-Object {
         $line = $_.split(" ")
-        $parts = $line -split "\s+\|\s+"
-        if ($parts.Count -ge 5) {
-            $user = $line[1]
+        if ($line.Count -ge 5) {
+            $user = $line[0]
             $server = $line[-1]
             $carnum = ($server | Measure-Object -Character).Characters
             if ($carnum -lt 1) {
@@ -243,8 +242,19 @@ Write-Host "##############"
 if (Test-Path $Files.RootMembers) {
     Get-Content $Files.RootMembers | ForEach-Object {
         if ($_ -match '^root:[^:]*:0:([^:]*):(.+)$') {
-            $key = ("$($_.split(':')[0])|$($_.split(':')[-1])").ToLower().Trim()
-            $rootIndex[$key] = $true
+            $srv = $_.split(':')[-1].Trim()
+            # Always index root itself
+            $rootIndex[("root|$srv").ToLower().Trim()] = $true
+            # Also index any additional members (field 3, e.g. smuser)
+            $members = $_.split(':')[3]
+            if ($members) {
+                $members.Split(",") | ForEach-Object {
+                    $m = $_.Trim()
+                    if ($m) {
+                        $rootIndex[("$m|$srv").ToLower().Trim()] = $true
+                    }
+                }
+            }
         }
     }
     Write-Host " $($rootIndex.Count) entrees root chargees" -ForegroundColor Cyan
