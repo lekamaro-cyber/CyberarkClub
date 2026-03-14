@@ -157,14 +157,10 @@ Write-Host "ALL_PASS"
 Write-Host "##############"
 if (Test-Path $Files.Passwd) {
     Get-Content $Files.Passwd | ForEach-Object {
-        $line = $_ -split '\s+'
-        if ($line.Count -ge 2 -and $line[0]) {
+        $line = $_.Trim() -split '\s+'
+        if ($line.Count -ge 8) {
             $user = $line[0]
-            $server = $line[-1]
-            $carnum = ($server | Measure-Object -Character).Characters
-            if ($carnum -lt 1) {
-                $server = $line[-2]
-            }
+            $server = $line[-2]
             # Determine password status
             $pwdStatus = "Unknown"
             if     ($_.Split("(").split(")") -match "Password set")                 { $pwdStatus = "Password set" }
