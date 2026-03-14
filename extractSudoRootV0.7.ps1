@@ -160,7 +160,7 @@ if (Test-Path $Files.Passwd) {
         $line = $_.Trim() -split '\s+'
         if ($line.Count -ge 8) {
             $user = $line[0]
-            $server = $line[-2]
+            $server = $line[-1]
             # Determine password status
             $pwdStatus = "Unknown"
             if     ($_.Split("(").split(")") -match "Password set")                 { $pwdStatus = "Password set" }
