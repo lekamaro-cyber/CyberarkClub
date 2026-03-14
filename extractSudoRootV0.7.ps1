@@ -229,6 +229,7 @@ if (Test-Path $Files.Passwd) {
                 RootEquivalent  = "NO"
                 FoundInCyberArk = ""
                 CA_Compliant    = ""
+                CA_ResolvedIP   = ""
             }
             if (-not $results[$key].Server) {
                 Write-Host "No server $($results[$key].server)"
@@ -376,6 +377,7 @@ Write-Host "########################"
 $pvwaToken = Connect-PVWA -BaseUrl $PVWAUrl -AuthType $AuthMethod
 $cyberArkIndex      = @{}
 $cyberArkCompliance = @{}
+$cyberArkResolvedIP = @{}   # key = "user|hostname" -> original IP (when address was an IP resolved to hostname)
 if ($pvwaToken) {
     # Fetch all Unix accounts from PVWA
     $pvwaAccounts = Get-PVWAAccounts -BaseUrl $PVWAUrl -Token $pvwaToken
@@ -389,8 +391,13 @@ if ($pvwaToken) {
             $caServerRaw = $acct.address
             if ($caUser -and $caServerRaw) {
                 $caServer = Resolve-ServerAddress -Address $caServerRaw
-                if ($caServer -ne $caServerRaw.ToLower().Trim()) { $dbgDnsResolved++ }  # DEBUG_TAG
+                $caRawLower = $caServerRaw.ToLower().Trim()
+                if ($caServer -ne $caRawLower) { $dbgDnsResolved++ }  # DEBUG_TAG
                 $caKey = ("$caUser|$caServer").ToLower().Trim()
+                # Track if this was an IP that got resolved
+                if ($caServer -ne $caRawLower -and $caRawLower -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') {
+                    $cyberArkResolvedIP[$caKey] = $caRawLower
+                }
                 # Accounts index (FoundInCyberArk)
                 $cyberArkIndex[$caKey] = $true
                 # Compliance index (CA_Compliant based on CPM)
@@ -423,9 +430,13 @@ else {
             if (-not $caUser)   { $caUser   = $_.UserName }
             if (-not $caServer) { $caServer = $_.Address }
             if ($caUser -and $caServer) {
+                $caServerRaw = $caServer.Trim().ToLower()
                 $caServerResolved = Resolve-ServerAddress -Address $caServer
                 $caKey = ("$($caUser.Trim())|$caServerResolved").ToLower()
                 $cyberArkIndex[$caKey] = $true
+                if ($caServerResolved -ne $caServerRaw -and $caServerRaw -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') {
+                    $cyberArkResolvedIP[$caKey] = $caServerRaw
+                }
             }
         }
         Write-Host " Charge $($cyberArkIndex.Count) comptes depuis le CSV local (inventaire)." -ForegroundColor Cyan
@@ -470,6 +481,10 @@ foreach ($entry in $results.GetEnumerator()) {
     if ($cyberArkIndex.ContainsKey($lookupKey)) {
         $entry.Value.FoundInCyberArk = "YES"
         $caFoundCount++
+        # Track if CyberArk had this account under an IP (resolved to hostname)
+        if ($cyberArkResolvedIP.ContainsKey($lookupKey)) {
+            $entry.Value.CA_ResolvedIP = $cyberArkResolvedIP[$lookupKey]
+        }
     }
     elseif ($cyberArkIndex.Count -gt 0) {
         $entry.Value.FoundInCyberArk = "NO"
