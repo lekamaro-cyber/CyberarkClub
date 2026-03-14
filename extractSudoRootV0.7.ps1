@@ -157,8 +157,8 @@ Write-Host "ALL_PASS"
 Write-Host "##############"
 if (Test-Path $Files.Passwd) {
     Get-Content $Files.Passwd | ForEach-Object {
-        $line = $_.split(" ")
-        if ($line.Count -ge 5) {
+        $line = $_ -split '\s+'
+        if ($line.Count -ge 2 -and $line[0]) {
             $user = $line[0]
             $server = $line[-1]
             $carnum = ($server | Measure-Object -Character).Characters
