@@ -156,11 +156,15 @@ Write-Host "`n##############"
 Write-Host "ALL_PASS"
 Write-Host "##############"
 if (Test-Path $Files.Passwd) {
+    $dbgTotal = 0; $dbgParsed = 0; $dbgSkipped = 0  # DEBUG_TAG
     Get-Content $Files.Passwd | ForEach-Object {
+        $dbgTotal++  # DEBUG_TAG
         $line = $_.Trim() -split '\s+'
         if ($line.Count -ge 8) {
+            $dbgParsed++  # DEBUG_TAG
             $user = $line[0]
             $server = $line[-1]
+            if ($dbgParsed -le 5) { Write-Host "[DEBUG_TAG] PARSED line $dbgTotal : fields=$($line.Count) user='$user' server='$server' raw='$($_.Substring(0, [Math]::Min(80, $_.Length)))...'" -ForegroundColor Yellow }  # DEBUG_TAG
             # Determine password status
             $pwdStatus = "Unknown"
             if     ($_.Split("(").split(")") -match "Password set")                 { $pwdStatus = "Password set" }
@@ -187,7 +191,12 @@ if (Test-Path $Files.Passwd) {
                 Write-Host "No server $($results[$key].server)"
             }
         }
+        else {  # DEBUG_TAG
+            $dbgSkipped++  # DEBUG_TAG
+            if ($dbgSkipped -le 10) { Write-Host "[DEBUG_TAG] SKIPPED line $dbgTotal : fields=$($line.Count) raw='$($_.Substring(0, [Math]::Min(80, $_.Length)))...'" -ForegroundColor Red }  # DEBUG_TAG
+        }  # DEBUG_TAG
     }
+    Write-Host "[DEBUG_TAG] TOTAL=$dbgTotal PARSED=$dbgParsed SKIPPED=$dbgSkipped" -ForegroundColor Magenta  # DEBUG_TAG
     Write-Host " $($results.Count) comptes charges depuis all_pass" -ForegroundColor Cyan
 }
 # --- 3. BUILD SUDO INDEX from ALL_PRIV_HOST ---
