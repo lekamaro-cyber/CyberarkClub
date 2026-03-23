@@ -170,14 +170,25 @@ function Find-CyberArkAccount {
     if ($results.count -eq 0) { return $null }
 
     # Filtrage precis : meme user + meme base + meme adresse
-    $account = $results.value | Where-Object {
+    $matched = @($results.value | Where-Object {
         $_.userName -ieq $User -and
         $_.address -ieq $Address -and
         ($_.platformAccountProperties.Database -ieq $Database -or
          $_.name -imatch $Database)
-    } | Select-Object -First 1
+    })
 
-    return $account
+    if ($matched.Count -gt 1) {
+        Write-Log "ANOMALIE : $($matched.Count) comptes trouves pour $User@$Database [$Address] - attendu 1 seul !" "ERROR"
+        Write-Log "Comptes en doublon :" "ERROR"
+        foreach ($dup in $matched) {
+            Write-Log "  - $($dup.name) (ID: $($dup.id), Safe: $($dup.safeName))" "ERROR"
+        }
+        throw "Doublon detecte : $($matched.Count) comptes pour le triplet ($User, $Database, $Address). Corrigez dans CyberArk avant de relancer."
+    }
+
+    if ($matched.Count -eq 0) { return $null }
+
+    return $matched[0]
 }
 
 function Sync-SingleAccount {
