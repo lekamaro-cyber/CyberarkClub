@@ -239,12 +239,22 @@ function Sync-SingleAccount {
     }
     Write-Log "Compte DRP trouve : $($drpAccount.name) (ID: $($drpAccount.id))" "OK"
 
-    # --- Mise a jour du mot de passe DRP ---
-    Write-Log "Mise a jour du mot de passe DRP avec celui du PRD..."
-    $changeUrl = "$BaseUrl/api/accounts/$($drpAccount.id)/Password/Update"
-    $changeBody = @{ NewCredentials = $prdPassword }
+    # --- SetNextPassword : definir le prochain mot de passe DRP = mot de passe PRD ---
+    Write-Log "SetNextPassword sur le compte DRP (mot de passe PRD comme prochain mot de passe)..."
+    $setNextUrl = "$BaseUrl/api/accounts/$($drpAccount.id)/SetNextPassword"
+    $setNextBody = @{
+        ChangeImmediately = $true
+        NewCredentials    = $prdPassword
+    }
+    Invoke-PVWARestMethod -Uri $setNextUrl -Method POST -Headers $AuthHeaders -Body $setNextBody
+    Write-Log "NextPassword defini sur le compte DRP." "OK"
+
+    # --- Change : declencher le CPM pour appliquer le changement sur la base Oracle DRP ---
+    Write-Log "Declenchement du CPM Change sur le compte DRP (application sur la base Oracle)..."
+    $changeUrl = "$BaseUrl/api/accounts/$($drpAccount.id)/Change"
+    $changeBody = @{ ChangeEntireGroup = $false }
     Invoke-PVWARestMethod -Uri $changeUrl -Method POST -Headers $AuthHeaders -Body $changeBody
-    Write-Log "Mot de passe DRP mis a jour." "OK"
+    Write-Log "CPM Change declenche sur $($drpAccount.name)." "OK"
 
     # --- Verification immediate ---
     Write-Log "Lancement de la verification sur le compte DRP..."
