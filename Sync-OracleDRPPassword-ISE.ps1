@@ -79,8 +79,14 @@ function Invoke-PVWARestMethod {
         Invoke-RestMethod @params
     }
     catch {
-        $status = $_.Exception.Response.StatusCode.value__
-        $detail = $_.ErrorDetails.Message
+        $status = "N/A"
+        $detail = $_.Exception.Message
+        if ($_.Exception.PSObject.Properties['Response'] -and $_.Exception.Response) {
+            try { $status = $_.Exception.Response.StatusCode.value__ } catch {}
+        }
+        if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+            $detail = $_.ErrorDetails.Message
+        }
         Write-Log "Appel API echoue [$Method $Uri] - HTTP $status : $detail" "ERROR"
         throw
     }
