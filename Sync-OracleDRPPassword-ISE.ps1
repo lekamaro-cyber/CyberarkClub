@@ -121,12 +121,28 @@ function Find-CyberArkAccount {
 
     if (-not $accounts -or @($accounts).Count -eq 0) { return $null }
 
-    # Filtrage precis : meme user + meme base + meme adresse
+    # Debug : afficher les proprietes de chaque compte retourne par l'API
+    foreach ($acct in @($accounts)) {
+        Write-Log "  [DEBUG] Compte retourne: name=$($acct.name) | userName=$($acct.userName) | address=$($acct.address)" "INFO"
+        if ($acct.platformAccountProperties) {
+            $props = ($acct.platformAccountProperties.PSObject.Properties | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ", "
+            Write-Log "  [DEBUG]   platformAccountProperties: $props" "INFO"
+        } else {
+            Write-Log "  [DEBUG]   platformAccountProperties: (vide/absent)" "WARN"
+        }
+    }
+
+    # Filtrage precis : meme user + meme adresse + base dans platformAccountProperties OU dans le nom du compte
     $matched = @($accounts | Where-Object {
+        $acctDb = $null
+        if ($_.platformAccountProperties) {
+            # Chercher la propriete Database quelle que soit la casse
+            $dbProp = $_.platformAccountProperties.PSObject.Properties | Where-Object { $_.Name -ieq "Database" } | Select-Object -First 1
+            if ($dbProp) { $acctDb = $dbProp.Value }
+        }
         $_.userName -ieq $User -and
         $_.address -ieq $Address -and
-        ($_.platformAccountProperties.Database -ieq $Database -or
-         $_.name -imatch $Database)
+        ($acctDb -ieq $Database -or $_.name -imatch [regex]::Escape($Database))
     })
 
     if ($matched.Count -gt 1) {
@@ -275,7 +291,7 @@ catch {
 
 # --- Resume ---
 Write-Log "======================================================" "OK"
-Write-Log "=== RESUME FINAL === (v1.5)" "OK"
+Write-Log "=== RESUME FINAL === (v1.6)" "OK"
 Write-Log "Total traites  : $($totalSuccess + $totalFail)" "OK"
 Write-Log "Succes         : $totalSuccess" "OK"
 Write-Log "Echecs         : $totalFail" $(if ($totalFail -gt 0) { "WARN" } else { "OK" })
