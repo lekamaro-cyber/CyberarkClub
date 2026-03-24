@@ -299,7 +299,7 @@ if ($PSCmdlet.ParameterSetName -eq "Batch") {
         Write-Log "Fichier CSV introuvable : $CsvFile" "ERROR"
         exit 1
     }
-    $accounts = Import-Csv -Path $CsvFile -Delimiter ","
+    $accounts = @(Import-Csv -Path $CsvFile -Delimiter ",")
     Write-Log "CSV charge : $($accounts.Count) comptes a traiter depuis $CsvFile"
 }
 else {

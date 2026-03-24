@@ -234,7 +234,7 @@ $authHeaders = @{ Authorization = $token }
 Write-Log "Authentification reussie." "OK"
 
 # --- Chargement du CSV ---
-$accounts = Import-Csv -Path $CsvFile -Delimiter ","
+$accounts = @(Import-Csv -Path $CsvFile -Delimiter ",")
 Write-Log "CSV charge : $($accounts.Count) comptes a traiter depuis $CsvFile"
 
 # --- Traitement ---
