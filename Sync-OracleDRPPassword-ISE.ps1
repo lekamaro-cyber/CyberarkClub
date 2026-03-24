@@ -102,12 +102,19 @@ function Find-CyberArkAccount {
         [string]$SafeName
     )
 
+    # Construire le filtre API precis avec operateurs AND
     $searchQuery = "$User $Database"
-    $searchUrl = "$BaseUrl/api/accounts?search=$searchQuery"
-
+    $filterParts = @(
+        "Username Contains $User",
+        "Address Contains $Address"
+    )
     if ($SafeName) {
-        $searchUrl += "&filter=safename eq $SafeName"
+        $filterParts += "safename eq $SafeName"
     }
+    $filterStr = $filterParts -join " AND "
+
+    $searchUrl = "$BaseUrl/api/accounts?search=$searchQuery&filter=$filterStr"
+    Write-Log "  [DEBUG] URL appel API: $searchUrl" "INFO"
 
     $results = Invoke-PVWARestMethod -Uri $searchUrl -Headers $AuthHeaders
 
@@ -119,42 +126,48 @@ function Find-CyberArkAccount {
         $accounts = $results
     }
 
-    if (-not $accounts -or @($accounts).Count -eq 0) { return $null }
-
-    # Debug : afficher les proprietes de chaque compte retourne par l'API
-    foreach ($acct in @($accounts)) {
-        Write-Log "  [DEBUG] Compte retourne: name=$($acct.name) | userName=$($acct.userName) | address=$($acct.address)" "INFO"
-        if ($acct.platformAccountProperties) {
-            $props = ($acct.platformAccountProperties.PSObject.Properties | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ", "
-            Write-Log "  [DEBUG]   platformAccountProperties: $props" "INFO"
-        } else {
-            Write-Log "  [DEBUG]   platformAccountProperties: (vide/absent)" "WARN"
-        }
+    if (-not $accounts -or @($accounts).Count -eq 0) {
+        Write-Log "  [DEBUG] Aucun compte retourne par l'API pour search=$searchQuery filter=$filterStr" "WARN"
+        return $null
     }
 
-    # Filtrage precis : meme user + meme adresse + base dans platformAccountProperties OU dans le nom du compte
+    # Debug : afficher les comptes retournes
+    foreach ($acct in @($accounts)) {
+        $dbVal = ""
+        if ($acct.platformAccountProperties) {
+            $props = ($acct.platformAccountProperties.PSObject.Properties | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ", "
+            $dbVal = " | props: $props"
+        }
+        Write-Log "  [DEBUG] Compte: $($acct.name) | user=$($acct.userName) | addr=$($acct.address)$dbVal" "INFO"
+    }
+
+    # Si un seul resultat, on le prend directement
+    if (@($accounts).Count -eq 1) {
+        return @($accounts)[0]
+    }
+
+    # Si plusieurs resultats, filtrage supplementaire sur la Database
     $matched = @($accounts | Where-Object {
         $acctDb = $null
         if ($_.platformAccountProperties) {
-            # Chercher la propriete Database quelle que soit la casse
             $dbProp = $_.platformAccountProperties.PSObject.Properties | Where-Object { $_.Name -ieq "Database" } | Select-Object -First 1
             if ($dbProp) { $acctDb = $dbProp.Value }
         }
-        $_.userName -ieq $User -and
-        $_.address -ieq $Address -and
-        ($acctDb -ieq $Database -or $_.name -imatch [regex]::Escape($Database))
+        $acctDb -ieq $Database -or $_.name -imatch [regex]::Escape($Database)
     })
 
     if ($matched.Count -gt 1) {
         Write-Log "ANOMALIE : $($matched.Count) comptes trouves pour $User@$Database [$Address] - attendu 1 seul !" "ERROR"
-        Write-Log "Comptes en doublon :" "ERROR"
         foreach ($dup in $matched) {
             Write-Log "  - $($dup.name) (ID: $($dup.id), Safe: $($dup.safeName))" "ERROR"
         }
         throw "Doublon detecte : $($matched.Count) comptes pour le triplet ($User, $Database, $Address). Corrigez dans CyberArk avant de relancer."
     }
 
-    if ($matched.Count -eq 0) { return $null }
+    if ($matched.Count -eq 0) {
+        Write-Log "  [DEBUG] Apres filtrage Database=$Database : aucun match parmi $(@($accounts).Count) comptes" "WARN"
+        return $null
+    }
 
     return $matched[0]
 }
@@ -291,7 +304,7 @@ catch {
 
 # --- Resume ---
 Write-Log "======================================================" "OK"
-Write-Log "=== RESUME FINAL === (v1.6)" "OK"
+Write-Log "=== RESUME FINAL === (v1.7)" "OK"
 Write-Log "Total traites  : $($totalSuccess + $totalFail)" "OK"
 Write-Log "Succes         : $totalSuccess" "OK"
 Write-Log "Echecs         : $totalFail" $(if ($totalFail -gt 0) { "WARN" } else { "OK" })
