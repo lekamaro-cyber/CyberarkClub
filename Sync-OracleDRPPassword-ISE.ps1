@@ -7,7 +7,7 @@
     Configurez les variables ci-dessous puis lancez le script.
     Traite tous les comptes du fichier CSV.
 
-    Colonnes CSV attendues : User,Database,AdressePRD,AdresseDRP
+    Colonnes CSV attendues : User,DatabasePRD,DatabaseDRP,AdressePRD,AdresseDRP
 #>
 
 # ============================================================
@@ -148,22 +148,23 @@ function Sync-SingleAccount {
         [string]$BaseUrl,
         [hashtable]$AuthHeaders,
         [string]$User,
-        [string]$Database,
+        [string]$DatabasePRD,
+        [string]$DatabaseDRP,
         [string]$AddressPRD,
         [string]$AddressDRP,
         [string]$SafeName
     )
 
     Write-Log "------------------------------------------------------"
-    Write-Log "Traitement : User=$User | DB=$Database | PRD=$AddressPRD | DRP=$AddressDRP"
+    Write-Log "Traitement : User=$User | DB_PRD=$DatabasePRD | DB_DRP=$DatabaseDRP | PRD=$AddressPRD | DRP=$AddressDRP"
 
     # --- Recherche du compte PRD ---
-    Write-Log "Recherche du compte PRD ($User@$Database sur $AddressPRD)..."
+    Write-Log "Recherche du compte PRD ($User@$DatabasePRD sur $AddressPRD)..."
     $prdAccount = Find-CyberArkAccount -BaseUrl $BaseUrl -AuthHeaders $AuthHeaders `
-        -User $User -Database $Database -Address $AddressPRD -SafeName $SafeName
+        -User $User -Database $DatabasePRD -Address $AddressPRD -SafeName $SafeName
 
     if (-not $prdAccount) {
-        Write-Log "Compte PRD introuvable : $User@$Database [$AddressPRD]" "ERROR"
+        Write-Log "Compte PRD introuvable : $User@$DatabasePRD [$AddressPRD]" "ERROR"
         return $false
     }
     Write-Log "Compte PRD trouve : $($prdAccount.name) (ID: $($prdAccount.id))" "OK"
@@ -171,7 +172,7 @@ function Sync-SingleAccount {
     # --- Recuperation du mot de passe PRD ---
     Write-Log "Recuperation du mot de passe PRD..."
     $retrieveUrl = "$BaseUrl/api/accounts/$($prdAccount.id)/Password/Retrieve"
-    $retrieveBody = @{ reason = "Sync DRP - copie mdp PRD vers DRP pour $User@$Database" }
+    $retrieveBody = @{ reason = "Sync DRP - copie mdp PRD vers DRP pour $User@$DatabasePRD" }
     $prdPassword = Invoke-PVWARestMethod -Uri $retrieveUrl -Method POST -Headers $AuthHeaders -Body $retrieveBody
 
     if (-not $prdPassword) {
@@ -181,12 +182,12 @@ function Sync-SingleAccount {
     Write-Log "Mot de passe PRD recupere." "OK"
 
     # --- Recherche du compte DRP ---
-    Write-Log "Recherche du compte DRP ($User@$Database sur $AddressDRP)..."
+    Write-Log "Recherche du compte DRP ($User@$DatabaseDRP sur $AddressDRP)..."
     $drpAccount = Find-CyberArkAccount -BaseUrl $BaseUrl -AuthHeaders $AuthHeaders `
-        -User $User -Database $Database -Address $AddressDRP -SafeName $SafeName
+        -User $User -Database $DatabaseDRP -Address $AddressDRP -SafeName $SafeName
 
     if (-not $drpAccount) {
-        Write-Log "Compte DRP introuvable : $User@$Database [$AddressDRP]" "ERROR"
+        Write-Log "Compte DRP introuvable : $User@$DatabaseDRP [$AddressDRP]" "ERROR"
         return $false
     }
     Write-Log "Compte DRP trouve : $($drpAccount.name) (ID: $($drpAccount.id))" "OK"
@@ -250,14 +251,14 @@ $totalFail    = 0
 foreach ($entry in $accounts) {
     try {
         $result = Sync-SingleAccount -BaseUrl $baseUrl -AuthHeaders $authHeaders `
-            -User $entry.User -Database $entry.Database `
+            -User $entry.User -DatabasePRD $entry.DatabasePRD -DatabaseDRP $entry.DatabaseDRP `
             -AddressPRD $entry.AdressePRD -AddressDRP $entry.AdresseDRP `
             -SafeName $Safe
 
         if ($result) { $totalSuccess++ } else { $totalFail++ }
     }
     catch {
-        Write-Log "Erreur sur $($entry.User)@$($entry.Database) : $_" "ERROR"
+        Write-Log "Erreur sur $($entry.User)@$($entry.DatabasePRD)->$($entry.DatabaseDRP) : $_" "ERROR"
         $totalFail++
     }
 }
@@ -274,7 +275,7 @@ catch {
 
 # --- Resume ---
 Write-Log "======================================================" "OK"
-Write-Log "=== RESUME FINAL === (v1.4)" "OK"
+Write-Log "=== RESUME FINAL === (v1.5)" "OK"
 Write-Log "Total traites  : $($totalSuccess + $totalFail)" "OK"
 Write-Log "Succes         : $totalSuccess" "OK"
 Write-Log "Echecs         : $totalFail" $(if ($totalFail -gt 0) { "WARN" } else { "OK" })

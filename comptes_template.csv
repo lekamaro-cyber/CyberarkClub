@@ -1,4 +1,4 @@
-User,Database,AdressePRD,AdresseDRP
-APP_OWNER,FINDB,oraprd01.corp.local,oradrp01.corp.local
-SYS_BATCH,HRDB,oraprd02.corp.local,oradrp02.corp.local
-RPT_USER,SALESDB,oraprd01.corp.local,oradrp01.corp.local
+User,DatabasePRD,DatabaseDRP,AdressePRD,AdresseDRP
+APP_OWNER,FINDB,FINDB_DRP,oraprd01.corp.local,oradrp01.corp.local
+SYS_BATCH,HRDB,HRDB_DRP,oraprd02.corp.local,oradrp02.corp.local
+RPT_USER,SALESDB,SALESDB_DRP,oraprd01.corp.local,oradrp01.corp.local
