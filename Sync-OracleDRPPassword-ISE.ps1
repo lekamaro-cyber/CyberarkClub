@@ -102,18 +102,12 @@ function Find-CyberArkAccount {
         [string]$SafeName
     )
 
-    # Construire le filtre API precis avec operateurs AND
-    $searchQuery = "$User $Database"
-    $filterParts = @(
-        "Username Contains $User",
-        "Address Contains $Address"
-    )
+    # Recherche simple comme psPAS : search="User Address" puis filtrage local
+    $searchQuery = "$User $Address"
+    $searchUrl = "$BaseUrl/PasswordVault/api/accounts?search=$searchQuery"
     if ($SafeName) {
-        $filterParts += "safename eq $SafeName"
+        $searchUrl += "&filter=safename eq $SafeName"
     }
-    $filterStr = $filterParts -join " AND "
-
-    $searchUrl = "$BaseUrl/api/accounts?search=$searchQuery&filter=$filterStr"
     Write-Log "  [DEBUG] URL appel API: $searchUrl" "INFO"
 
     $results = Invoke-PVWARestMethod -Uri $searchUrl -Headers $AuthHeaders
@@ -127,7 +121,7 @@ function Find-CyberArkAccount {
     }
 
     if (-not $accounts -or @($accounts).Count -eq 0) {
-        Write-Log "  [DEBUG] Aucun compte retourne par l'API pour search=$searchQuery filter=$filterStr" "WARN"
+        Write-Log "  [DEBUG] Aucun compte retourne par l'API pour search=$searchQuery" "WARN"
         return $null
     }
 
@@ -141,20 +135,8 @@ function Find-CyberArkAccount {
         Write-Log "  [DEBUG] Compte: $($acct.name) | user=$($acct.userName) | addr=$($acct.address)$dbVal" "INFO"
     }
 
-    # Si un seul resultat, on le prend directement
-    if (@($accounts).Count -eq 1) {
-        return @($accounts)[0]
-    }
-
-    # Si plusieurs resultats, filtrage supplementaire sur la Database
-    $matched = @($accounts | Where-Object {
-        $acctDb = $null
-        if ($_.platformAccountProperties) {
-            $dbProp = $_.platformAccountProperties.PSObject.Properties | Where-Object { $_.Name -ieq "Database" } | Select-Object -First 1
-            if ($dbProp) { $acctDb = $dbProp.Value }
-        }
-        $acctDb -ieq $Database -or $_.name -imatch [regex]::Escape($Database)
-    })
+    # Filtrage local precis : meme username (comme psPAS Where-Object)
+    $matched = @($accounts | Where-Object { $_.userName -like "$User*" })
 
     if ($matched.Count -gt 1) {
         Write-Log "ANOMALIE : $($matched.Count) comptes trouves pour $User@$Database [$Address] - attendu 1 seul !" "ERROR"
@@ -200,7 +182,7 @@ function Sync-SingleAccount {
 
     # --- Recuperation du mot de passe PRD ---
     Write-Log "Recuperation du mot de passe PRD..."
-    $retrieveUrl = "$BaseUrl/api/accounts/$($prdAccount.id)/Password/Retrieve"
+    $retrieveUrl = "$BaseUrl/PasswordVault/api/accounts/$($prdAccount.id)/Password/Retrieve"
     $retrieveBody = @{ reason = "Sync DRP - copie mdp PRD vers DRP pour $User@$DatabasePRD" }
     $prdPassword = Invoke-PVWARestMethod -Uri $retrieveUrl -Method POST -Headers $AuthHeaders -Body $retrieveBody
 
@@ -223,14 +205,14 @@ function Sync-SingleAccount {
 
     # --- Mise a jour du mot de passe DRP ---
     Write-Log "Mise a jour du mot de passe DRP avec celui du PRD..."
-    $changeUrl = "$BaseUrl/api/accounts/$($drpAccount.id)/Password/Update"
+    $changeUrl = "$BaseUrl/PasswordVault/api/accounts/$($drpAccount.id)/Password/Update"
     $changeBody = @{ NewCredentials = $prdPassword }
     Invoke-PVWARestMethod -Uri $changeUrl -Method POST -Headers $AuthHeaders -Body $changeBody
     Write-Log "Mot de passe DRP mis a jour." "OK"
 
     # --- Verification immediate ---
     Write-Log "Lancement de la verification sur le compte DRP..."
-    $verifyUrl = "$BaseUrl/api/accounts/$($drpAccount.id)/Verify"
+    $verifyUrl = "$BaseUrl/PasswordVault/api/accounts/$($drpAccount.id)/Verify"
     Invoke-PVWARestMethod -Uri $verifyUrl -Method POST -Headers $AuthHeaders
     Write-Log "Verification lancee sur $($drpAccount.name)." "OK"
 
@@ -258,7 +240,7 @@ $authBody = @{
     username = $Credential.UserName
     password = $Credential.GetNetworkCredential().Password
 }
-$token = Invoke-PVWARestMethod -Uri "$baseUrl/api/auth/$AuthType/Logon" -Method POST -Body $authBody
+$token = Invoke-PVWARestMethod -Uri "$baseUrl/PasswordVault/api/auth/$AuthType/Logon" -Method POST -Body $authBody
 
 if (-not $token) {
     Write-Log "Echec d'authentification au PVWA." "ERROR"
@@ -295,7 +277,7 @@ foreach ($entry in $accounts) {
 # --- Deconnexion ---
 Write-Log "Deconnexion du PVWA..."
 try {
-    Invoke-PVWARestMethod -Uri "$baseUrl/api/auth/Logoff" -Method POST -Headers $authHeaders
+    Invoke-PVWARestMethod -Uri "$baseUrl/PasswordVault/api/auth/Logoff" -Method POST -Headers $authHeaders
     Write-Log "Deconnexion reussie." "OK"
 }
 catch {
@@ -304,7 +286,7 @@ catch {
 
 # --- Resume ---
 Write-Log "======================================================" "OK"
-Write-Log "=== RESUME FINAL === (v1.7)" "OK"
+Write-Log "=== RESUME FINAL === (v1.8)" "OK"
 Write-Log "Total traites  : $($totalSuccess + $totalFail)" "OK"
 Write-Log "Succes         : $totalSuccess" "OK"
 Write-Log "Echecs         : $totalFail" $(if ($totalFail -gt 0) { "WARN" } else { "OK" })
