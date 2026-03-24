@@ -274,7 +274,7 @@ catch {
 
 # --- Resume ---
 Write-Log "======================================================" "OK"
-Write-Log "=== RESUME FINAL ===" "OK"
+Write-Log "=== RESUME FINAL === (v1.4)" "OK"
 Write-Log "Total traites  : $($totalSuccess + $totalFail)" "OK"
 Write-Log "Succes         : $totalSuccess" "OK"
 Write-Log "Echecs         : $totalFail" $(if ($totalFail -gt 0) { "WARN" } else { "OK" })
