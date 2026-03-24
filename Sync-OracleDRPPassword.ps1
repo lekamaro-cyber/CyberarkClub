@@ -167,10 +167,18 @@ function Find-CyberArkAccount {
 
     $results = Invoke-PVWARestMethod -Uri $searchUrl -Headers $AuthHeaders
 
-    if ($results.count -eq 0) { return $null }
+    # Gerer les differents formats de reponse PVWA
+    $accounts = $null
+    if ($results -and $results.PSObject.Properties['value']) {
+        $accounts = $results.value
+    } elseif ($results -is [array]) {
+        $accounts = $results
+    }
+
+    if (-not $accounts -or @($accounts).Count -eq 0) { return $null }
 
     # Filtrage precis : meme user + meme base + meme adresse
-    $matched = @($results.value | Where-Object {
+    $matched = @($accounts | Where-Object {
         $_.userName -ieq $User -and
         $_.address -ieq $Address -and
         ($_.platformAccountProperties.Database -ieq $Database -or
