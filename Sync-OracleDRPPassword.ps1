@@ -293,7 +293,7 @@ if (-not $token) {
     exit 1
 }
 
-$token = $token.Trim('"')
+$token = $token.Trim('"').Trim().Replace("`r","").Replace("`n","")
 $authHeaders = @{ Authorization = $token }
 Write-Log "Authentification reussie." "OK"
 
