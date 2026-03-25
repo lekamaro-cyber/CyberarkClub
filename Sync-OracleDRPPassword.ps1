@@ -170,7 +170,7 @@ function Find-CyberArkAccount {
         [string]$SafeName
     )
 
-    $searchQuery = "$User $Database"
+    $searchQuery = "$User $Address $Database"
     $searchUrl = "$BaseUrl/api/accounts?search=$searchQuery"
 
     if ($SafeName) {

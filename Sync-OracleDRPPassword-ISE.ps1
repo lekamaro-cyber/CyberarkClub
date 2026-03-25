@@ -104,7 +104,7 @@ function Find-CyberArkAccount {
     )
 
     # Simple search like psPAS: search="User Address" then local filtering
-    $searchQuery = "$User $Address"
+    $searchQuery = "$User $Address $Database"
     $searchUrl = "$BaseUrl/PasswordVault/api/accounts?search=$searchQuery"
     if ($SafeName) {
         $searchUrl += "&filter=safename eq $SafeName"
