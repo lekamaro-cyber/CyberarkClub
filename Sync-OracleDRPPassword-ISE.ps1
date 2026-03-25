@@ -286,18 +286,12 @@ function Sync-SingleAccount {
     }
     Write-Log "DRP account found: $($drpAccount.name) (ID: $($drpAccount.id))" "OK"
 
-    # --- Update DRP password ---
-    Write-Log "Updating DRP password with PRD password..."
-    $changeUrl = "$BaseUrl/PasswordVault/api/accounts/$($drpAccount.id)/Password/Update"
-    $changeBody = @{ NewCredentials = $prdPassword }
-    Invoke-PVWARestMethod -Uri $changeUrl -Method POST -Headers $AuthHeaders -Body $changeBody
-    Write-Log "DRP password updated." "OK"
-
-    # --- Immediate verification ---
-    Write-Log "Triggering verification on DRP account..."
-    $verifyUrl = "$BaseUrl/PasswordVault/api/accounts/$($drpAccount.id)/Verify"
-    Invoke-PVWARestMethod -Uri $verifyUrl -Method POST -Headers $AuthHeaders
-    Write-Log "Verification triggered on $($drpAccount.name)." "OK"
+    # --- Update DRP password in vault only (no CPM interaction) ---
+    Write-Log "Updating DRP password in vault only (no CPM)..."
+    $changeUrl = "$BaseUrl/PasswordVault/api/accounts/$($drpAccount.id)"
+    $changeBody = @{ secret = $prdPassword }
+    Invoke-PVWARestMethod -Uri $changeUrl -Method PATCH -Headers $AuthHeaders -Body $changeBody
+    Write-Log "DRP password updated in vault (CPM not triggered)." "OK"
 
     return $true
 }
