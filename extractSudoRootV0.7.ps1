@@ -14,14 +14,14 @@ $Files = @{
 }
 $OutCsv = "$PSScriptRoot\output\Audit_Privileges_Unix_$(Get-Date -Format 'yyyy-MM').csv"
 # --- PVWA CONFIGURATION ---
-$PVWAUrl    = "https://oneconnection.intra.corp"   # <-- ADAPTER: URL du PVWA
-$AuthMethod = "LDAP"                               # CyberArk, LDAP, or RADIUS
+$PVWAUrl    = "https://oneconnection.intra.corp"    # <-- ADAPTER: URL du PVWA
+$AuthMethod = "LDAP"                                # CyberArk, LDAP, or RADIUS
 # --- PVWA FUNCTIONS ---
 function Connect-PVWA {
     param([string]$BaseUrl, [string]$AuthType)
-    Write-Host "==============================" -ForegroundColor Cyan
+    Write-Host "===============================" -ForegroundColor Cyan
     Write-Host " CONNEXION AU PVWA" -ForegroundColor Cyan
-    Write-Host "==============================" -ForegroundColor Cyan
+    Write-Host "===============================" -ForegroundColor Cyan
     $cred = Get-Credential -Message "Entrez vos identifiants PVWA ($AuthType)"
     if (-not $cred) {
         Write-Host "[ERROR] Aucun identifiant fourni. Abandon." -ForegroundColor Red
@@ -42,6 +42,7 @@ function Connect-PVWA {
         return $null
     }
 }
+
 function Disconnect-PVWA {
     param([string]$BaseUrl, [string]$Token)
     try {
@@ -53,6 +54,7 @@ function Disconnect-PVWA {
         Write-Host "[WARNING] Echec deconnexion PVWA: $($_.Exception.Message)" -ForegroundColor Yellow
     }
 }
+
 function Get-PVWAAccounts {
     param([string]$BaseUrl, [string]$Token)
     Write-Host "Recuperation des comptes depuis le PVWA..." -ForegroundColor Cyan
@@ -77,6 +79,7 @@ function Get-PVWAAccounts {
     Write-Host "Total: $($allAccounts.Count) comptes Unix recuperes." -ForegroundColor Cyan
     return $allAccounts
 }
+
 function Export-PVWAAccountsToCsv {
     param($Accounts, [string]$OutputPath)
     $csvData = $Accounts | ForEach-Object {
@@ -93,6 +96,7 @@ function Export-PVWAAccountsToCsv {
     $csvData | Export-Csv -Path $OutputPath -NoTypeInformation -Encoding UTF8 -Delimiter ","
     Write-Host "Export sauvegarde: $OutputPath" -ForegroundColor Green
 }
+
 # --- 0. INPUT FILE FRESHNESS CHECK ---
 $now = Get-Date
 $currentMonth = $now.Month
@@ -117,9 +121,9 @@ foreach ($entry in $Files.GetEnumerator()) {
     }
 }
 if ($oldFiles.Count -gt 0) {
-    Write-Host "==============================" -ForegroundColor Yellow
+    Write-Host "===============================" -ForegroundColor Yellow
     Write-Host " WARNING: FILES NOT FROM CURRENT MONTH" -ForegroundColor Yellow
-    Write-Host "==============================" -ForegroundColor Yellow
+    Write-Host "===============================" -ForegroundColor Yellow
     Write-Host "Current month: $($now.ToString('MMMM yyyy'))" -ForegroundColor Yellow
     Write-Host "The following files were NOT modified this month:`n" -ForegroundColor Yellow
     foreach ($f in $oldFiles) {
@@ -135,6 +139,7 @@ if ($oldFiles.Count -gt 0) {
     Write-Host ""
 }
 Write-Host "All input files are valid. Starting audit...`n" -ForegroundColor Green
+
 # --- INITIALIZATION ---
 $results    = @{}
 $statusMap  = @{}
@@ -143,6 +148,7 @@ $groupIndex = @{}   # key = "user|server" -> "wheel,sudo,..."
 $rootIndex  = @{}   # key = "user|server" -> $true
 $ipToHost   = @{}   # key = IP -> hostname (from request.csv)
 $hostToIp   = @{}   # key = hostname -> IP (from request.csv)
+
 # --- DNS RESOLUTION FUNCTION ---
 # Resolves a hostname to its IP address (for matching when CyberArk stores IPs)
 # Returns $null if resolution fails
@@ -162,8 +168,8 @@ function Resolve-HostnameToIP {
         if ($dns.IPAddress) {
             $resolvedIP = $dns.IPAddress.ToLower().Trim()
             # Cache for future lookups
-            $hostToIp[$host_] = $resolvedIP
-            $ipToHost[$resolvedIP] = $host_
+            $hostToIp[$host_]       = $resolvedIP
+            $ipToHost[$resolvedIP]  = $host_
             if ($DebugMode) { Write-Host "[DEBUG] DNS: hostname '$host_' -> IP '$resolvedIP' (from DNS)" -ForegroundColor DarkYellow }  # DEBUG_TAG
             return $resolvedIP
         }
@@ -173,9 +179,10 @@ function Resolve-HostnameToIP {
     }
     return $null
 }
+
 # --- 1. LOAD INVENTORY (request.csv) ---
 if (Test-Path $Files.Inventory) {
-    $firstLine = Get-Content $Files.Inventory -TotalCount 1
+    $firstLine    = Get-Content $Files.Inventory -TotalCount 1
     $csvDelimiter = if ($firstLine -match ";") { ";" } else { "," }
     Write-Host "Chargement inventaire (delimiter='$csvDelimiter')..." -ForegroundColor Cyan
     Import-Csv $Files.Inventory -Delimiter $csvDelimiter | ForEach-Object {
@@ -195,10 +202,11 @@ if (Test-Path $Files.Inventory) {
     Write-Host " $($statusMap.Count) serveurs charges depuis request.csv" -ForegroundColor Cyan
     if ($DebugMode) { Write-Host "[DEBUG] DNS MAP: $($ipToHost.Count) correspondances IP->hostname depuis request.csv" -ForegroundColor Magenta }  # DEBUG_TAG
 }
+
 # --- 2. PARSE ALL_PASS (source principale) ---
-Write-Host "`n##############"
+Write-Host "`n################"
 Write-Host "ALL_PASS"
-Write-Host "##############"
+Write-Host "################"
 if (Test-Path $Files.Passwd) {
     $dbgTotal = 0; $dbgParsed = 0; $dbgSkipped = 0  # DEBUG_TAG
     Get-Content $Files.Passwd | ForEach-Object {
@@ -206,17 +214,17 @@ if (Test-Path $Files.Passwd) {
         $line = $_.Trim() -split '\s+'
         if ($line.Count -ge 8) {
             $dbgParsed++  # DEBUG_TAG
-            $user = $line[0]
+            $user   = $line[0]
             $server = $line[-1]
             if ($DebugMode -and $dbgParsed -le 5) { Write-Host "[DEBUG] ALL_PASS PARSED #$dbgTotal : fields=$($line.Count) user='$user' server='$server' raw='$($_.Substring(0, [Math]::Min(80, $_.Length)))'" -ForegroundColor Yellow }  # DEBUG_TAG
             # Determine password status
             $pwdStatus = "Unknown"
-            if     ($_.Split("(").split(")") -match "Password set")                 { $pwdStatus = "Password set" }
-            elseif ($_.Split("(").split(")") -match "Password locked")              { $pwdStatus = "Password locked" }
-            elseif ($_.Split("(").split(")") -match "Alternate authentication")     { $pwdStatus = "Alternate authentication" }
-            elseif ($_.Split("(").split(")") -match "Empty password")               { $pwdStatus = "Empty password" }
-            elseif ($_.Split("(").split(")") -match "Password not set")             { $pwdStatus = "Password not set" }
-            $key = ("$user|$server").ToLower().Trim()
+            if      ($_.Split("(").split(")") -match "Password set")             { $pwdStatus = "Password set" }
+            elseif  ($_.Split("(").split(")") -match "Password locked")          { $pwdStatus = "Password locked" }
+            elseif  ($_.Split("(").split(")") -match "Alternate authentication") { $pwdStatus = "Alternate authentication" }
+            elseif  ($_.Split("(").split(")") -match "Empty password")           { $pwdStatus = "Empty password" }
+            elseif  ($_.Split("(").split(")") -match "Password not set")         { $pwdStatus = "Password not set" }
+            $key    = ("$user|$server").ToLower().Trim()
             $srvKey = $server.ToLower().Trim()
             $invStatus = if ($statusMap.ContainsKey($srvKey)) { $statusMap[$srvKey] } else { "Inconnu" }
             $results[$key] = [PSCustomObject]@{
@@ -244,10 +252,11 @@ if (Test-Path $Files.Passwd) {
     if ($DebugMode) { Write-Host "[DEBUG] ALL_PASS SUMMARY: total=$dbgTotal parsed=$dbgParsed skipped=$dbgSkipped" -ForegroundColor Magenta }  # DEBUG_TAG
     Write-Host " $($results.Count) comptes charges depuis all_pass" -ForegroundColor Cyan
 }
+
 # --- 3. BUILD SUDO INDEX from ALL_PRIV_HOST ---
-Write-Host "`n##############"
+Write-Host "`n################"
 Write-Host "ALL_PRIV_HOST"
-Write-Host "##############"
+Write-Host "################"
 if (Test-Path $Files.PrivHost) {
     $dbgTotal = 0; $dbgParsed = 0; $dbgSkipped = 0  # DEBUG_TAG
     Get-Content $Files.PrivHost | ForEach-Object {
@@ -256,8 +265,8 @@ if (Test-Path $Files.PrivHost) {
         if ($line -match "ALL=") {
             $dbgParsed++  # DEBUG_TAG
             $isNoPass = if ($line -match "NOPASSWD") { "YES" } else { "NO" }
-            $idBlock = ($line -split "ALL=")[0].Trim()
-            $key = ("$($idBlock.split()[1])|$($idBlock.split()[0])").ToLower().Trim()
+            $idBlock  = ($line -split "ALL=")[0].Trim()
+            $key      = ("$($idBlock.split()[1])|$($idBlock.split()[0])").ToLower().Trim()
             $sudoIndex[$key] = $isNoPass
             if ($DebugMode -and $dbgParsed -le 5) { Write-Host "[DEBUG] PRIV_HOST PARSED #$dbgTotal : key='$key' nopasswd=$isNoPass" -ForegroundColor Yellow }  # DEBUG_TAG
         }
@@ -269,10 +278,11 @@ if (Test-Path $Files.PrivHost) {
     if ($DebugMode) { Write-Host "[DEBUG] PRIV_HOST SUMMARY: total=$dbgTotal parsed=$dbgParsed skipped=$dbgSkipped" -ForegroundColor Magenta }  # DEBUG_TAG
     Write-Host " $($sudoIndex.Count) entrees sudo chargees" -ForegroundColor Cyan
 }
+
 # --- 4. BUILD GROUP INDEX from ALL_PRIV_MEMBERS ---
-Write-Host "`n##############"
+Write-Host "`n################"
 Write-Host "ALL_PRIV_MEMBERS"
-Write-Host "##############"
+Write-Host "################"
 if (Test-Path $Files.PrivMembers) {
     $dbgTotal = 0; $dbgParsed = 0; $dbgSkipped = 0  # DEBUG_TAG
     Get-Content $Files.PrivMembers | ForEach-Object {
@@ -303,10 +313,11 @@ if (Test-Path $Files.PrivMembers) {
     if ($DebugMode) { Write-Host "[DEBUG] PRIV_MEMBERS SUMMARY: total=$dbgTotal parsed=$dbgParsed skipped=$dbgSkipped" -ForegroundColor Magenta }  # DEBUG_TAG
     Write-Host " $($groupIndex.Count) entrees groupe chargees" -ForegroundColor Cyan
 }
+
 # --- 5. BUILD ROOT INDEX from ALL_ROOT_MEMBERS ---
-Write-Host "`n##############"
+Write-Host "`n################"
 Write-Host "ALL_ROOT_MEMBERS"
-Write-Host "##############"
+Write-Host "################"
 if (Test-Path $Files.RootMembers) {
     $dbgTotal = 0; $dbgParsed = 0; $dbgSkipped = 0  # DEBUG_TAG
     Get-Content $Files.RootMembers | ForEach-Object {
@@ -336,6 +347,7 @@ if (Test-Path $Files.RootMembers) {
     if ($DebugMode) { Write-Host "[DEBUG] ROOT_MEMBERS SUMMARY: total=$dbgTotal parsed=$dbgParsed skipped=$dbgSkipped" -ForegroundColor Magenta }  # DEBUG_TAG
     Write-Host " $($rootIndex.Count) entrees root chargees" -ForegroundColor Cyan
 }
+
 # --- 6. ENRICH RESULTS (lookup sudo, group, root for each account) ---
 Write-Host "`n##############################"
 Write-Host "ENRICHISSEMENT"
@@ -344,12 +356,13 @@ $dbgEnrichSudo = 0; $dbgEnrichGrp = 0; $dbgEnrichRoot = 0  # DEBUG_TAG
 foreach ($entry in $results.GetEnumerator()) {
     $key = $entry.Key
     if ($sudoIndex.ContainsKey($key)) {
-        $entry.Value.Sudo = "YES"
+        $entry.Value.Sudo         = "YES"
         $entry.Value.SudoNoPasswd = $sudoIndex[$key]
         $dbgEnrichSudo++  # DEBUG_TAG
     }
     if ($groupIndex.ContainsKey($key)) {
         $entry.Value.PrivGroup = $groupIndex[$key]
+        $entry.Value.Sudo      = "YES"   # membre d'un groupe privilegie => sudo implicite
         $dbgEnrichGrp++  # DEBUG_TAG
     }
     if ($rootIndex.ContainsKey($key)) {
@@ -358,26 +371,32 @@ foreach ($entry in $results.GetEnumerator()) {
     }
 }
 if ($DebugMode) { Write-Host "[DEBUG] ENRICH SUMMARY: sudo_matches=$dbgEnrichSudo group_matches=$dbgEnrichGrp root_matches=$dbgEnrichRoot" -ForegroundColor Magenta }  # DEBUG_TAG
+
 # Summary
 $totalAccounts = $results.Count
 $sudoCount     = ($results.Values | Where-Object { $_.Sudo -eq "YES" }).Count
 $groupCount    = ($results.Values | Where-Object { $_.PrivGroup -ne "" }).Count
 $rootCount     = ($results.Values | Where-Object { $_.RootEquivalent -eq "YES" }).Count
 $notSetCount   = ($results.Values | Where-Object { $_.PasswordStatus -eq "Password not set" }).Count
-Write-Host " Total comptes:         $totalAccounts" -ForegroundColor Cyan
-Write-Host " Avec Sudo:             $sudoCount" -ForegroundColor Cyan
-Write-Host " Dans groupe privilegie:$groupCount" -ForegroundColor Cyan
-Write-Host " Root equivalent:       $rootCount" -ForegroundColor Cyan
-Write-Host " Password not set:      $notSetCount (flaggues)" -ForegroundColor Yellow
+Write-Host " Total comptes:            $totalAccounts" -ForegroundColor Cyan
+Write-Host " Avec Sudo:                $sudoCount" -ForegroundColor Cyan
+Write-Host " Dans groupe privilegie:   $groupCount" -ForegroundColor Cyan
+Write-Host " Root equivalent:          $rootCount" -ForegroundColor Cyan
+Write-Host " Password not set:         $notSetCount (flaggues)" -ForegroundColor Yellow
+
 # --- 7. CYBERARK CROSS-REFERENCE (via PVWA API) ---
 Write-Host ""
 Write-Host "########################"
 Write-Host "CYBERARK CROSS-CHECK"
 Write-Host "########################"
 # 7a. Connect to PVWA and download accounts
-$pvwaToken = Connect-PVWA -BaseUrl $PVWAUrl -AuthType $AuthMethod
+$pvwaToken          = Connect-PVWA -BaseUrl $PVWAUrl -AuthType $AuthMethod
 $cyberArkIndex      = @{}
 $cyberArkCompliance = @{}
+# Index par nom court (1er label du hostname) pour matcher FQDN <-> nom court
+# Cle = "user|shortname" -> caKey complet (pour retrouver la compliance)
+# Couvre les deux sens : CA=FQDN/all_pass=court ET CA=court/all_pass=FQDN
+$cyberArkShortIndex = @{}
 if ($pvwaToken) {
     # Fetch all Unix accounts from PVWA
     $pvwaAccounts = Get-PVWAAccounts -BaseUrl $PVWAUrl -Token $pvwaToken
@@ -392,6 +411,12 @@ if ($pvwaToken) {
                 $caKey = ("$caUser|$caServer").ToLower().Trim()
                 # Accounts index (FoundInCyberArk)
                 $cyberArkIndex[$caKey] = $true
+                # Short-name index : premier label du hostname (avant le 1er point)
+                $caShort    = ($caServer -split '\.')[0].ToLower().Trim()
+                $caShortKey = "$($caUser.ToLower().Trim())|$caShort"
+                if (-not $cyberArkShortIndex.ContainsKey($caShortKey)) {
+                    $cyberArkShortIndex[$caShortKey] = $caKey
+                }
                 # Compliance index (CA_Compliant based on CPM)
                 $cpmEnabled = $acct.secretManagement.automaticManagementEnabled
                 $cpmStatus  = $acct.secretManagement.status
@@ -422,6 +447,12 @@ else {
             if ($caUser -and $caServer) {
                 $caKey = ("$($caUser.Trim())|$($caServer.Trim())").ToLower()
                 $cyberArkIndex[$caKey] = $true
+                # Short-name index
+                $caShort    = ($caServer -split '\.')[0].ToLower().Trim()
+                $caShortKey = "$($caUser.ToLower().Trim())|$caShort"
+                if (-not $cyberArkShortIndex.ContainsKey($caShortKey)) {
+                    $cyberArkShortIndex[$caShortKey] = $caKey
+                }
             }
         }
         Write-Host " Charge $($cyberArkIndex.Count) comptes depuis le CSV local (inventaire)." -ForegroundColor Cyan
@@ -437,8 +468,8 @@ else {
             $ccUser   = $_."Nom de l'utilisateur du systeme cible"
             $ccServer = $_."Adresse du systeme"
             $ccStatus = $_."Statut de la conformite"
-            if (-not $ccUser)   { $ccUser   = $_."Nom de l'utilisateur du système cible" }
-            if (-not $ccServer) { $ccServer = $_."Adresse du système" }
+            if (-not $ccUser)   { $ccUser   = $_."Nom de l'utilisateur du systÃ¨me cible" }
+            if (-not $ccServer) { $ccServer = $_."Adresse du systÃ¨me" }
             if ($ccUser -and $ccServer) {
                 $ccKey = ("$($ccUser.Trim())|$($ccServer.Trim())").ToLower()
                 if ($ccStatus -match "conforme" -and $ccStatus -notmatch "Non") {
@@ -455,6 +486,7 @@ else {
         Write-Host "[WARNING] Fichier compliance introuvable: $($Files.CyberArkCompliance)" -ForegroundColor Red
     }
 }
+
 # 7c. Update results with CyberArk data
 # Strategy: lookup by "user|hostname" first, then resolve hostname->IP and try "user|ip"
 $caFoundCount     = 0
@@ -462,8 +494,8 @@ $caCompliantCount = 0
 $caNotFoundCount  = 0
 $caFoundByIP      = 0  # DEBUG_TAG
 foreach ($entry in $results.GetEnumerator()) {
-    $lookupKey = $entry.Key   # "user|hostname"
-    $matchedKey = $null
+    $lookupKey   = $entry.Key    # "user|hostname"
+    $matchedKey  = $null
     $matchedByIP = $false
     # 1. Try direct match by hostname
     if ($cyberArkIndex.ContainsKey($lookupKey)) {
@@ -471,15 +503,25 @@ foreach ($entry in $results.GetEnumerator()) {
     }
     else {
         # 2. Resolve hostname -> IP and try "user|ip"
-        $server = $entry.Value.Server
+        $server     = $entry.Value.Server
         $resolvedIP = Resolve-HostnameToIP -Hostname $server
         if ($resolvedIP) {
             $ipKey = ("$($entry.Value.UserSam)|$resolvedIP").ToLower().Trim()
             if ($cyberArkIndex.ContainsKey($ipKey)) {
-                $matchedKey = $ipKey
-                $matchedByIP = $true
+                $matchedKey                = $ipKey
+                $matchedByIP               = $true
                 $entry.Value.CA_ResolvedIP = $resolvedIP
                 $caFoundByIP++  # DEBUG_TAG
+            }
+        }
+        # 3. Short-name match : compare le 1er label du hostname des deux cotes
+        #    Couvre : CA=FQDN/all_pass=nom_court  ET  CA=nom_court/all_pass=FQDN
+        if (-not $matchedKey) {
+            $shortName    = ($entry.Value.Server -split '\.')[0].ToLower().Trim()
+            $shortLookup  = "$($entry.Value.UserSam.ToLower().Trim())|$shortName"
+            if ($cyberArkShortIndex.ContainsKey($shortLookup)) {
+                $matchedKey = $cyberArkShortIndex[$shortLookup]
+                if ($DebugMode) { Write-Host "[DEBUG] SHORT-NAME MATCH: '$($entry.Key)' -> '$matchedKey'" -ForegroundColor DarkYellow }  # DEBUG_TAG
             }
         }
     }
@@ -511,11 +553,12 @@ foreach ($entry in $results.GetEnumerator()) {
         $entry.Value.CA_Compliant = "NO"
     }
 }
-if ($DebugMode) { Write-Host "[DEBUG] CYBERARK CROSS-CHECK: $caFoundByIP comptes trouves par resolution IP" -ForegroundColor Magenta }  # DEBUG_TAG
+if ($DebugMode) { Write-Host "[DEBUG] CYBERARK CROSS-CHECK: $caFoundByIP comptes trouves par IP, short-name matches visibles ci-dessus" -ForegroundColor Magenta }  # DEBUG_TAG
 Write-Host ""
 Write-Host "Resume CyberArk:" -ForegroundColor Cyan
 Write-Host " Trouve dans CyberArk: $caFoundCount | Absent: $caNotFoundCount" -ForegroundColor Cyan
 Write-Host " CPM Compliant: $caCompliantCount | Non-compliant: $($results.Count - $caCompliantCount)" -ForegroundColor Cyan
+
 # --- FINAL EXPORT ---
 $finalData = $results.Values | Sort-Object UserSam, Server
 $finalData | Export-Csv -Path $OutCsv -NoTypeInformation -Encoding UTF8 -Delimiter ";"
