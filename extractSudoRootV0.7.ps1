@@ -226,7 +226,7 @@ if (Test-Path $Files.Passwd) {
             elseif  ($_.Split("(").split(")") -match "Password not set")         { $pwdStatus = "Password not set" }
             $key    = ("$user|$server").ToLower().Trim()
             $srvKey = $server.ToLower().Trim()
-            $invStatus = if ($statusMap.ContainsKey($srvKey)) { $statusMap[$srvKey] } else { "Inconnu" }
+            $invStatus = if ($statusMap.ContainsKey($srvKey)) { $statusMap[$srvKey] } else { "Unknown" }
             $results[$key] = [PSCustomObject]@{
                 UserSam         = $user
                 Server          = $server
@@ -239,6 +239,7 @@ if (Test-Path $Files.Passwd) {
                 FoundInCyberArk = ""
                 CA_Compliant    = ""
                 CA_ResolvedIP   = ""
+                CA_Candidate    = ""
             }
             if (-not $results[$key].Server) {
                 Write-Host "No server $($results[$key].server)"
@@ -372,6 +373,35 @@ foreach ($entry in $results.GetEnumerator()) {
 }
 if ($DebugMode) { Write-Host "[DEBUG] ENRICH SUMMARY: sudo_matches=$dbgEnrichSudo group_matches=$dbgEnrichGrp root_matches=$dbgEnrichRoot" -ForegroundColor Magenta }  # DEBUG_TAG
 
+# --- Calcul CA_Candidate ---
+foreach ($entry in $results.GetEnumerator()) {
+    $v = $entry.Value
+    # Pas de privilège = pas candidate quoi qu'il arrive
+    $hasPriv = ($v.Sudo -eq "YES" -or $v.PrivGroup -ne "" -or $v.RootEquivalent -eq "YES")
+    if (-not $hasPriv) {
+        $v.CA_Candidate = "NO"
+        continue
+    }
+    # Filtre sur InventoryStatus
+    $inv = $v.InventoryStatus
+    if ($inv -eq "Offline") {
+        $v.CA_Candidate = "NO"
+        continue
+    }
+    if ($inv -eq "Unknown" -or $inv -eq "") {
+        $v.CA_Candidate = "CHECK-INVENTORY"
+        continue
+    }
+    # Online + privilège : filtre sur PasswordStatus
+    switch ($v.PasswordStatus) {
+        "Password set"          { $v.CA_Candidate = "YES" }
+        "Empty password"        { $v.CA_Candidate = "YES" }
+        "Alternate authentication" { $v.CA_Candidate = "YES-SSH" }
+        "Password locked"       { $v.CA_Candidate = "NO" }
+        default                 { $v.CA_Candidate = "NO" }
+    }
+}
+
 # Summary
 $totalAccounts = $results.Count
 $sudoCount     = ($results.Values | Where-Object { $_.Sudo -eq "YES" }).Count
@@ -468,8 +498,8 @@ else {
             $ccUser   = $_."Nom de l'utilisateur du systeme cible"
             $ccServer = $_."Adresse du systeme"
             $ccStatus = $_."Statut de la conformite"
-            if (-not $ccUser)   { $ccUser   = $_."Nom de l'utilisateur du systÃ¨me cible" }
-            if (-not $ccServer) { $ccServer = $_."Adresse du systÃ¨me" }
+            if (-not $ccUser)   { $ccUser   = $_."Nom de l'utilisateur du système cible" }
+            if (-not $ccServer) { $ccServer = $_."Adresse du système" }
             if ($ccUser -and $ccServer) {
                 $ccKey = ("$($ccUser.Trim())|$($ccServer.Trim())").ToLower()
                 if ($ccStatus -match "conforme" -and $ccStatus -notmatch "Non") {
