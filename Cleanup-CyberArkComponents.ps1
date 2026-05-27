@@ -41,6 +41,25 @@
 .PARAMETER IncludeUser
     Noms d'utilisateurs supplementaires a forcer dans la cible de suppression.
 
+.PARAMETER SkipUserCleanup
+    Ne traite PAS les component users (utile pour ne faire que le menage des safes).
+
+.PARAMETER CleanSafes
+    Active le menage des safes : supprime tous les safes NON natifs (les safes
+    systeme/composants CyberArk sont proteges). OPERATION TRES DESTRUCTRICE :
+    la suppression d'un safe efface tous les comptes/enregistrements qu'il contient.
+
+.PARAMETER ExcludeSafe
+    Noms (ou motifs avec *) de safes a conserver en plus de la liste native.
+
+.PARAMETER ExactNativeMatchOnly
+    Avec -CleanSafes : protege UNIQUEMENT les safes dont le nom figure exactement
+    dans la liste native (desactive la protection par prefixe PSM*/PVWA*/...).
+    A utiliser avec prudence.
+
+.PARAMETER ReportPath
+    Chemin d'un fichier CSV ou exporter le rapport des elements cibles/supprimes.
+
 .PARAMETER Execute
     Effectue reellement les suppressions. Sans ce commutateur => simulation.
 
@@ -64,6 +83,17 @@
 .EXAMPLE
     # 3) Ne purger que les traces PTA
     .\Cleanup-CyberArkComponents.ps1 -PVWAUrl https://pvwa.isole.local -Component PTA -Execute
+
+.EXAMPLE
+    # 4) Simulation du menage des safes non natifs + export CSV
+    .\Cleanup-CyberArkComponents.ps1 -PVWAUrl https://pvwa.isole.local -SkipUserCleanup `
+        -CleanSafes -SkipCertificateCheck -ReportPath .\rapport-safes.csv
+
+.EXAMPLE
+    # 5) Menage complet : users composants + safes non natifs (en conservant 2 safes metier)
+    .\Cleanup-CyberArkComponents.ps1 -PVWAUrl https://pvwa.isole.local `
+        -Component CPM,PSM,PSMP,CP,PTA -CleanSafes -ExcludeSafe 'SAFE_METIER_*','LegacyApp' `
+        -SkipCertificateCheck -ReportPath .\rapport.csv -Execute
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
@@ -87,6 +117,21 @@ param(
 
     [Parameter()]
     [string[]]$IncludeUser = @(),
+
+    [Parameter()]
+    [switch]$SkipUserCleanup,
+
+    [Parameter()]
+    [switch]$CleanSafes,
+
+    [Parameter()]
+    [string[]]$ExcludeSafe = @(),
+
+    [Parameter()]
+    [switch]$ExactNativeMatchOnly,
+
+    [Parameter()]
+    [string]$ReportPath,
 
     [Parameter()]
     [switch]$Execute,
@@ -118,6 +163,27 @@ $script:ComponentMap = @{
     PTA  = @{ Types = @('PTA'); Patterns = @('PTA*', 'PTAUser*', 'PTAAppUser*') }
     PVWA = @{ Types = @('PVWA'); Patterns = @('PVWAAppUser*', 'PVWAUsers', 'PVWAGWAccounts', 'PVWAGWUser') }
 }
+
+# Safes systeme/composants natifs de CyberArk -> a NE JAMAIS supprimer.
+$script:NativeSafes = @(
+    'System', 'VaultInternal', 'Notification Engine', 'Pictures',
+    'PVWAConfig', 'PVWAReports', 'PVWAPublicData', 'PVWAPrivateUserPrefs',
+    'PVWAUserPrefs', 'PVWATaskDefinitions', 'PVWATicketingSystem',
+    'PasswordManager', 'PasswordManager_Pending', 'PasswordManager_workspace',
+    'PasswordManager_ADInternal', 'PasswordManager_Info', 'PasswordManagerShared',
+    'PSM', 'PSMSessions', 'PSMRecordings', 'PSMLiveSessions',
+    'PSMUnmanagedSessionAccounts', 'PSMNotifications',
+    'PSMPConf', 'PSMPLiveSessions', 'PSMPADBridgeConf', 'PSMPADBUserProfile',
+    'PSMPADBridgeCustom', 'PSMPUnmanagedSessionAccounts',
+    'AccountsFeed', 'AccountsFeedADAccounts', 'AccountsFeedDiscoveryLogs',
+    'TelemetryConfig', 'ConjurSync', 'Reports', 'DR'
+)
+
+# Prefixes reserves aux safes geres par les composants (protection supplementaire,
+# desactivable via -ExactNativeMatchOnly).
+$script:NativeSafePrefixes = @(
+    'PSMP', 'PSM', 'PVWA', 'PasswordManager', 'AccountsFeed', 'VaultInternal', 'ConjurSync'
+)
 
 function Write-Log {
     param(
@@ -217,6 +283,15 @@ catch {
 
 $authHeader = @{ Authorization = $token }
 
+# Collecte pour le rapport CSV (users + safes).
+$script:report = @()
+
+function Test-WildcardMatch {
+    param([string]$Value, [string[]]$Patterns)
+    foreach ($p in $Patterns) { if ($Value -like $p) { return $true } }
+    return $false
+}
+
 #endregion
 
 #region ---------- Recuperation des component users ----------
@@ -235,22 +310,20 @@ function Get-ComponentUsers {
     return $all
 }
 
-Write-Log "Recuperation des utilisateurs techniques (componentUser=true) ..."
-$componentUsers = @(Get-ComponentUsers)
-Write-Log ("{0} utilisateur(s) technique(s) trouve(s) dans le coffre." -f $componentUsers.Count)
+$selected = if ($Component -contains 'All') { $script:ComponentMap.Keys } else { $Component }
+$componentUsers = @()
+if (-not $SkipUserCleanup) {
+    Write-Log "Recuperation des utilisateurs techniques (componentUser=true) ..."
+    $componentUsers = @(Get-ComponentUsers)
+    Write-Log ("{0} utilisateur(s) technique(s) trouve(s) dans le coffre." -f $componentUsers.Count)
+}
+else {
+    Write-Log "Menage des component users ignore (-SkipUserCleanup)."
+}
 
 #endregion
 
-#region ---------- Selection des cibles ----------
-
-# Composants demandes.
-$selected = if ($Component -contains 'All') { $script:ComponentMap.Keys } else { $Component }
-
-function Test-WildcardMatch {
-    param([string]$Value, [string[]]$Patterns)
-    foreach ($p in $Patterns) { if ($Value -like $p) { return $true } }
-    return $false
-}
+#region ---------- Selection des cibles (users) ----------
 
 $targets = @()
 foreach ($u in $componentUsers) {
@@ -300,25 +373,111 @@ else {
 
 #endregion
 
-#region ---------- Suppression ----------
+#region ---------- Suppression (users) ----------
 
 $deleted = 0
 $failed = 0
 foreach ($t in ($targets | Sort-Object Component, Username)) {
     $delUri = "$apiBase/Users/$($t.Id)"
+    $status = 'WouldDelete'
     if (-not $Execute) {
         Write-Log "[SIMULATION] Supprimerait : $($t.Username) (id=$($t.Id), type=$($t.UserType), composant=$($t.Component))" -Level DRYRUN
-        continue
     }
-    if ($PSCmdlet.ShouldProcess("$($t.Username) (id=$($t.Id))", 'Supprimer le component user')) {
+    elseif ($PSCmdlet.ShouldProcess("$($t.Username) (id=$($t.Id))", 'Supprimer le component user')) {
         try {
             Invoke-PVWA -Method Delete -Uri $delUri -Headers $authHeader | Out-Null
             Write-Log "Supprime : $($t.Username) (id=$($t.Id))" -Level OK
-            $deleted++
+            $deleted++; $status = 'Deleted'
         }
         catch {
             Write-Log "Echec suppression $($t.Username) (id=$($t.Id)) : $($_.Exception.Message)" -Level ERROR
-            $failed++
+            $failed++; $status = 'Failed'
+        }
+    }
+    else { $status = 'Skipped' }
+    $script:report += [pscustomobject]@{
+        Kind = 'User'; Name = $t.Username; Identifier = $t.Id
+        Category = $t.Component; Detail = $t.UserType; Status = $status
+    }
+}
+
+#endregion
+
+#region ---------- Menage des safes (optionnel) ----------
+
+$safeDeleted = 0
+$safeFailed = 0
+$safeTargets = @()
+if ($CleanSafes) {
+    function Get-AllSafes {
+        $all = @()
+        $offset = 0
+        $limit = 1000
+        do {
+            $uri = "$apiBase/Safes?limit=$limit&offset=$offset"
+            $resp = Invoke-PVWA -Method Get -Uri $uri -Headers $authHeader
+            if ($resp.value) { $all += $resp.value }
+            $count = @($resp.value).Count
+            $offset += $limit
+        } while ($count -eq $limit)
+        return $all
+    }
+
+    Write-Log "------------------------------------------------------------"
+    Write-Log "Recuperation des safes ..."
+    $allSafes = @(Get-AllSafes)
+    Write-Log ("{0} safe(s) trouve(s) dans le coffre." -f $allSafes.Count)
+
+    foreach ($s in $allSafes) {
+        $sname = $s.safeName
+        $surl = $s.safeUrlId
+        if (-not $surl) { $surl = $sname }
+
+        if ($script:NativeSafes -contains $sname) { continue }
+        if (-not $ExactNativeMatchOnly) {
+            $isNativePrefix = $false
+            foreach ($pfx in $script:NativeSafePrefixes) {
+                if ($sname -like "$pfx*") { $isNativePrefix = $true; break }
+            }
+            if ($isNativePrefix) { continue }
+        }
+        if (Test-WildcardMatch -Value $sname -Patterns $ExcludeSafe) {
+            Write-Log "Conserve (exclu) : safe '$sname'"
+            continue
+        }
+        $safeTargets += [pscustomobject]@{ Name = $sname; UrlId = $surl }
+    }
+
+    if ($safeTargets.Count -eq 0) {
+        Write-Log "Aucun safe non-natif a supprimer." -Level OK
+    }
+    else {
+        Write-Log ("{0} safe(s) NON natif(s) cible(s) pour suppression :" -f $safeTargets.Count) -Level WARN
+        $safeTargets | Sort-Object Name | Format-Table -AutoSize Name, UrlId | Out-String | Write-Host
+        Write-Log "ATTENTION : supprimer un safe efface DEFINITIVEMENT tous ses comptes/enregistrements." -Level WARN
+    }
+
+    foreach ($st in ($safeTargets | Sort-Object Name)) {
+        $delUri = "$apiBase/Safes/$([uri]::EscapeDataString($st.UrlId))"
+        $status = 'WouldDelete'
+        if (-not $Execute) {
+            Write-Log "[SIMULATION] Supprimerait le safe : '$($st.Name)'" -Level DRYRUN
+        }
+        elseif ($PSCmdlet.ShouldProcess("safe '$($st.Name)'", 'Supprimer le safe (DESTRUCTIF)')) {
+            try {
+                Invoke-PVWA -Method Delete -Uri $delUri -Headers $authHeader | Out-Null
+                Write-Log "Safe supprime : '$($st.Name)'" -Level OK
+                $safeDeleted++; $status = 'Deleted'
+            }
+            catch {
+                Write-Log "Echec suppression safe '$($st.Name)' : $($_.Exception.Message)" -Level ERROR
+                $safeFailed++; $status = 'Failed'
+            }
+        }
+        else { $status = 'Skipped' }
+        $script:report += [pscustomobject]@{
+            Kind = 'Safe'; Name = $st.Name; Identifier = $st.UrlId
+            Category = 'Safe'; Detail = ''; Status = $status
         }
     }
 }
@@ -337,12 +496,26 @@ catch {
 
 Write-Log "------------------------------------------------------------"
 if ($Execute) {
-    Write-Log ("Termine. Supprimes : {0} | Echecs : {1} | Total cible : {2}" -f $deleted, $failed, $targets.Count) `
+    Write-Log ("Users  -> supprimes : {0} | echecs : {1} | cibles : {2}" -f $deleted, $failed, $targets.Count) `
         -Level $(if ($failed) { 'WARN' } else { 'OK' })
+    if ($CleanSafes) {
+        Write-Log ("Safes  -> supprimes : {0} | echecs : {1} | cibles : {2}" -f $safeDeleted, $safeFailed, $safeTargets.Count) `
+            -Level $(if ($safeFailed) { 'WARN' } else { 'OK' })
+    }
 }
 else {
-    Write-Log ("Simulation terminee. {0} compte(s) seraient supprimes. Relancez avec -Execute pour appliquer." -f $targets.Count) `
-        -Level DRYRUN
+    Write-Log ("Simulation terminee. Users cibles : {0}{1}. Relancez avec -Execute pour appliquer." -f `
+            $targets.Count, $(if ($CleanSafes) { " | Safes cibles : $($safeTargets.Count)" } else { '' })) -Level DRYRUN
+}
+
+if ($ReportPath) {
+    try {
+        $script:report | Export-Csv -Path $ReportPath -NoTypeInformation -Encoding UTF8
+        Write-Log "Rapport CSV exporte : $ReportPath" -Level OK
+    }
+    catch {
+        Write-Log "Echec export CSV : $($_.Exception.Message)" -Level WARN
+    }
 }
 
 if ($selected -contains 'PTA') {
