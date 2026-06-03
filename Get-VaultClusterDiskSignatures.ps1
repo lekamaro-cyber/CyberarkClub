@@ -141,13 +141,50 @@ if ($useCluster) {
 
 #endregion
 
-#region Disques OS par noeud
+#region Disques OS et volumes par noeud
 
 $allDisks = @()
+$allVolumes = @()
+
 $diskSb = {
     Get-Disk | Select-Object Number, FriendlyName, SerialNumber, BusType,
         PartitionStyle, Signature, Guid, UniqueId, Size,
         OperationalStatus, IsClustered, IsOffline, IsReadOnly
+}
+
+$volSb = {
+    $parts = Get-Partition -ErrorAction SilentlyContinue
+    $vols = Get-Volume -ErrorAction SilentlyContinue
+    foreach ($p in $parts) {
+        $v = $null
+        if ($p.DriveLetter) {
+            $v = $vols | Where-Object { $_.DriveLetter -eq $p.DriveLetter } | Select-Object -First 1
+        }
+        if (-not $v -and $p.AccessPaths) {
+            foreach ($ap in $p.AccessPaths) {
+                $m = $vols | Where-Object { $_.Path -eq $ap -or "$($_.Path)" -eq "$ap" } | Select-Object -First 1
+                if ($m) { $v = $m; break }
+            }
+        }
+        [pscustomobject]@{
+            DiskNumber      = $p.DiskNumber
+            PartitionNumber = $p.PartitionNumber
+            DriveLetter     = "$($p.DriveLetter)"
+            AccessPaths     = ($p.AccessPaths | Where-Object { $_ } ) -join ' | '
+            PartitionType   = "$($p.Type)"
+            GptType         = "$($p.GptType)"
+            MbrType         = "$($p.MbrType)"
+            IsBoot          = [bool]$p.IsBoot
+            IsSystem        = [bool]$p.IsSystem
+            IsHidden        = [bool]$p.IsHidden
+            PartSizeGB      = if ($p.Size)  { [math]::Round($p.Size / 1GB, 2) } else { $null }
+            Label           = "$($v.FileSystemLabel)"
+            FileSystem      = "$($v.FileSystem)"
+            VolumeSizeGB    = if ($v.Size)  { [math]::Round($v.Size / 1GB, 2) } else { $null }
+            FreeGB          = if ($v.SizeRemaining) { [math]::Round($v.SizeRemaining / 1GB, 2) } else { $null }
+            HealthStatus    = "$($v.HealthStatus)"
+        }
+    }
 }
 
 foreach ($node in $ComputerName) {
@@ -155,15 +192,17 @@ foreach ($node in $ComputerName) {
     try {
         if ($node -ieq $env:COMPUTERNAME) {
             $nd = & $diskSb
+            $nv = & $volSb
         }
         else {
-            $invokeParams = @{ ComputerName = $node; ScriptBlock = $diskSb }
+            $invokeParams = @{ ComputerName = $node }
             if ($Credential) { $invokeParams['Credential'] = $Credential }
-            $nd = Invoke-Command @invokeParams
+            $nd = Invoke-Command @invokeParams -ScriptBlock $diskSb
+            $nv = Invoke-Command @invokeParams -ScriptBlock $volSb
         }
     }
     catch {
-        Write-Warning "Echec collecte disques sur $node : $($_.Exception.Message)"
+        Write-Warning "Echec collecte sur $node : $($_.Exception.Message)"
         continue
     }
 
@@ -171,12 +210,41 @@ foreach ($node in $ComputerName) {
         Add-Member -InputObject $d -NotePropertyName Node -NotePropertyValue $node -Force
         $allDisks += $d
     }
+    foreach ($v in $nv) {
+        Add-Member -InputObject $v -NotePropertyName Node -NotePropertyValue $node -Force
+        $allVolumes += $v
+    }
 
     $nd | Sort-Object Number | Format-Table -AutoSize `
         Number, FriendlyName, BusType, PartitionStyle,
         @{n = 'SignatureHex'; e = { Format-SigHex $_.Signature } },
         Guid, IsClustered, IsOffline, OperationalStatus,
         @{n = 'SizeGB'; e = { [math]::Round($_.Size / 1GB, 2) } } | Out-Host
+
+    Write-Host "Volumes :" -ForegroundColor DarkCyan
+    if ($nv) {
+        $nv | Sort-Object DiskNumber, PartitionNumber |
+            Format-Table -AutoSize DiskNumber, PartitionNumber, DriveLetter, Label, FileSystem,
+                AccessPaths, PartSizeGB, VolumeSizeGB, FreeGB,
+                IsBoot, IsSystem, IsHidden, HealthStatus | Out-Host
+    }
+    else { Write-Host "  (aucun volume detecte / disques bruts)" }
+}
+
+# Resume rapide d'un disque -> liste de volumes lisibles (utilise plus bas).
+function Get-VolumeSummaryForDisk {
+    param([string]$Node, [int]$DiskNumber)
+    $vols = $allVolumes | Where-Object { $_.Node -eq $Node -and [int]$_.DiskNumber -eq $DiskNumber }
+    if (-not $vols) { return '(raw)' }
+    ($vols | ForEach-Object {
+        $mount = if ($_.DriveLetter) { "$($_.DriveLetter):" }
+                 elseif ($_.AccessPaths) { $_.AccessPaths }
+                 else { '(no mount)' }
+        $label = if ($_.Label) { " '$($_.Label)'" } else { '' }
+        $size  = if ($_.VolumeSizeGB) { " $($_.VolumeSizeGB)GB" } else { '' }
+        $fs    = if ($_.FileSystem) { " [$($_.FileSystem)]" } else { '' }
+        "$mount$label$size$fs"
+    }) -join ' | '
 }
 
 #endregion
@@ -190,6 +258,7 @@ if ($useCluster -and $clusterDisksDetail) {
     foreach ($cd in $clusterDisksDetail) {
         $sigHex = $cd.DiskSignatureHex
         $matched = @()
+        $matchedRefs = @()
         foreach ($disk in $allDisks) {
             $osSigHex = Format-SigHex $disk.Signature
             $hit = $false
@@ -197,8 +266,15 @@ if ($useCluster -and $clusterDisksDetail) {
             elseif ($cd.DiskIdGuid -and $disk.Guid) {
                 try { if ([guid]$cd.DiskIdGuid -eq [guid]$disk.Guid) { $hit = $true } } catch {}
             }
-            if ($hit) { $matched += "$($disk.Node):Disk$($disk.Number)" }
+            if ($hit) {
+                $matched += "$($disk.Node):Disk$($disk.Number)"
+                $matchedRefs += [pscustomobject]@{ Node = $disk.Node; DiskNumber = [int]$disk.Number }
+            }
         }
+        $volSummary = ($matchedRefs | ForEach-Object {
+            "$($_.Node):Disk$($_.DiskNumber) -> $(Get-VolumeSummaryForDisk -Node $_.Node -DiskNumber $_.DiskNumber)"
+        }) -join '  ||  '
+
         $matchTable += [pscustomobject]@{
             ResourceName     = $cd.ResourceName
             IsWitness        = $cd.IsWitness
@@ -207,9 +283,12 @@ if ($useCluster -and $clusterDisksDetail) {
             DiskSignatureHex = $sigHex
             DiskIdGuid       = $cd.DiskIdGuid
             MatchedOSDisks   = ($matched -join ', ')
+            MatchedVolumes   = $volSummary
         }
     }
-    $matchTable | Format-Table -AutoSize | Out-Host
+    $matchTable |
+        Format-Table -Wrap ResourceName, IsWitness, OwnerNode, State,
+            DiskSignatureHex, MatchedOSDisks, MatchedVolumes | Out-Host
 
     Write-Section "Anomalies"
     $anomalies = 0
@@ -304,6 +383,7 @@ if ($ReportPath) {
         Quorum         = if ($useCluster) { $quorum } else { $null }
         ClusterDisks   = $clusterDisksDetail
         OSDisks        = $allDisks
+        OSVolumes      = $allVolumes
         Matches        = $matchTable
         RegistryByNode = $registryDump
     }
@@ -319,8 +399,9 @@ if ($ReportPath) {
         )
         $clusterDisksDetail | Export-Csv "$base-clusterdisks.csv" -NoTypeInformation -Encoding UTF8
         $allDisks           | Export-Csv "$base-osdisks.csv"      -NoTypeInformation -Encoding UTF8
+        $allVolumes         | Export-Csv "$base-volumes.csv"      -NoTypeInformation -Encoding UTF8
         $matchTable         | Export-Csv "$base-matches.csv"      -NoTypeInformation -Encoding UTF8
-        Write-Host "Rapports CSV : $base-clusterdisks.csv, $base-osdisks.csv, $base-matches.csv" -ForegroundColor Green
+        Write-Host "Rapports CSV : $base-clusterdisks.csv, $base-osdisks.csv, $base-volumes.csv, $base-matches.csv" -ForegroundColor Green
     }
 }
 
