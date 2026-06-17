@@ -1,0 +1,16 @@
+# Sorties d'execution (jamais versionnees)
+logs/*
+!logs/.gitkeep
+state/*
+!state/.gitkeep
+
+# Media et binaires (volumineux / licencies : deposes au moment du deploiement)
+media/*
+!media/.gitkeep
+installers/*
+!installers/.gitkeep
+
+# Ne jamais committer de secret / credential file
+*.cred
+*.pfx
+*.key
