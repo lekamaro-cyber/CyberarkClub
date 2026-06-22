@@ -94,6 +94,8 @@ $SkipCertificateCheck = $false
 | `$PvwaUsername` / `$PvwaPassword` | Identifiants (laisser le mot de passe vide = saisie sécurisée). |
 | `$CsvPath`             | CSV source (peut être la sortie de `extractSudoRootV0.7.ps1`).       |
 | `$OutputPath`          | CSV de résultats (le dossier est créé si besoin).                   |
+| `$AccountsSource`      | `Api` (télécharge tous les comptes une fois) ou `Extract` (réutilise l'extrait local). |
+| `$AccountsExtractPath` | Extrait des comptes CyberArk (sauvegardé en `Api`, relu en `Extract`). |
 | `$AddressMatch`        | `Hostname` (défaut), `Exact`, `Contains`.                            |
 | `$DefaultSafeGroups`   | Groupes par défaut à exclure.                                        |
 | `$UsernameColumn` / `$HostColumn` | Colonnes (`'Auto'` = détection).                         |
@@ -102,6 +104,23 @@ $SkipCertificateCheck = $false
 | `$SkipADLookup`        | `$true` = désactive la partie Active Directory.                     |
 | `$SkipIPCheck`         | `$true` = désactive le repli par IP (voir ci-dessous).             |
 | `$SkipCertificateCheck`| `$true` = ignore la validation TLS du PVWA.                        |
+
+### Performance : extraction puis session fermée
+
+Le script fonctionne en **phases** pour limiter la durée d'ouverture de la session
+CyberArk et accélérer le traitement :
+
+1. **Extraction (session ouverte)** : un **seul** téléchargement de tous les comptes
+   (paginé), sauvegardé dans `$AccountsExtractPath`, puis lecture des membres des
+   **safes concernés uniquement**.
+2. **Fermeture immédiate** de la session CyberArk.
+3. **Traitement hors-ligne** : matching (en mémoire), résolution DNS et Active
+   Directory (la partie la plus lente) — **sans** session CyberArk ouverte.
+
+Auparavant le script faisait un appel API de recherche **par ligne** du CSV, en
+gardant la session ouverte pendant tout le travail AD : c'était l'origine de la
+lenteur. Avec `$AccountsSource = 'Extract'`, on réutilise l'extrait déjà
+téléchargé et on ne rouvre la session que pour lire les membres des safes.
 
 ### Repli (fallback) par IP
 

@@ -51,6 +51,14 @@ $PvwaPassword = ''                               # vide = demande à l'exécutio
 $CsvPath    = "$PSScriptRoot\Input\Audit_Privileges_Unix.csv"
 $OutputPath = "$PSScriptRoot\Output\CyberArk-Verification-Results_$(Get-Date -Format 'yyyy-MM').csv"
 
+# --- Source des comptes CyberArk ---
+# 'Api'     : télécharge UNE SEULE FOIS tous les comptes depuis le PVWA, puis ferme
+#             la session avant le traitement (recommandé, le plus rapide).
+# 'Extract' : réutilise l'extrait local ci-dessous sans re-télécharger les comptes
+#             (la session n'est ouverte que pour lire les membres des safes concernés).
+$AccountsSource      = 'Api'
+$AccountsExtractPath = "$PSScriptRoot\Input\cyberark_accounts.csv"
+
 # --- Colonnes du CSV d'entrée (laisser 'Auto' pour détection automatique) ---
 $UsernameColumn  = 'Auto'          # ex. 'UserSam' / 'username' / 'userName'
 $HostColumn      = 'Auto'          # ex. 'Server' / 'host' / 'address'
@@ -146,25 +154,26 @@ function Invoke-PvwaLogoff {
     catch { Write-Verbose "Logoff: $($_.Exception.Message)" }
 }
 
-function Get-PvwaAccounts {
-    <#  Paginated search of accounts matching a keyword.  #>
-    param([string]$Token, [string]$Search)
+function Get-PvwaAllAccounts {
+    <#  Downloads ALL accounts once (paged). One bulk extraction instead of
+        one search per CSV row, so the session can be closed quickly afterwards.  #>
+    param([string]$Token)
 
     $headers = @{ Authorization = $Token }
-    $results = @()
+    $all = @()
     $offset = 0
-    $limit = 50
+    $limit = 1000
 
     do {
-        $q = "search=$([uri]::EscapeDataString($Search))&searchType=contains&limit=$limit&offset=$offset"
-        $url = "$ApiBase/Accounts?$q"
+        $url = "$ApiBase/Accounts?limit=$limit&offset=$offset"
         $resp = Invoke-RestMethod -Uri $url -Method Get -Headers $headers @script:IrmExtra
-        if ($resp.value) { $results += $resp.value }
+        if ($resp.value) { $all += $resp.value }
         $offset += $limit
         $hasMore = ($null -ne $resp.value) -and ($resp.value.Count -eq $limit)
+        Write-Host "    ... $($all.Count) comptes chargés" -ForegroundColor Gray
     } while ($hasMore)
 
-    return $results
+    return $all
 }
 
 function Get-PvwaSafeMembers {
@@ -316,21 +325,59 @@ if ($OutDir -and -not (Test-Path -LiteralPath $OutDir)) {
 }
 Write-Host "Colonnes utilisées : username='$UsernameColumn', host='$HostColumn'$(if ($HasCandidate) { ", candidat='$CandidateColumn'" })" -ForegroundColor DarkCyan
 
-Write-Host "Connexion au PVWA $PvwaUrl ..." -ForegroundColor Cyan
-$token = Invoke-PvwaLogon -Cred $Credential -Type $AuthType
-Write-Host "Connecté. Traitement de $($rows.Count) ligne(s)." -ForegroundColor Green
-
-$results = New-Object System.Collections.Generic.List[object]
-$safeMembersCache = @{}   # avoids re-listing the members of a same safe
-$i = 0
+$results     = New-Object System.Collections.Generic.List[object]
+$safeMembersCache = @{}
+$neededSafes = New-Object 'System.Collections.Generic.HashSet[string]'
+$token = $null
 
 try {
+    # ============================= PHASE 1 : EXTRACTION (session ouverte) =============================
+    Write-Host "Connexion au PVWA $PvwaUrl ..." -ForegroundColor Cyan
+    $token = Invoke-PvwaLogon -Cred $Credential -Type $AuthType
+    Write-Host "Connecté." -ForegroundColor Green
+
+    # 1a) Tous les comptes en une seule fois (ou lecture d'un extrait local existant)
+    $allAccounts = @()
+    if ($AccountsSource -eq 'Extract' -and (Test-Path -LiteralPath $AccountsExtractPath)) {
+        Write-Host "Lecture de l'extrait local : $AccountsExtractPath" -ForegroundColor Cyan
+        $allAccounts = Import-Csv -LiteralPath $AccountsExtractPath
+    }
+    else {
+        if ($AccountsSource -eq 'Extract') { Write-Warning "Extrait introuvable ($AccountsExtractPath) : téléchargement depuis le PVWA." }
+        Write-Host "Téléchargement de tous les comptes depuis le PVWA..." -ForegroundColor Cyan
+        $allAccounts = Get-PvwaAllAccounts -Token $token
+        # Sauvegarde de l'extrait pour réutilisation / traçabilité
+        try {
+            $extractDir = Split-Path -Parent $AccountsExtractPath
+            if ($extractDir -and -not (Test-Path -LiteralPath $extractDir)) { New-Item -ItemType Directory -Force -Path $extractDir | Out-Null }
+            $allAccounts |
+                Select-Object name, userName, address, platformId, safeName,
+                    @{ n = 'cpmStatus'; e = { $_.secretManagement.status } },
+                    @{ n = 'cpmManaged'; e = { $_.secretManagement.automaticManagementEnabled } } |
+                Export-Csv -LiteralPath $AccountsExtractPath -NoTypeInformation -Encoding UTF8
+            Write-Host "Extrait des comptes sauvegardé : $AccountsExtractPath" -ForegroundColor DarkCyan
+        }
+        catch { Write-Warning "Impossible de sauvegarder l'extrait : $($_.Exception.Message)" }
+    }
+    Write-Host " $($allAccounts.Count) comptes chargés." -ForegroundColor Green
+
+    # 1b) Index des comptes par nom d'utilisateur (matching ensuite 100% en mémoire)
+    $caByUser = @{}
+    foreach ($a in $allAccounts) {
+        if (-not $a.userName) { continue }
+        $k = $a.userName.ToLower().Trim()
+        if (-not $caByUser.ContainsKey($k)) { $caByUser[$k] = New-Object System.Collections.Generic.List[object] }
+        $caByUser[$k].Add($a)
+    }
+
+    # ============================= PHASE 2 : MATCHING (mémoire + DNS, sans appel API) =================
+    $i = 0
     foreach ($row in $rows) {
         $i++
         $username = "$($row.$UsernameColumn)".Trim()
         $hostName = "$($row.$HostColumn)".Trim()
         $candidate = if ($HasCandidate) { "$($row.$CandidateColumn)".Trim() } else { $null }
-        Write-Progress -Activity "Vérification CyberArk" -Status "$i/$($rows.Count) : $username@$hostName" -PercentComplete (($i / $rows.Count) * 100)
+        Write-Progress -Activity "Matching CyberArk" -Status "$i/$($rows.Count) : $username@$hostName" -PercentComplete (($i / $rows.Count) * 100)
 
         $rec = [ordered]@{
             Inventory            = $row.inventory
@@ -340,75 +387,54 @@ try {
             Onboarded            = 'No'
             OnboardingAssessment = $null
             MatchType            = $null
-            ResolvedIP          = $null
-            AccountName         = $null
-            AccountAddress      = $null
-            PlatformId          = $null
-            SafeName            = $null
-            AllSafeGroups       = $null
-            ExternalDomainGroup = $null
-            GroupManager        = $null
-            GroupManagerEmail   = $null
-            Notes               = $null
+            ResolvedIP           = $null
+            AccountName          = $null
+            AccountAddress       = $null
+            PlatformId           = $null
+            SafeName             = $null
+            AllSafeGroups        = $null
+            ExternalDomainGroup  = $null
+            GroupManager         = $null
+            GroupManagerEmail    = $null
+            Notes                = $null
         }
+        $results.Add($rec)
 
         if ([string]::IsNullOrWhiteSpace($username) -or [string]::IsNullOrWhiteSpace($hostName)) {
-            $rec.Notes = 'Ligne ignorée (username ou host vide)'
-            $results.Add([pscustomobject]$rec); continue
+            $rec.Notes = 'Ligne ignorée (username ou host vide)'; continue
         }
 
-        # --- 1) Search for the account in CyberArk ---
-        try {
-            $found = Get-PvwaAccounts -Token $token -Search "$username $hostName"
-        }
-        catch {
-            $rec.Notes = "Erreur recherche compte : $($_.Exception.Message)"
-            $results.Add([pscustomobject]$rec); continue
+        $accts = $caByUser[$username.ToLower()]
+        $match = $null
+        if ($accts) {
+            $match = $accts | Where-Object { Test-AddressMatch -Address $_.address -HostValue $hostName -Strategy $AddressMatch } | Select-Object -First 1
+            if ($match) { $rec.MatchType = 'Hostname' }
         }
 
-        $match = $found | Where-Object {
-            $_.userName -and ($_.userName.ToLower() -eq $username.ToLower()) -and
-            (Test-AddressMatch -Address $_.address -HostValue $hostName -Strategy $AddressMatch)
-        } | Select-Object -First 1
-
-        if ($match) { $rec.MatchType = 'Hostname' }
-
-        # --- 1b) IP fallback: if not found by hostname, resolve the host to an IP ---
+        # IP fallback (DNS), still no CyberArk call
         if (-not $match -and -not $SkipIPCheck) {
             $ips = Resolve-HostIPAddress -HostValue $hostName
             if ($ips.Count -gt 0) {
                 $rec.ResolvedIP = ($ips -join '; ')
-                foreach ($ip in $ips) {
-                    # First look among the already-returned accounts, then via a dedicated search by IP
-                    $match = $found | Where-Object {
-                        $_.userName -and ($_.userName.ToLower() -eq $username.ToLower()) -and ($_.address -eq $ip)
-                    } | Select-Object -First 1
-
-                    if (-not $match) {
-                        try { $foundByIp = Get-PvwaAccounts -Token $token -Search "$username $ip" } catch { $foundByIp = @() }
-                        $match = $foundByIp | Where-Object {
-                            $_.userName -and ($_.userName.ToLower() -eq $username.ToLower()) -and ($_.address -eq $ip)
-                        } | Select-Object -First 1
+                if ($accts) {
+                    foreach ($ip in $ips) {
+                        $match = $accts | Where-Object { $_.address -eq $ip } | Select-Object -First 1
+                        if ($match) { $rec.MatchType = "IP ($ip)"; break }
                     }
-
-                    if ($match) { $rec.MatchType = "IP ($ip)"; break }
                 }
             }
-            else {
-                $rec.ResolvedIP = 'non résolu'
-            }
+            else { $rec.ResolvedIP = 'non résolu' }
         }
 
         if (-not $match) {
             $rec.Notes = 'Compte non embarqué (aucune correspondance username+address, ni par nom ni par IP)'
-            # Qualify the "not onboarded" result using CA_Candidate (extractSudoRoot)
             switch -Regex ($candidate) {
                 '^(?i)YES'             { $rec.OnboardingAssessment = 'ANOMALIE - candidat CyberArk non embarqué' }
                 '^(?i)CHECK-INVENTORY' { $rec.OnboardingAssessment = 'À vérifier - statut inventaire inconnu' }
                 '^(?i)NO$'             { $rec.OnboardingAssessment = 'Normal - non candidat (pas de privilège / hors ligne)' }
                 default                { $rec.OnboardingAssessment = if ($HasCandidate) { 'Non candidat (valeur CA_Candidate vide)' } else { 'Non évalué (colonne CA_Candidate absente)' } }
             }
-            $results.Add([pscustomobject]$rec); continue
+            continue
         }
 
         $rec.Onboarded = 'Yes'
@@ -417,76 +443,85 @@ try {
         $rec.AccountAddress = $match.address
         $rec.PlatformId = $match.platformId
         $rec.SafeName = $match.safeName
-
-        # --- 2) Safe members / groups ---
-        $safe = $match.safeName
-        if (-not $safeMembersCache.ContainsKey($safe)) {
-            try { $safeMembersCache[$safe] = Get-PvwaSafeMembers -Token $token -SafeName $safe }
-            catch { $safeMembersCache[$safe] = $null; $rec.Notes = "Erreur lecture membres safe : $($_.Exception.Message)" }
-        }
-        $members = $safeMembersCache[$safe]
-        if (-not $members) {
-            if (-not $rec.Notes) { $rec.Notes = 'Aucun membre retourné pour le safe' }
-            $results.Add([pscustomobject]$rec); continue
-        }
-
-        $rec.AllSafeGroups = (($members | ForEach-Object { $_.memberName }) -join '; ')
-
-        # --- 3) Candidates = non-default groups ---
-        $candidates = $members | Where-Object {
-            $_.memberType -eq 'Group' -and ($DefaultSafeGroups -notcontains $_.memberName)
-        }
-
-        # --- 4) AD resolution: keep only the groups actually present in the domain ---
-        $domainGroups = @()
-        foreach ($cand in $candidates) {
-            $r = Resolve-DomainGroupAndManager -MemberName $cand.memberName
-            if ($SkipADLookup) {
-                # Without AD we cannot certify the domain: keep the candidate as-is
-                $domainGroups += [pscustomobject]@{ GroupName = $cand.memberName; Manager = $null; ManagerEmail = $null }
-            }
-            elseif ($r.IsDomainGroup) {
-                $domainGroups += [pscustomobject]@{ GroupName = $r.GroupName; Manager = $r.Manager; ManagerEmail = $r.ManagerEmail }
-            }
-        }
-
-        if ($domainGroups.Count -eq 0) {
-            $rec.Notes = if ($SkipADLookup) { 'Aucun groupe non-défaut (AD non interrogé)' } else { 'Aucun groupe de domaine externe trouvé sur le safe' }
-        }
-        else {
-            $rec.ExternalDomainGroup = ($domainGroups.GroupName -join '; ')
-            $withMgr = $domainGroups | Where-Object { $_.Manager } | Select-Object -First 1
-            if ($withMgr) {
-                $rec.GroupManager = $withMgr.Manager
-                $rec.GroupManagerEmail = $withMgr.ManagerEmail
-            }
-            elseif (-not $SkipADLookup) {
-                $rec.Notes = 'Groupe de domaine trouvé mais aucun manager (ManagedBy vide)'
-            }
-            if ($domainGroups.Count -gt 1) {
-                $rec.Notes = (@($rec.Notes, "Plusieurs groupes de domaine ($($domainGroups.Count)) — vérifier") | Where-Object { $_ }) -join ' | '
-            }
-        }
-
-        $results.Add([pscustomobject]$rec)
+        if ($match.safeName) { [void]$neededSafes.Add($match.safeName) }
     }
+    Write-Progress -Activity "Matching CyberArk" -Completed
+
+    # ============================= PHASE 3 : Membres des safes concernés (session ouverte) ===========
+    Write-Host "Lecture des membres de $($neededSafes.Count) safe(s) concerné(s)..." -ForegroundColor Cyan
+    $sN = 0
+    foreach ($safe in $neededSafes) {
+        $sN++
+        Write-Progress -Activity "Lecture des membres des safes" -Status "$sN/$($neededSafes.Count) : $safe" -PercentComplete (($sN / [Math]::Max(1, $neededSafes.Count)) * 100)
+        try { $safeMembersCache[$safe] = Get-PvwaSafeMembers -Token $token -SafeName $safe }
+        catch { $safeMembersCache[$safe] = $null }
+    }
+    Write-Progress -Activity "Lecture des membres des safes" -Completed
 }
 finally {
-    Write-Progress -Activity "Vérification CyberArk" -Completed
-    Invoke-PvwaLogoff -Token $token
-    Write-Host "Déconnecté du PVWA." -ForegroundColor Cyan
+    # ============================= PHASE 4 : Fermeture de la session (extraction terminée) ===========
+    if ($token) { Invoke-PvwaLogoff -Token $token }
+    Write-Host "Session CyberArk fermée (extraction terminée)." -ForegroundColor Cyan
 }
 
-$results | Export-Csv -LiteralPath $OutputPath -NoTypeInformation -Encoding UTF8 -Delimiter $CsvDelimiter
+# ============================= PHASE 5 : Enrichissement HORS-LIGNE (groupe externe + manager AD) =====
+Write-Host "Résolution des groupes de domaine et managers (Active Directory)..." -ForegroundColor Cyan
+$onboardedRecs = $results | Where-Object { $_.Onboarded -eq 'Yes' }
+$j = 0
+foreach ($rec in $onboardedRecs) {
+    $j++
+    Write-Progress -Activity "Résolution AD" -Status "$j/$($onboardedRecs.Count) : $($rec.SafeName)" -PercentComplete (($j / [Math]::Max(1, $onboardedRecs.Count)) * 100)
+    $members = $safeMembersCache[$rec.SafeName]
+    if (-not $members) {
+        if (-not $rec.Notes) { $rec.Notes = 'Aucun membre retourné pour le safe' }
+        continue
+    }
+    $rec.AllSafeGroups = (($members | ForEach-Object { $_.memberName }) -join '; ')
 
-$onb = ($results | Where-Object { $_.Onboarded -eq 'Yes' }).Count
-$anomalies = ($results | Where-Object { $_.OnboardingAssessment -like 'ANOMALIE*' }).Count
-$normalMissing = ($results | Where-Object { $_.OnboardingAssessment -like 'Normal*' }).Count
+    $candidates = $members | Where-Object { $_.memberType -eq 'Group' -and ($DefaultSafeGroups -notcontains $_.memberName) }
+    $domainGroups = @()
+    foreach ($cand in $candidates) {
+        $r = Resolve-DomainGroupAndManager -MemberName $cand.memberName
+        if ($SkipADLookup) {
+            $domainGroups += [pscustomobject]@{ GroupName = $cand.memberName; Manager = $null; ManagerEmail = $null }
+        }
+        elseif ($r.IsDomainGroup) {
+            $domainGroups += [pscustomobject]@{ GroupName = $r.GroupName; Manager = $r.Manager; ManagerEmail = $r.ManagerEmail }
+        }
+    }
+
+    if ($domainGroups.Count -eq 0) {
+        $rec.Notes = if ($SkipADLookup) { 'Aucun groupe non-défaut (AD non interrogé)' } else { 'Aucun groupe de domaine externe trouvé sur le safe' }
+    }
+    else {
+        $rec.ExternalDomainGroup = ($domainGroups.GroupName -join '; ')
+        $withMgr = $domainGroups | Where-Object { $_.Manager } | Select-Object -First 1
+        if ($withMgr) {
+            $rec.GroupManager = $withMgr.Manager
+            $rec.GroupManagerEmail = $withMgr.ManagerEmail
+        }
+        elseif (-not $SkipADLookup) {
+            $rec.Notes = 'Groupe de domaine trouvé mais aucun manager (ManagedBy vide)'
+        }
+        if ($domainGroups.Count -gt 1) {
+            $rec.Notes = (@($rec.Notes, "Plusieurs groupes de domaine ($($domainGroups.Count)) — vérifier") | Where-Object { $_ }) -join ' | '
+        }
+    }
+}
+Write-Progress -Activity "Résolution AD" -Completed
+
+# ============================= EXPORT & SYNTHÈSE =====================================================
+$final = $results | ForEach-Object { [pscustomobject]$_ }
+$final | Export-Csv -LiteralPath $OutputPath -NoTypeInformation -Encoding UTF8 -Delimiter $CsvDelimiter
+
+$onb = ($final | Where-Object { $_.Onboarded -eq 'Yes' }).Count
+$anomalies = ($final | Where-Object { $_.OnboardingAssessment -like 'ANOMALIE*' }).Count
+$normalMissing = ($final | Where-Object { $_.OnboardingAssessment -like 'Normal*' }).Count
 Write-Host ""
 Write-Host "===== Synthèse =====" -ForegroundColor Yellow
-Write-Host "Lignes traitées               : $($results.Count)"
+Write-Host "Lignes traitées               : $($final.Count)"
 Write-Host "Comptes embarqués             : $onb"
-Write-Host "Non embarqués                 : $($results.Count - $onb)"
+Write-Host "Non embarqués                 : $($final.Count - $onb)"
 if ($HasCandidate) {
     Write-Host "  -> ANOMALIES (candidat non embarqué) : $anomalies" -ForegroundColor Red
     Write-Host "  -> Normal (non candidat)             : $normalMissing" -ForegroundColor Gray
