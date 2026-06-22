@@ -1,0 +1,11 @@
+inventory,host,username,home dir,shell,sshdir exists,ssh keys,known hosts,authorized keys
+dev,anthill,adminunx,/home/adminunx,/bin/bash,no,0,0,0
+dev,anthill,admJava-ssh,/home/admJava-ssh,/bin/bash,no,0,0,0
+dev,anthill,admREMLinux,/home/admREMLinux,/bin/bash,no,0,0,0
+dev,anthill,apache,/usr/share/httpd,/bin/bash,no,0,0,0
+dev,anthill,jenkins,/var/lib/jenkins,/bin/bash,yes,1,1,0
+dev,anthill,root,/root,/bin/bash,yes,0,6,0
+dev,awx01dev,adminunx,/home/adminunx,/bin/bash,yes,0,1,0
+dev,awx01dev,root,/root,/bin/bash,no,0,0,0
+dev,awx02dev,oracle,/home/oracle,/bin/bash,no,0,0,0
+prd,calc01,admJava-ssh,/home/admJava-ssh,/bin/bash,no,0,0,0
