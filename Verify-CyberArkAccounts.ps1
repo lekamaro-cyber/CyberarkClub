@@ -46,6 +46,11 @@
 .PARAMETER SkipADLookup
     N'effectue pas les requêtes AD (utile pour tester hors d'un poste joint au domaine).
 
+.PARAMETER SkipIPCheck
+    Désactive le repli (fallback) par IP : par défaut, lorsqu'un compte n'est pas
+    trouvé par son nom d'hôte, le script résout le 'host' en IP via DNS et relance
+    la recherche dans CyberArk avec cette/ces IP (cas des comptes embarqués par IP).
+
 .PARAMETER SkipCertificateCheck
     Ignore la validation du certificat TLS du PVWA (labos / certs auto-signés).
 
@@ -90,6 +95,7 @@ param(
     ),
 
     [switch]$SkipADLookup,
+    [switch]$SkipIPCheck,
     [switch]$SkipCertificateCheck
 )
 
@@ -208,6 +214,29 @@ function Test-AddressMatch {
     return $false
 }
 
+function Resolve-HostIPAddress {
+    <#  Résout un nom d'hôte en adresse(s) IPv4 via DNS. Renvoie un tableau (vide si échec).  #>
+    param([string]$HostValue)
+
+    if ([string]::IsNullOrWhiteSpace($HostValue)) { return @() }
+
+    # Si le host est déjà une IP, on la renvoie telle quelle
+    $parsed = $null
+    if ([System.Net.IPAddress]::TryParse($HostValue, [ref]$parsed)) { return @($HostValue) }
+
+    try {
+        $addrs = [System.Net.Dns]::GetHostAddresses($HostValue)
+        $ips = $addrs |
+            Where-Object { $_.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork } |
+            ForEach-Object { $_.IPAddressToString }
+        return @($ips | Select-Object -Unique)
+    }
+    catch {
+        Write-Verbose "Résolution DNS impossible pour '$HostValue' : $($_.Exception.Message)"
+        return @()
+    }
+}
+
 function Resolve-DomainGroupAndManager {
     <#
         Pour un nom de membre de safe (potentiellement un groupe de domaine),
@@ -290,6 +319,8 @@ try {
             Host                = $hostName
             Username            = $username
             Onboarded           = 'No'
+            MatchType           = $null
+            ResolvedIP          = $null
             AccountName         = $null
             AccountAddress      = $null
             PlatformId          = $null
@@ -320,8 +351,36 @@ try {
             (Test-AddressMatch -Address $_.address -HostValue $hostName -Strategy $AddressMatch)
         } | Select-Object -First 1
 
+        if ($match) { $rec.MatchType = 'Hostname' }
+
+        # --- 1bis) Repli par IP : si non trouvé par nom d'hôte, on résout le host en IP ---
+        if (-not $match -and -not $SkipIPCheck) {
+            $ips = Resolve-HostIPAddress -HostValue $hostName
+            if ($ips.Count -gt 0) {
+                $rec.ResolvedIP = ($ips -join '; ')
+                foreach ($ip in $ips) {
+                    # On recherche d'abord parmi les comptes déjà remontés, puis via une requête dédiée par IP
+                    $match = $found | Where-Object {
+                        $_.userName -and ($_.userName.ToLower() -eq $username.ToLower()) -and ($_.address -eq $ip)
+                    } | Select-Object -First 1
+
+                    if (-not $match) {
+                        try { $foundByIp = Get-PvwaAccounts -Token $token -Search "$username $ip" } catch { $foundByIp = @() }
+                        $match = $foundByIp | Where-Object {
+                            $_.userName -and ($_.userName.ToLower() -eq $username.ToLower()) -and ($_.address -eq $ip)
+                        } | Select-Object -First 1
+                    }
+
+                    if ($match) { $rec.MatchType = "IP ($ip)"; break }
+                }
+            }
+            else {
+                $rec.ResolvedIP = 'non résolu'
+            }
+        }
+
         if (-not $match) {
-            $rec.Notes = 'Compte non embarqué (aucune correspondance username+address)'
+            $rec.Notes = 'Compte non embarqué (aucune correspondance username+address, ni par nom ni par IP)'
             $results.Add([pscustomobject]$rec); continue
         }
 

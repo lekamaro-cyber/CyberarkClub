@@ -66,7 +66,17 @@ $cred = Get-Credential
 | `-HostColumn` / `-UsernameColumn` | Noms des colonnes du CSV.                                 |
 | `-CsvDelimiter`        | Séparateur du CSV (`,` par défaut ; mettre `;` si Excel FR).          |
 | `-SkipADLookup`        | Désactive la partie Active Directory.                               |
+| `-SkipIPCheck`         | Désactive le repli par IP (voir ci-dessous).                       |
 | `-SkipCertificateCheck`| Ignore la validation TLS du PVWA.                                  |
+
+### Repli (fallback) par IP
+
+Lorsqu'un compte n'est **pas trouvé par son nom d'hôte**, le script résout
+automatiquement le `host` en **adresse(s) IP** via DNS, puis relance la recherche
+dans CyberArk avec ces IP. Cela couvre le cas fréquent où le compte est embarqué
+avec une **adresse IP** plutôt qu'un nom dans CyberArk. Le résultat indique alors
+`MatchType = IP (x.x.x.x)` et la colonne `ResolvedIP` liste les IP testées.
+Désactivable avec `-SkipIPCheck`.
 
 ## Colonnes du CSV de sortie
 
@@ -74,6 +84,8 @@ $cred = Get-Credential
 |-----------------------|------------------------------------------------------------|
 | `Inventory/Host/Username` | Rappel de la ligne source.                             |
 | `Onboarded`           | `Yes` / `No` — compte trouvé dans CyberArk.               |
+| `MatchType`           | `Hostname` ou `IP (x.x.x.x)` selon le mode de correspondance. |
+| `ResolvedIP`          | IP(s) résolue(s) par DNS lors du repli (ou `non résolu`). |
 | `AccountName`         | Nom de l'objet compte CyberArk.                           |
 | `AccountAddress`      | Adresse enregistrée dans CyberArk.                       |
 | `PlatformId`          | Plateforme du compte.                                     |
