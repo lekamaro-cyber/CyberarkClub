@@ -94,8 +94,7 @@ $SkipCertificateCheck = $false
 | `$PvwaUsername` / `$PvwaPassword` | Identifiants (laisser le mot de passe vide = saisie sécurisée). |
 | `$CsvPath`             | CSV source (peut être la sortie de `extractSudoRootV0.7.ps1`).       |
 | `$OutputPath`          | CSV de résultats (le dossier est créé si besoin).                   |
-| `$AccountsSource`      | `Api` (télécharge tous les comptes une fois) ou `Extract` (réutilise l'extrait local). |
-| `$AccountsExtractPath` | Extrait des comptes CyberArk (sauvegardé en `Api`, relu en `Extract`). |
+| `$AccountsExtractPath` | Fichier où l'extrait de tous les comptes CyberArk est sauvegardé.   |
 | `$AddressMatch`        | `Hostname` (défaut), `Exact`, `Contains`.                            |
 | `$DefaultSafeGroups`   | Groupes par défaut à exclure.                                        |
 | `$UsernameColumn` / `$HostColumn` | Colonnes (`'Auto'` = détection).                         |
@@ -119,8 +118,8 @@ CyberArk et accélérer le traitement :
 
 Auparavant le script faisait un appel API de recherche **par ligne** du CSV, en
 gardant la session ouverte pendant tout le travail AD : c'était l'origine de la
-lenteur. Avec `$AccountsSource = 'Extract'`, on réutilise l'extrait déjà
-téléchargé et on ne rouvre la session que pour lire les membres des safes.
+lenteur. Le script réalise désormais **toujours** cette extraction unique et
+sauvegarde l'extrait dans `$AccountsExtractPath`.
 
 ### Repli (fallback) par IP
 

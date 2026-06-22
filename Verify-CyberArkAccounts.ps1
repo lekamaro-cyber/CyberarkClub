@@ -52,11 +52,9 @@ $CsvPath    = "$PSScriptRoot\Input\Audit_Privileges_Unix.csv"
 $OutputPath = "$PSScriptRoot\Output\CyberArk-Verification-Results_$(Get-Date -Format 'yyyy-MM').csv"
 
 # --- Source des comptes CyberArk ---
-# 'Api'     : télécharge UNE SEULE FOIS tous les comptes depuis le PVWA, puis ferme
-#             la session avant le traitement (recommandé, le plus rapide).
-# 'Extract' : réutilise l'extrait local ci-dessous sans re-télécharger les comptes
-#             (la session n'est ouverte que pour lire les membres des safes concernés).
-$AccountsSource      = 'Api'
+# Le script télécharge TOUJOURS tous les comptes en une seule fois (extraction),
+# les sauvegarde dans le fichier ci-dessous, puis ferme la session avant le
+# traitement (matching + AD), qui se fait hors-ligne.
 $AccountsExtractPath = "$PSScriptRoot\Input\cyberark_accounts.csv"
 
 # --- Colonnes du CSV d'entrée (laisser 'Auto' pour détection automatique) ---
@@ -336,29 +334,20 @@ try {
     $token = Invoke-PvwaLogon -Cred $Credential -Type $AuthType
     Write-Host "Connecté." -ForegroundColor Green
 
-    # 1a) Tous les comptes en une seule fois (ou lecture d'un extrait local existant)
-    $allAccounts = @()
-    if ($AccountsSource -eq 'Extract' -and (Test-Path -LiteralPath $AccountsExtractPath)) {
-        Write-Host "Lecture de l'extrait local : $AccountsExtractPath" -ForegroundColor Cyan
-        $allAccounts = Import-Csv -LiteralPath $AccountsExtractPath
+    # 1a) Extraction : tous les comptes en une seule fois, puis sauvegarde de l'extrait
+    Write-Host "Extraction de tous les comptes depuis le PVWA..." -ForegroundColor Cyan
+    $allAccounts = Get-PvwaAllAccounts -Token $token
+    try {
+        $extractDir = Split-Path -Parent $AccountsExtractPath
+        if ($extractDir -and -not (Test-Path -LiteralPath $extractDir)) { New-Item -ItemType Directory -Force -Path $extractDir | Out-Null }
+        $allAccounts |
+            Select-Object name, userName, address, platformId, safeName,
+                @{ n = 'cpmStatus'; e = { $_.secretManagement.status } },
+                @{ n = 'cpmManaged'; e = { $_.secretManagement.automaticManagementEnabled } } |
+            Export-Csv -LiteralPath $AccountsExtractPath -NoTypeInformation -Encoding UTF8
+        Write-Host "Extrait des comptes sauvegardé : $AccountsExtractPath" -ForegroundColor DarkCyan
     }
-    else {
-        if ($AccountsSource -eq 'Extract') { Write-Warning "Extrait introuvable ($AccountsExtractPath) : téléchargement depuis le PVWA." }
-        Write-Host "Téléchargement de tous les comptes depuis le PVWA..." -ForegroundColor Cyan
-        $allAccounts = Get-PvwaAllAccounts -Token $token
-        # Sauvegarde de l'extrait pour réutilisation / traçabilité
-        try {
-            $extractDir = Split-Path -Parent $AccountsExtractPath
-            if ($extractDir -and -not (Test-Path -LiteralPath $extractDir)) { New-Item -ItemType Directory -Force -Path $extractDir | Out-Null }
-            $allAccounts |
-                Select-Object name, userName, address, platformId, safeName,
-                    @{ n = 'cpmStatus'; e = { $_.secretManagement.status } },
-                    @{ n = 'cpmManaged'; e = { $_.secretManagement.automaticManagementEnabled } } |
-                Export-Csv -LiteralPath $AccountsExtractPath -NoTypeInformation -Encoding UTF8
-            Write-Host "Extrait des comptes sauvegardé : $AccountsExtractPath" -ForegroundColor DarkCyan
-        }
-        catch { Write-Warning "Impossible de sauvegarder l'extrait : $($_.Exception.Message)" }
-    }
+    catch { Write-Warning "Impossible de sauvegarder l'extrait : $($_.Exception.Message)" }
     Write-Host " $($allAccounts.Count) comptes chargés." -ForegroundColor Green
 
     # 1b) Index des comptes par nom d'utilisateur (matching ensuite 100% en mémoire)
