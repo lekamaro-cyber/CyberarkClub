@@ -16,100 +16,69 @@
         username (CSV column)  ==  userName of the CyberArk account
         host     (CSV column)  ==  address  of the CyberArk account (loose match)
 
-.PARAMETER PvwaUrl
-    PVWA base URL, e.g. https://pvwa.mydomain.local
+    NO COMMAND-LINE ARGUMENTS: every setting (PVWA URL, credentials, file paths,
+    options...) is hard-coded in the CONFIGURATION section right below. Just edit
+    that section and run the script (e.g. from PowerShell ISE / VS Code / right-click
+    "Run with PowerShell").
 
-.PARAMETER CsvPath
-    Path to the source CSV (must contain at least the 'host' and 'username' columns).
-
-.PARAMETER OutputPath
-    Path to the results CSV. Default: .\CyberArk-Verification-Results.csv
-
-.PARAMETER Credential
-    Credentials for the PVWA logon. If omitted, the script prompts for them.
-
-.PARAMETER AuthType
-    PVWA authentication method: CyberArk | LDAP | RADIUS. Default: CyberArk
-
-.PARAMETER UsernameColumn / HostColumn
-    CSV column names. Defaults: 'username' and 'host'. If those are absent, the
-    script auto-detects common alternatives (e.g. 'UserSam'/'Server' produced by
-    extractSudoRootV0.7.ps1, or 'userName'/'address').
-
-.PARAMETER CandidateColumn
-    Name of the column holding the CyberArk onboarding candidacy (CA_Candidate
-    from extractSudoRootV0.7.ps1). When this column exists, a non-onboarded
-    account is reported as a real anomaly only when CA_Candidate is YES/YES-SSH;
-    a value of NO means "not onboarded is expected" (no privilege / offline host).
-
-.PARAMETER AddressMatch
-    Matching strategy between 'host' (CSV) and 'address' (CyberArk):
-      Exact   : address == host
-      Hostname: the first label of the address (before the first '.') == host  (default)
-      Contains: address contains host
-
-.PARAMETER DefaultSafeGroups
-    List of default groups/members to exclude in order to isolate the external group.
-
-.PARAMETER SkipADLookup
-    Skips AD queries (useful for testing off a domain-joined machine).
-
-.PARAMETER SkipIPCheck
-    Disables the IP fallback: by default, when an account is not found by its
-    hostname, the script resolves the 'host' to an IP via DNS and re-runs the
-    search in CyberArk with that/those IP(s) (case of accounts onboarded by IP).
-
-.PARAMETER SkipCertificateCheck
-    Ignores the PVWA TLS certificate validation (labs / self-signed certs).
-
-.EXAMPLE
-    .\Verify-CyberArkAccounts.ps1 -PvwaUrl https://pvwa.corp.local -CsvPath .\accounts.csv
+    The input CSV can be the output of extractSudoRootV0.7.ps1
+    (Audit_Privileges_Unix_YYYY-MM.csv): the script reads its CA_Candidate column
+    to decide whether a non-onboarded account is a real anomaly (CA_Candidate =
+    YES/YES-SSH) or expected (NO = no privilege / offline host).
 
 .NOTES
     Requires PowerShell 5.1+ . The ActiveDirectory module is only required when
-    -SkipADLookup is not used.
+    $SkipADLookup is left to $false.
 #>
 
-[CmdletBinding()]
-param(
-    [Parameter(Mandatory = $true)]
-    [string]$PvwaUrl,
+# =====================================================================================
+# ============================  CONFIGURATION (À ADAPTER)  =============================
+# =====================================================================================
+# Aucun argument en ligne de commande : tout se règle ici. Lancez simplement le script.
 
-    [Parameter(Mandatory = $true)]
-    [string]$CsvPath,
+# --- PVWA / CyberArk ---
+$PvwaUrl  = 'https://oneconnection.intra.corp'   # <-- ADAPTER : URL du PVWA
+$AuthType = 'LDAP'                               # 'CyberArk' | 'LDAP' | 'RADIUS'
 
-    [string]$OutputPath = ".\CyberArk-Verification-Results.csv",
+# --- Identifiants PVWA ---
+# Laissez $PvwaPassword vide ('') pour une saisie sécurisée à l'exécution (recommandé).
+# Vous pouvez renseigner le mot de passe en dur, mais il sera alors stocké en CLAIR.
+$PvwaUsername = ''                               # ex. 'svc_cyberark_admin' (vide = saisie complète)
+$PvwaPassword = ''                               # vide = demande à l'exécution
 
-    [System.Management.Automation.PSCredential]$Credential,
+# --- Fichiers ---
+# CSV d'entrée : couples compte/serveur. Peut être la sortie de extractSudoRootV0.7.ps1.
+$CsvPath    = "$PSScriptRoot\Input\Audit_Privileges_Unix.csv"
+$OutputPath = "$PSScriptRoot\Output\CyberArk-Verification-Results_$(Get-Date -Format 'yyyy-MM').csv"
 
-    [ValidateSet('CyberArk', 'LDAP', 'RADIUS')]
-    [string]$AuthType = 'CyberArk',
+# --- Colonnes du CSV d'entrée (laisser 'Auto' pour détection automatique) ---
+$UsernameColumn  = 'Auto'          # ex. 'UserSam' / 'username' / 'userName'
+$HostColumn      = 'Auto'          # ex. 'Server' / 'host' / 'address'
+$CandidateColumn = 'CA_Candidate'  # colonne de candidature CyberArk (extractSudoRoot)
+$CsvDelimiter    = 'Auto'          # 'Auto' (détecte , ou ;), sinon ',' ou ';'
 
-    [string]$UsernameColumn = 'username',
-    [string]$HostColumn = 'host',
+# --- Correspondance host <-> address CyberArk ---
+$AddressMatch = 'Hostname'         # 'Hostname' (nom court) | 'Exact' | 'Contains'
 
-    # Column carrying the CyberArk onboarding candidacy (produced by extractSudoRootV0.7.ps1).
-    # When present, a non-onboarded account is only flagged as an anomaly if its value is YES/YES-SSH.
-    [string]$CandidateColumn = 'CA_Candidate',
+# --- Options ---
+$SkipADLookup        = $false      # $true = ne pas interroger l'Active Directory
+$SkipIPCheck         = $false      # $true = ne pas tenter le repli par IP (DNS)
+$SkipCertificateCheck = $false     # $true = ignorer la validation TLS du PVWA
 
-    [ValidateSet('Exact', 'Hostname', 'Contains')]
-    [string]$AddressMatch = 'Hostname',
-
-    [char]$CsvDelimiter = ',',
-
-    [string[]]$DefaultSafeGroups = @(
-        'Vault Admins', 'Auditors', 'Backup Users', 'DR Users', 'Master',
-        'Notification Engineers', 'Operators', 'PVWAUsers', 'PVWAMonitor',
-        'PVWAAppUsers', 'PVWAGWAccounts', 'PVWAGWUser', 'PSMUsers', 'PSMAppUsers',
-        'PSMMaster', 'PSMP_ADB_AppUsers', 'Administrator', 'Administrators',
-        'Batch', 'PasswordManager', 'ApproverGroup', 'AIMWebService',
-        'ApplicationManagers', 'EPVMaintenanceUsers', 'xrayGroup'
-    ),
-
-    [switch]$SkipADLookup,
-    [switch]$SkipIPCheck,
-    [switch]$SkipCertificateCheck
+# --- Groupes par défaut du safe à exclure pour isoler le groupe de domaine externe ---
+$DefaultSafeGroups = @(
+    'Vault Admins', 'Auditors', 'Backup Users', 'DR Users', 'Master',
+    'Notification Engineers', 'Operators', 'PVWAUsers', 'PVWAMonitor',
+    'PVWAAppUsers', 'PVWAGWAccounts', 'PVWAGWUser', 'PSMUsers', 'PSMAppUsers',
+    'PSMMaster', 'PSMP_ADB_AppUsers', 'Administrator', 'Administrators',
+    'Batch', 'PasswordManager', 'ApproverGroup', 'AIMWebService',
+    'ApplicationManagers', 'EPVMaintenanceUsers', 'xrayGroup'
 )
+# =====================================================================================
+# ==========================  FIN DE LA CONFIGURATION  ================================
+# =====================================================================================
+
+$Credential = $null
 
 #region ----------------------------------------------------------- Prerequisites & TLS
 $ErrorActionPreference = 'Stop'
@@ -142,7 +111,7 @@ $ApiBase = "$PvwaUrl/PasswordVault/api"
 
 if (-not $SkipADLookup) {
     if (-not (Get-Module -ListAvailable -Name ActiveDirectory)) {
-        Write-Warning "Le module ActiveDirectory est introuvable. La résolution AD sera désactivée (utilisez -SkipADLookup pour masquer cet avertissement)."
+        Write-Warning "Le module ActiveDirectory est introuvable. La résolution AD sera désactivée (mettez `$SkipADLookup = `$true pour masquer cet avertissement)."
         $SkipADLookup = $true
     }
     else {
@@ -302,32 +271,49 @@ function Resolve-DomainGroupAndManager {
 
 #region ----------------------------------------------------------- Main program
 if (-not (Test-Path -LiteralPath $CsvPath)) { throw "CSV introuvable : $CsvPath" }
-if (-not $Credential) { $Credential = Get-Credential -Message "Identifiants CyberArk PVWA ($AuthType)" }
 
-# Auto-detect the delimiter from the header (extractSudoRoot output uses ';')
-if (-not $PSBoundParameters.ContainsKey('CsvDelimiter')) {
+# Build credentials from the CONFIGURATION section (prompt if password left empty)
+if (-not $Credential) {
+    if ($PvwaUsername -and $PvwaPassword) {
+        $secure = ConvertTo-SecureString $PvwaPassword -AsPlainText -Force
+        $Credential = New-Object System.Management.Automation.PSCredential($PvwaUsername, $secure)
+    }
+    elseif ($PvwaUsername) {
+        $Credential = Get-Credential -UserName $PvwaUsername -Message "Mot de passe CyberArk PVWA ($AuthType)"
+    }
+    else {
+        $Credential = Get-Credential -Message "Identifiants CyberArk PVWA ($AuthType)"
+    }
+}
+
+# Auto-detect the delimiter from the header when set to 'Auto' (extractSudoRoot output uses ';')
+if ($CsvDelimiter -eq 'Auto') {
     $headerLine = Get-Content -LiteralPath $CsvPath -TotalCount 1
-    if ($headerLine -match ';') { $CsvDelimiter = ';' }
+    $CsvDelimiter = if ($headerLine -match ';') { ';' } else { ',' }
 }
 
 $rows = Import-Csv -LiteralPath $CsvPath -Delimiter $CsvDelimiter
 if ($rows.Count -eq 0) { throw "Le CSV ne contient aucune ligne." }
 $cols = $rows[0].PSObject.Properties.Name
 
-# Resolve the username/host columns: use the requested names if present,
-# otherwise fall back to known alternatives (extractSudoRoot, CyberArk export...)
+# Resolve the username/host columns: use the configured name if present,
+# otherwise (or when set to 'Auto') fall back to known alternatives.
 function Resolve-Column {
     param([string]$Requested, [string[]]$Fallbacks, [string[]]$Available)
-    if ($Available -contains $Requested) { return $Requested }
+    if ($Requested -and $Requested -ne 'Auto' -and ($Available -contains $Requested)) { return $Requested }
     foreach ($f in $Fallbacks) { if ($Available -contains $f) { return $f } }
     return $null
 }
-$UsernameColumn = Resolve-Column -Requested $UsernameColumn -Fallbacks @('UserSam', 'userName', 'user', 'Nom de l''utilisateur') -Available $cols
-$HostColumn = Resolve-Column -Requested $HostColumn -Fallbacks @('Server', 'address', 'host', 'NAME_SERVER', 'Adresse') -Available $cols
+$UsernameColumn = Resolve-Column -Requested $UsernameColumn -Fallbacks @('username', 'UserSam', 'userName', 'user', 'Nom de l''utilisateur') -Available $cols
+$HostColumn = Resolve-Column -Requested $HostColumn -Fallbacks @('host', 'Server', 'address', 'NAME_SERVER', 'Adresse') -Available $cols
 if (-not $UsernameColumn -or -not $HostColumn) {
     throw "Impossible de trouver les colonnes username/host dans le CSV. Colonnes trouvées : $($cols -join ', ')"
 }
 $HasCandidate = ($cols -contains $CandidateColumn)
+$OutDir = Split-Path -Parent $OutputPath
+if ($OutDir -and -not (Test-Path -LiteralPath $OutDir)) {
+    New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+}
 Write-Host "Colonnes utilisées : username='$UsernameColumn', host='$HostColumn'$(if ($HasCandidate) { ", candidat='$CandidateColumn'" })" -ForegroundColor DarkCyan
 
 Write-Host "Connexion au PVWA $PvwaUrl ..." -ForegroundColor Cyan

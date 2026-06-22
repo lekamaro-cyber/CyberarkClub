@@ -16,10 +16,10 @@ Le tout est exporté dans un CSV de résultats.
 
 ## Pré-requis
 
-- PowerShell 5.1+ (ou PowerShell 7 — supporte alors `-SkipCertificateCheck` nativement).
+- PowerShell 5.1+ (ou PowerShell 7 — gère alors `$SkipCertificateCheck` nativement).
 - Accès réseau au **PVWA** CyberArk et un compte **admin** avec droits API.
 - Pour la résolution AD : le module **ActiveDirectory** (RSAT) et un poste joint
-  au domaine (ou des droits de lecture sur l'annuaire). Sinon utiliser `-SkipADLookup`.
+  au domaine (ou des droits de lecture sur l'annuaire). Sinon mettre `$SkipADLookup = $true`.
 
 ## Format du CSV d'entrée
 
@@ -48,52 +48,60 @@ Le script lit alors `CA_Candidate` et **qualifie** chaque compte non embarqué :
 - `CA_Candidate = NO` et non embarqué → **Normal** (pas de privilège / serveur hors ligne).
 - `CA_Candidate = CHECK-INVENTORY` → **À vérifier** (statut inventaire inconnu).
 
-```powershell
-# Pipeline complet : on part de la sortie de extractSudoRoot
-.\Verify-CyberArkAccounts.ps1 `
-    -PvwaUrl https://oneconnection.intra.corp `
-    -CsvPath .\output\Audit_Privileges_Unix_2026-06.csv `
-    -AuthType LDAP
-```
+Pour ce pipeline, mettez simplement dans la section CONFIGURATION :
+`$CsvPath = "$PSScriptRoot\Input\Audit_Privileges_Unix_2026-06.csv"`
+(la sortie de `extractSudoRootV0.7.ps1`), puis lancez le script.
 
 ## Utilisation
 
+**Aucun argument en ligne de commande.** Tout se règle dans la section
+`CONFIGURATION` en haut de `Verify-CyberArkAccounts.ps1`. Il suffit ensuite de
+lancer le script (PowerShell ISE / VS Code / clic droit « Exécuter avec PowerShell »).
+
+1. Ouvrez `Verify-CyberArkAccounts.ps1` et éditez le bloc en haut :
+
 ```powershell
-# Cas standard (le script demande les identifiants PVWA)
-.\Verify-CyberArkAccounts.ps1 `
-    -PvwaUrl  https://pvwa.mondomaine.local `
-    -CsvPath  .\comptes.csv `
-    -OutputPath .\resultats.csv
+$PvwaUrl  = 'https://oneconnection.intra.corp'   # URL du PVWA
+$AuthType = 'LDAP'                               # CyberArk | LDAP | RADIUS
 
-# Authentification LDAP + certificat auto-signé + identifiants pré-fournis
-$cred = Get-Credential
-.\Verify-CyberArkAccounts.ps1 `
-    -PvwaUrl https://pvwa.corp.local `
-    -CsvPath .\comptes.csv `
-    -AuthType LDAP `
-    -Credential $cred `
-    -SkipCertificateCheck
+$PvwaUsername = ''                               # vide = saisie à l'exécution
+$PvwaPassword = ''                               # vide = saisie sécurisée (recommandé)
 
-# Test sans interroger l'AD (vérifie uniquement embarquement + safe + groupes)
-.\Verify-CyberArkAccounts.ps1 -PvwaUrl https://pvwa.corp.local -CsvPath .\comptes.csv -SkipADLookup
+$CsvPath    = "$PSScriptRoot\Input\Audit_Privileges_Unix.csv"
+$OutputPath = "$PSScriptRoot\Output\CyberArk-Verification-Results_$(Get-Date -Format 'yyyy-MM').csv"
+
+$UsernameColumn  = 'Auto'          # 'Auto' = détection automatique
+$HostColumn      = 'Auto'
+$CandidateColumn = 'CA_Candidate'
+$CsvDelimiter    = 'Auto'          # 'Auto' détecte , ou ;
+
+$AddressMatch = 'Hostname'         # Hostname | Exact | Contains
+
+$SkipADLookup         = $false
+$SkipIPCheck          = $false
+$SkipCertificateCheck = $false
 ```
 
-## Paramètres clés
+2. Lancez le script. Si `$PvwaPassword` est laissé vide, une fenêtre demande le
+   mot de passe de façon sécurisée.
 
-| Paramètre              | Rôle                                                                 |
+### Réglages disponibles (section CONFIGURATION)
+
+| Variable               | Rôle                                                                 |
 |------------------------|----------------------------------------------------------------------|
-| `-PvwaUrl`             | URL du PVWA (obligatoire).                                            |
-| `-CsvPath`             | CSV source (obligatoire).                                             |
-| `-OutputPath`          | CSV de résultats.                                                     |
-| `-AuthType`            | `CyberArk` (défaut) / `LDAP` / `RADIUS`.                             |
-| `-AddressMatch`        | `Hostname` (défaut, compare le hostname court), `Exact`, `Contains`. |
-| `-DefaultSafeGroups`   | Liste des groupes par défaut à exclure (surchargeable).             |
-| `-HostColumn` / `-UsernameColumn` | Noms des colonnes du CSV (auto-détectés sinon).           |
-| `-CandidateColumn`     | Colonne de candidature CyberArk (`CA_Candidate` par défaut).         |
-| `-CsvDelimiter`        | Séparateur du CSV (auto-détecté `,`/`;` sinon).                      |
-| `-SkipADLookup`        | Désactive la partie Active Directory.                               |
-| `-SkipIPCheck`         | Désactive le repli par IP (voir ci-dessous).                       |
-| `-SkipCertificateCheck`| Ignore la validation TLS du PVWA.                                  |
+| `$PvwaUrl`             | URL du PVWA.                                                          |
+| `$AuthType`            | `CyberArk` / `LDAP` / `RADIUS`.                                      |
+| `$PvwaUsername` / `$PvwaPassword` | Identifiants (laisser le mot de passe vide = saisie sécurisée). |
+| `$CsvPath`             | CSV source (peut être la sortie de `extractSudoRootV0.7.ps1`).       |
+| `$OutputPath`          | CSV de résultats (le dossier est créé si besoin).                   |
+| `$AddressMatch`        | `Hostname` (défaut), `Exact`, `Contains`.                            |
+| `$DefaultSafeGroups`   | Groupes par défaut à exclure.                                        |
+| `$UsernameColumn` / `$HostColumn` | Colonnes (`'Auto'` = détection).                         |
+| `$CandidateColumn`     | Colonne de candidature CyberArk (`CA_Candidate`).                    |
+| `$CsvDelimiter`        | `'Auto'` (détecte `,`/`;`), sinon `','` ou `';'`.                    |
+| `$SkipADLookup`        | `$true` = désactive la partie Active Directory.                     |
+| `$SkipIPCheck`         | `$true` = désactive le repli par IP (voir ci-dessous).             |
+| `$SkipCertificateCheck`| `$true` = ignore la validation TLS du PVWA.                        |
 
 ### Repli (fallback) par IP
 
@@ -102,7 +110,7 @@ automatiquement le `host` en **adresse(s) IP** via DNS, puis relance la recherch
 dans CyberArk avec ces IP. Cela couvre le cas fréquent où le compte est embarqué
 avec une **adresse IP** plutôt qu'un nom dans CyberArk. Le résultat indique alors
 `MatchType = IP (x.x.x.x)` et la colonne `ResolvedIP` liste les IP testées.
-Désactivable avec `-SkipIPCheck`.
+Désactivable avec `$SkipIPCheck = $true`.
 
 ## Colonnes du CSV de sortie
 
@@ -127,8 +135,8 @@ Désactivable avec `-SkipIPCheck`.
 ## Notes & ajustements possibles
 
 - **Correspondance host/address** : si vos `address` CyberArk sont des FQDN
-  (`anthill.corp.local`) et le CSV des noms courts (`anthill`), gardez `-AddressMatch Hostname`.
-- **Groupes par défaut** : adaptez `-DefaultSafeGroups` à votre nommage interne.
+  (`anthill.corp.local`) et le CSV des noms courts (`anthill`), gardez `$AddressMatch = 'Hostname'`.
+- **Groupes par défaut** : adaptez `$DefaultSafeGroups` à votre nommage interne.
 - **Manager** : le script lit `ManagedBy` du groupe. Si chez vous le manager est
   porté autrement (ex. attribut `manager` des membres, ou un OU dédié), signalez-le
   et j'adapte la fonction `Resolve-DomainGroupAndManager`.
