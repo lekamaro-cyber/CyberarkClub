@@ -72,13 +72,25 @@ $SkipIPCheck         = $false      # $true = ne pas tenter le repli par IP (DNS)
 $SkipCertificateCheck = $false     # $true = ignorer la validation TLS du PVWA
 
 # --- Groupes par défaut du safe à exclure pour isoler le groupe de domaine externe ---
+# Noms exacts :
 $DefaultSafeGroups = @(
     'Vault Admins', 'Auditors', 'Backup Users', 'DR Users', 'Master',
     'Notification Engineers', 'Operators', 'PVWAUsers', 'PVWAMonitor',
     'PVWAAppUsers', 'PVWAGWAccounts', 'PVWAGWUser', 'PSMUsers', 'PSMAppUsers',
     'PSMMaster', 'PSMP_ADB_AppUsers', 'Administrator', 'Administrators',
     'Batch', 'PasswordManager', 'ApproverGroup', 'AIMWebService',
-    'ApplicationManagers', 'EPVMaintenanceUsers', 'xrayGroup'
+    'ApplicationManagers', 'EPVMaintenanceUsers', 'xrayGroup',
+    'PAM_CyberArk_Manager'
+)
+# Motifs (wildcards) pour les groupes par défaut "métier" propres à votre org,
+# ex. FR_GUA_PAM_Auth_Admins / _Auditors / _Safe_Managers, PAM_CyberArk_Manager...
+$DefaultSafeGroupPatterns = @(
+    '*_PAM_Auth_*',      # FR_GUA_PAM_Auth_Admins / _Auditors / _Safe_Managers
+    'PAM_CyberArk_*',    # PAM_CyberArk_Manager
+    '*_Auth_Admins',
+    '*_Auth_Auditors',
+    '*_Auth_Safe_Managers',
+    '*_Safe_Managers'
 )
 # =====================================================================================
 # ==========================  FIN DE LA CONFIGURATION  ================================
@@ -200,6 +212,37 @@ function Test-AddressMatch {
         }
     }
     return $false
+}
+
+function Test-IsDefaultGroup {
+    <#  True if the safe member is a default group (exact name or matching pattern).  #>
+    param([string]$Name)
+    if ([string]::IsNullOrWhiteSpace($Name)) { return $true }
+    $short = $Name
+    if ($short -match '\\') { $short = $short.Split('\')[-1] }   # strip DOMAIN\ prefix
+    if ($DefaultSafeGroups -contains $Name -or $DefaultSafeGroups -contains $short) { return $true }
+    foreach ($p in $DefaultSafeGroupPatterns) { if ($short -like $p) { return $true } }
+    return $false
+}
+
+function Split-NameTokens {
+    <#  Splits a name into lowercase tokens on '-', '_' and whitespace.  #>
+    param([string]$Name)
+    if ([string]::IsNullOrWhiteSpace($Name)) { return @() }
+    return @($Name -split '[-_\s]+' | Where-Object { $_ } | ForEach-Object { $_.ToLower() })
+}
+
+function Get-NameSimilarityScore {
+    <#  Token-overlap (Jaccard) score between a group name and the safe name.
+        Ex.: safe 'HAR-G-FR-UNX-C-NPR' vs group 'FR-G-GU-HAR-UNX-C-NPR' -> ~0.86.  #>
+    param([string]$Name, [string]$Reference)
+    $a = Split-NameTokens $Name
+    $b = Split-NameTokens $Reference
+    if ($a.Count -eq 0 -or $b.Count -eq 0) { return 0 }
+    $common = @($a | Where-Object { $b -contains $_ } | Select-Object -Unique)
+    $union = @($a + $b | Select-Object -Unique)
+    if ($union.Count -eq 0) { return 0 }
+    return [math]::Round($common.Count / $union.Count, 3)
 }
 
 function Resolve-HostIPAddress {
@@ -383,6 +426,7 @@ try {
             SafeName             = $null
             AllSafeGroups        = $null
             ExternalDomainGroup  = $null
+            GroupSafeSimilarity  = $null
             GroupManager         = $null
             GroupManagerEmail    = $null
             Notes                = $null
@@ -467,34 +511,51 @@ foreach ($rec in $onboardedRecs) {
     }
     $rec.AllSafeGroups = (($members | ForEach-Object { $_.memberName }) -join '; ')
 
-    $candidates = $members | Where-Object { $_.memberType -eq 'Group' -and ($DefaultSafeGroups -notcontains $_.memberName) }
+    # Candidates = members that are groups and are NOT default groups (exact name or pattern)
+    $candidates = $members | Where-Object { $_.memberType -eq 'Group' -and -not (Test-IsDefaultGroup $_.memberName) }
+
+    # Score each candidate by name resemblance to the safe name, resolve in AD
     $domainGroups = @()
     foreach ($cand in $candidates) {
+        $score = Get-NameSimilarityScore -Name $cand.memberName -Reference $rec.SafeName
         $r = Resolve-DomainGroupAndManager -MemberName $cand.memberName
-        if ($SkipADLookup) {
-            $domainGroups += [pscustomobject]@{ GroupName = $cand.memberName; Manager = $null; ManagerEmail = $null }
-        }
-        elseif ($r.IsDomainGroup) {
-            $domainGroups += [pscustomobject]@{ GroupName = $r.GroupName; Manager = $r.Manager; ManagerEmail = $r.ManagerEmail }
+        $domainGroups += [pscustomobject]@{
+            GroupName    = if ($r.GroupName) { $r.GroupName } else { $cand.memberName }
+            Manager      = $r.Manager
+            ManagerEmail = $r.ManagerEmail
+            InAD         = $r.IsDomainGroup
+            Score        = $score
         }
     }
 
-    if ($domainGroups.Count -eq 0) {
-        $rec.Notes = if ($SkipADLookup) { 'Aucun groupe non-défaut (AD non interrogé)' } else { 'Aucun groupe de domaine externe trouvé sur le safe' }
+    # Keep AD-confirmed domain groups; if none confirmed but candidates exist,
+    # fall back to all candidates (so the safe-name resemblance can still pick one).
+    $confirmed = @($domainGroups | Where-Object { $_.InAD })
+    $pool = if ($SkipADLookup) { $domainGroups }
+    elseif ($confirmed.Count -gt 0) { $confirmed }
+    else { $domainGroups }   # AD ON but nothing confirmed -> probable group via resemblance
+
+    # The external domain group is the one whose name most resembles the safe name
+    $pool = @($pool | Sort-Object -Property Score -Descending)
+
+    if ($pool.Count -eq 0) {
+        $rec.Notes = 'Aucun groupe de domaine externe trouvé sur le safe (hors groupes par défaut)'
     }
     else {
-        $rec.ExternalDomainGroup = ($domainGroups.GroupName -join '; ')
-        $withMgr = $domainGroups | Where-Object { $_.Manager } | Select-Object -First 1
-        if ($withMgr) {
-            $rec.GroupManager = $withMgr.Manager
-            $rec.GroupManagerEmail = $withMgr.ManagerEmail
+        $best = $pool[0]
+        $rec.ExternalDomainGroup = $best.GroupName
+        $rec.GroupSafeSimilarity = $best.Score
+        $rec.GroupManager = $best.Manager
+        $rec.GroupManagerEmail = $best.ManagerEmail
+
+        $notes = @()
+        if (-not $SkipADLookup -and -not $best.InAD) { $notes += 'Groupe probable par ressemblance (non confirmé dans l''AD)' }
+        if (-not $best.Manager -and -not $SkipADLookup -and $best.InAD) { $notes += 'Aucun manager (ManagedBy vide)' }
+        if ($pool.Count -gt 1) {
+            $others = ($pool | Select-Object -Skip 1 | ForEach-Object { "$($_.GroupName) (sim=$($_.Score))" }) -join ', '
+            $notes += "Autres groupes candidats : $others"
         }
-        elseif (-not $SkipADLookup) {
-            $rec.Notes = 'Groupe de domaine trouvé mais aucun manager (ManagedBy vide)'
-        }
-        if ($domainGroups.Count -gt 1) {
-            $rec.Notes = (@($rec.Notes, "Plusieurs groupes de domaine ($($domainGroups.Count)) — vérifier") | Where-Object { $_ }) -join ' | '
-        }
+        if ($notes.Count -gt 0) { $rec.Notes = ($notes -join ' | ') }
     }
 }
 Write-Progress -Activity "Résolution AD" -Completed

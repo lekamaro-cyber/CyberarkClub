@@ -96,7 +96,8 @@ $SkipCertificateCheck = $false
 | `$OutputPath`          | CSV de résultats (le dossier est créé si besoin).                   |
 | `$AccountsExtractPath` | Fichier où l'extrait de tous les comptes CyberArk est sauvegardé.   |
 | `$AddressMatch`        | `Hostname` (défaut), `Exact`, `Contains`.                            |
-| `$DefaultSafeGroups`   | Groupes par défaut à exclure.                                        |
+| `$DefaultSafeGroups`   | Groupes par défaut à exclure (noms exacts).                          |
+| `$DefaultSafeGroupPatterns` | Motifs (wildcards) de groupes par défaut org (`*_PAM_Auth_*`, `PAM_CyberArk_*`...). |
 | `$UsernameColumn` / `$HostColumn` | Colonnes (`'Auto'` = détection).                         |
 | `$CandidateColumn`     | Colonne de candidature CyberArk (`CA_Candidate`).                    |
 | `$CsvDelimiter`        | `'Auto'` (détecte `,`/`;`), sinon `','` ou `';'`.                    |
@@ -145,7 +146,8 @@ Désactivable avec `$SkipIPCheck = $true`.
 | `PlatformId`          | Plateforme du compte.                                     |
 | `SafeName`            | Coffre contenant le compte.                              |
 | `AllSafeGroups`       | Tous les membres/groupes du safe.                       |
-| `ExternalDomainGroup` | Groupe(s) de domaine retenu(s) (hors défaut).           |
+| `ExternalDomainGroup` | Groupe de domaine retenu (le plus ressemblant au nom du safe, hors défaut). |
+| `GroupSafeSimilarity` | Score de ressemblance (0–1) entre ce groupe et le nom du safe. |
 | `GroupManager`        | Manager du groupe (AD `ManagedBy`).                     |
 | `GroupManagerEmail`   | Email du manager.                                        |
 | `Notes`               | Diagnostics (non embarqué, plusieurs groupes, etc.).    |
@@ -154,7 +156,17 @@ Désactivable avec `$SkipIPCheck = $true`.
 
 - **Correspondance host/address** : si vos `address` CyberArk sont des FQDN
   (`anthill.corp.local`) et le CSV des noms courts (`anthill`), gardez `$AddressMatch = 'Hostname'`.
-- **Groupes par défaut** : adaptez `$DefaultSafeGroups` à votre nommage interne.
+- **Groupes par défaut** : adaptez `$DefaultSafeGroups` (noms exacts) **et**
+  `$DefaultSafeGroupPatterns` (motifs) à votre nommage interne. Les groupes
+  d'administration de safe propres à l'org (ex. `FR_GUA_PAM_Auth_Admins`,
+  `FR_GUA_PAM_Auth_Auditors`, `FR_GUA_PAM_Auth_Safe_Managers`, `PAM_CyberArk_Manager`)
+  sont déjà couverts par les motifs fournis.
+- **Sélection du groupe de domaine** : parmi les membres restants (hors défaut),
+  le script retient celui dont le **nom ressemble le plus au nom du safe**
+  (chevauchement de tokens découpés sur `-`/`_`). Exemple : safe
+  `HAR-G-FR-UNX-C-NPR` → groupe `FR-G-GU-HAR-UNX-C-NPR` (similarité ≈ 0,86). Le
+  score est reporté dans `GroupSafeSimilarity`, et les autres candidats listés
+  dans `Notes`.
 - **Manager** : le script lit `ManagedBy` du groupe. Si chez vous le manager est
   porté autrement (ex. attribut `manager` des membres, ou un OU dédié), signalez-le
   et j'adapte la fonction `Resolve-DomainGroupAndManager`.
