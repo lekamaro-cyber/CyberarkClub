@@ -47,8 +47,10 @@ $PvwaUsername = ''                               # ex. 'svc_cyberark_admin' (vid
 $PvwaPassword = ''                               # vide = demande à l'exécution
 
 # --- Fichiers ---
-# CSV d'entrée : couples compte/serveur. Peut être la sortie de extractSudoRootV0.7.ps1.
-$CsvPath    = "$PSScriptRoot\Input\Audit_Privileges_Unix.csv"
+# CSV d'entrée : couples compte/serveur (colonnes inventory,host,username...).
+# Peut aussi être la sortie de extractSudoRootV0.7.ps1 (UserSam,Server,...,CA_Candidate) :
+# les colonnes et le séparateur sont détectés automatiquement.
+$CsvPath    = "$PSScriptRoot\Input\accounts.csv"
 $OutputPath = "$PSScriptRoot\Output\CyberArk-Verification-Results_$(Get-Date -Format 'yyyy-MM').csv"
 
 # --- Source des comptes CyberArk ---

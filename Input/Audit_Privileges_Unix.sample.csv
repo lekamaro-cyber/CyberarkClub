@@ -1,0 +1,6 @@
+UserSam;Server;PasswordStatus;InventoryStatus;Sudo;SudoNoPasswd;PrivGroup;RootEquivalent;FoundInCyberArk;CA_Compliant;CA_ResolvedIP;CA_Candidate
+adminunx;anthill;Password set;Online;YES;NO;wheel;NO;;;;YES
+root;anthill;Password set;Online;NO;NO;;YES;;;;YES
+apache;anthill;Password locked;Online;NO;NO;;NO;;;;NO
+oracle;awx02dev;Password set;Offline;YES;NO;dba;NO;;;;NO
+admJava-ssh;calc01;Alternate authentication;Online;YES;NO;;NO;;;;YES-SSH

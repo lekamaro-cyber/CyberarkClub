@@ -27,7 +27,18 @@ Les colonnes minimales attendues sont `host` et `username` (paramétrables via
 `-HostColumn` / `-UsernameColumn`). Si ces noms sont absents, le script
 **détecte automatiquement** les variantes courantes : `UserSam`/`Server`
 (produites par `extractSudoRootV0.7.ps1`), `userName`/`address`, `NAME_SERVER`, etc.
-Le séparateur (`,` ou `;`) est aussi détecté automatiquement. Exemple : `sample-accounts.csv`.
+Le séparateur (`,` ou `;`) est aussi détecté automatiquement.
+
+Le script lit par défaut `Input\accounts.csv`. Deux exemples sont fournis dans le
+dossier `Input\` :
+
+- **`Input\accounts.csv`** — format inventaire (`inventory,host,username,...`),
+  comme la capture d'origine. C'est l'entrée utilisée par défaut (`$CsvPath`).
+- **`Input\Audit_Privileges_Unix.sample.csv`** — format de sortie de
+  `extractSudoRootV0.7.ps1` (`UserSam;Server;...;CA_Candidate`), pour exploiter
+  la qualification `CA_Candidate`.
+
+Remplacez `Input\accounts.csv` par votre fichier réel (ou changez `$CsvPath`).
 
 | inventory | host       | username   | home dir         | shell     | ... |
 |-----------|------------|------------|------------------|-----------|-----|
