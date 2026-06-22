@@ -173,11 +173,15 @@ Désactivable avec `$SkipIPCheck = $true`.
   `FR_GUA_PAM_Auth_Auditors`, `FR_GUA_PAM_Auth_Safe_Managers`, `PAM_CyberArk_Manager`)
   sont déjà couverts par les motifs fournis.
 - **Sélection du groupe de domaine** : parmi les membres restants (hors défaut),
-  le script retient celui dont le **nom ressemble le plus au nom du safe**
-  (chevauchement de tokens découpés sur `-`/`_`). Exemple : safe
-  `HAR-G-FR-UNX-C-NPR` → groupe `FR-G-GU-HAR-UNX-C-NPR` (similarité ≈ 0,86). Le
-  score est reporté dans `GroupSafeSimilarity`, et les autres candidats listés
-  dans `Notes`.
+  le script applique dans l'ordre :
+  1. **Suffixe commun** (règle prioritaire, `$SafeGroupSuffixLength`, défaut 5) :
+     le groupe dont les N derniers caractères sont identiques à ceux du safe.
+     Ex. safe `HAR-G-FR-UNX-C-NPR` et groupe `FR-G-GU-HAR-UNX-C-NPR` finissent
+     tous deux par `C-NPR`.
+  2. sinon, **ressemblance de nom** (chevauchement de tokens sur `-`/`_`),
+     reportée dans `GroupSafeSimilarity`.
+  Les autres candidats sont listés dans `Notes`. Mettez `$SafeGroupSuffixLength = 0`
+  pour désactiver la règle du suffixe.
 - **Manager** : le script lit `ManagedBy` du groupe. Si chez vous le manager est
   porté autrement (ex. attribut `manager` des membres, ou un OU dédié), signalez-le
   et j'adapte la fonction `Resolve-DomainGroupAndManager`.

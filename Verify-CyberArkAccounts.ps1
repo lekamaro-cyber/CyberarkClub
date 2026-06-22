@@ -68,6 +68,12 @@ $CsvDelimiter    = 'Auto'          # 'Auto' (détecte , ou ;), sinon ',' ou ';'
 # --- Correspondance host <-> address CyberArk ---
 $AddressMatch = 'Hostname'         # 'Hostname' (nom court) | 'Exact' | 'Contains'
 
+# --- Sélection du groupe de domaine sur le safe ---
+# Règle prioritaire : le groupe de domaine partage les N derniers caractères du
+# nom du safe (ex. safe 'HAR-G-FR-UNX-C-NPR' et groupe 'FR-G-GU-HAR-UNX-C-NPR'
+# se terminent tous deux par 'C-NPR'). Mettre 0 pour désactiver cette règle.
+$SafeGroupSuffixLength = 5
+
 # --- Options ---
 $SkipADLookup        = $false      # $true = ne pas interroger l'Active Directory
 $SkipIPCheck         = $false      # $true = ne pas tenter le repli par IP (DNS)
@@ -232,6 +238,17 @@ function Split-NameTokens {
     param([string]$Name)
     if ([string]::IsNullOrWhiteSpace($Name)) { return @() }
     return @($Name -split '[-_\s]+' | Where-Object { $_ } | ForEach-Object { $_.ToLower() })
+}
+
+function Test-SuffixMatch {
+    <#  True if A and B share their last $Len characters (case-insensitive).
+        Ex.: 'HAR-G-FR-UNX-C-NPR' and 'FR-G-GU-HAR-UNX-C-NPR' both end with 'C-NPR'.  #>
+    param([string]$A, [string]$B, [int]$Len)
+    if ($Len -le 0 -or [string]::IsNullOrWhiteSpace($A) -or [string]::IsNullOrWhiteSpace($B)) { return $false }
+    $a = $A.Trim().ToLower()
+    $b = $B.Trim().ToLower()
+    if ($a.Length -lt $Len -or $b.Length -lt $Len) { return ($a -eq $b) }
+    return ($a.Substring($a.Length - $Len) -eq $b.Substring($b.Length - $Len))
 }
 
 function Get-NameSimilarityScore {
@@ -531,9 +548,11 @@ foreach ($rec in $onboardedRecs) {
         -not (Test-IsDefaultGroup $_.memberName) -and ("$($_.memberType)" -ne 'User')
     }
 
-    # Score each candidate by name resemblance to the safe name, resolve in AD
+    # For each candidate: suffix match with the safe name (primary rule),
+    # name-resemblance score (secondary), and AD resolution (manager).
     $domainGroups = @()
     foreach ($cand in $candidates) {
+        $suffix = Test-SuffixMatch -A $cand.memberName -B $rec.SafeName -Len $SafeGroupSuffixLength
         $score = Get-NameSimilarityScore -Name $cand.memberName -Reference $rec.SafeName
         $r = Resolve-DomainGroupAndManager -MemberName $cand.memberName
         $domainGroups += [pscustomobject]@{
@@ -542,18 +561,25 @@ foreach ($rec in $onboardedRecs) {
             ManagerEmail = $r.ManagerEmail
             InAD         = $r.IsDomainGroup
             Score        = $score
+            SuffixMatch  = $suffix
         }
     }
 
-    # Keep AD-confirmed domain groups; if none confirmed but candidates exist,
-    # fall back to all candidates (so the safe-name resemblance can still pick one).
-    $confirmed = @($domainGroups | Where-Object { $_.InAD })
-    $pool = if ($SkipADLookup) { $domainGroups }
-    elseif ($confirmed.Count -gt 0) { $confirmed }
-    else { $domainGroups }   # AD ON but nothing confirmed -> probable group via resemblance
-
-    # The external domain group is the one whose name most resembles the safe name
-    $pool = @($pool | Sort-Object -Property Score -Descending)
+    # Selection priority:
+    #  1) groups sharing the safe's last N characters (deterministic rule)
+    #  2) otherwise AD-confirmed groups, ranked by name resemblance
+    #  3) otherwise any candidate, ranked by name resemblance
+    $suffixMatches = @($domainGroups | Where-Object { $_.SuffixMatch } | Sort-Object -Property Score -Descending)
+    if ($suffixMatches.Count -gt 0) {
+        $pool = $suffixMatches
+    }
+    else {
+        $confirmed = @($domainGroups | Where-Object { $_.InAD })
+        $pool = if ($SkipADLookup) { $domainGroups }
+        elseif ($confirmed.Count -gt 0) { $confirmed }
+        else { $domainGroups }
+        $pool = @($pool | Sort-Object -Property Score -Descending)
+    }
 
     if ($pool.Count -eq 0) {
         $rec.Notes = 'Aucun groupe de domaine externe trouvé sur le safe (hors groupes par défaut)'
@@ -566,7 +592,8 @@ foreach ($rec in $onboardedRecs) {
         $rec.GroupManagerEmail = $best.ManagerEmail
 
         $notes = @()
-        if (-not $SkipADLookup -and -not $best.InAD) { $notes += 'Groupe probable par ressemblance (non confirmé dans l''AD)' }
+        if ($best.SuffixMatch) { $notes += "Sélectionné par suffixe commun avec le safe ($SafeGroupSuffixLength derniers car.)" }
+        elseif (-not $SkipADLookup -and -not $best.InAD) { $notes += 'Groupe probable par ressemblance (non confirmé dans l''AD)' }
         if (-not $best.Manager -and -not $SkipADLookup -and $best.InAD) { $notes += 'Aucun manager (ManagedBy vide)' }
         if ($pool.Count -gt 1) {
             $others = ($pool | Select-Object -Skip 1 | ForEach-Object { "$($_.GroupName) (sim=$($_.Score))" }) -join ', '
