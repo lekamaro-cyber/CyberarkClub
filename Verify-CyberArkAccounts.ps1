@@ -1,65 +1,65 @@
 <#
 .SYNOPSIS
-    Vérifie qu'une liste de couples (compte / serveur) issue d'un CSV est bien
-    embarquée (onboarded) dans CyberArk, puis récupère pour chaque compte :
-      - son Safe
-      - la liste de tous les groupes/membres (permissions) du Safe
-      - le groupe de domaine "externe" (hors groupes par défaut)
-      - le manager de ce groupe de domaine, lu dans l'Active Directory.
+    Verifies that a list of (account / server) pairs from a CSV is properly
+    onboarded in CyberArk, then for each account retrieves:
+      - its Safe
+      - the list of all groups/members (permissions) of the Safe
+      - the "external" domain group (excluding default groups)
+      - the manager of that domain group, read from Active Directory.
 
 .DESCRIPTION
-    S'appuie sur l'API REST du PVWA CyberArk (logon -> recherche de comptes ->
-    membres du safe -> logoff) et sur le module ActiveDirectory (RSAT) pour la
-    résolution des groupes de domaine et de leur manager (attribut ManagedBy).
+    Relies on the CyberArk PVWA REST API (logon -> account search ->
+    safe members -> logoff) and on the ActiveDirectory module (RSAT) to
+    resolve domain groups and their manager (ManagedBy attribute).
 
-    Le couple recherché est :
-        username (colonne CSV)  ==  userName du compte CyberArk
-        host     (colonne CSV)  ==  address  du compte CyberArk (match souple)
+    The searched pair is:
+        username (CSV column)  ==  userName of the CyberArk account
+        host     (CSV column)  ==  address  of the CyberArk account (loose match)
 
 .PARAMETER PvwaUrl
-    URL de base du PVWA, ex : https://pvwa.mondomaine.local
+    PVWA base URL, e.g. https://pvwa.mydomain.local
 
 .PARAMETER CsvPath
-    Chemin du CSV source (doit contenir au minimum les colonnes 'host' et 'username').
+    Path to the source CSV (must contain at least the 'host' and 'username' columns).
 
 .PARAMETER OutputPath
-    Chemin du CSV de résultats. Défaut : .\CyberArk-Verification-Results.csv
+    Path to the results CSV. Default: .\CyberArk-Verification-Results.csv
 
 .PARAMETER Credential
-    Identifiants pour le logon PVWA. Si absent, le script les demande.
+    Credentials for the PVWA logon. If omitted, the script prompts for them.
 
 .PARAMETER AuthType
-    Méthode d'authentification PVWA : CyberArk | LDAP | RADIUS. Défaut : CyberArk
+    PVWA authentication method: CyberArk | LDAP | RADIUS. Default: CyberArk
 
 .PARAMETER UsernameColumn / HostColumn
-    Noms des colonnes du CSV. Défauts : 'username' et 'host'.
+    CSV column names. Defaults: 'username' and 'host'.
 
 .PARAMETER AddressMatch
-    Stratégie de correspondance entre 'host' (CSV) et 'address' (CyberArk) :
+    Matching strategy between 'host' (CSV) and 'address' (CyberArk):
       Exact   : address == host
-      Hostname: le 1er label de l'address (avant le 1er '.') == host  (défaut)
-      Contains: address contient host
+      Hostname: the first label of the address (before the first '.') == host  (default)
+      Contains: address contains host
 
 .PARAMETER DefaultSafeGroups
-    Liste des groupes/membres par défaut à exclure pour isoler le groupe externe.
+    List of default groups/members to exclude in order to isolate the external group.
 
 .PARAMETER SkipADLookup
-    N'effectue pas les requêtes AD (utile pour tester hors d'un poste joint au domaine).
+    Skips AD queries (useful for testing off a domain-joined machine).
 
 .PARAMETER SkipIPCheck
-    Désactive le repli (fallback) par IP : par défaut, lorsqu'un compte n'est pas
-    trouvé par son nom d'hôte, le script résout le 'host' en IP via DNS et relance
-    la recherche dans CyberArk avec cette/ces IP (cas des comptes embarqués par IP).
+    Disables the IP fallback: by default, when an account is not found by its
+    hostname, the script resolves the 'host' to an IP via DNS and re-runs the
+    search in CyberArk with that/those IP(s) (case of accounts onboarded by IP).
 
 .PARAMETER SkipCertificateCheck
-    Ignore la validation du certificat TLS du PVWA (labos / certs auto-signés).
+    Ignores the PVWA TLS certificate validation (labs / self-signed certs).
 
 .EXAMPLE
-    .\Verify-CyberArkAccounts.ps1 -PvwaUrl https://pvwa.corp.local -CsvPath .\comptes.csv
+    .\Verify-CyberArkAccounts.ps1 -PvwaUrl https://pvwa.corp.local -CsvPath .\accounts.csv
 
 .NOTES
-    Nécessite PowerShell 5.1+ . Le module ActiveDirectory n'est requis que si
-    -SkipADLookup n'est pas utilisé.
+    Requires PowerShell 5.1+ . The ActiveDirectory module is only required when
+    -SkipADLookup is not used.
 #>
 
 [CmdletBinding()]
@@ -99,10 +99,10 @@ param(
     [switch]$SkipCertificateCheck
 )
 
-#region ----------------------------------------------------------- Pré-requis & TLS
+#region ----------------------------------------------------------- Prerequisites & TLS
 $ErrorActionPreference = 'Stop'
 
-# Force TLS 1.2 (PVWA refuse souvent les protocoles plus anciens)
+# Force TLS 1.2 (PVWA often rejects older protocols)
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 
 if ($SkipCertificateCheck) {
@@ -139,7 +139,7 @@ if (-not $SkipADLookup) {
 }
 #endregion
 
-#region ----------------------------------------------------------- Fonctions CyberArk
+#region ----------------------------------------------------------- CyberArk functions
 function Invoke-PvwaLogon {
     param([pscredential]$Cred, [string]$Type)
 
@@ -150,9 +150,9 @@ function Invoke-PvwaLogon {
         concurrentSession = $true
     } | ConvertTo-Json
 
-    Write-Verbose "Logon sur $url (AuthType=$Type)"
+    Write-Verbose "Logon on $url (AuthType=$Type)"
     $token = Invoke-RestMethod -Uri $url -Method Post -Body $body -ContentType 'application/json' @script:IrmExtra
-    # Le token renvoyé est une chaîne (parfois entre guillemets) à mettre dans Authorization
+    # The returned token is a string (sometimes quoted) to put in the Authorization header
     return ($token -replace '"', '')
 }
 
@@ -166,7 +166,7 @@ function Invoke-PvwaLogoff {
 }
 
 function Get-PvwaAccounts {
-    <#  Recherche paginée des comptes correspondant à un mot-clé.  #>
+    <#  Paginated search of accounts matching a keyword.  #>
     param([string]$Token, [string]$Search)
 
     $headers = @{ Authorization = $Token }
@@ -196,7 +196,7 @@ function Get-PvwaSafeMembers {
 }
 #endregion
 
-#region ----------------------------------------------------------- Helpers de correspondance
+#region ----------------------------------------------------------- Matching helpers
 function Test-AddressMatch {
     param([string]$Address, [string]$HostValue, [string]$Strategy)
     if ([string]::IsNullOrWhiteSpace($Address) -or [string]::IsNullOrWhiteSpace($HostValue)) { return $false }
@@ -215,12 +215,12 @@ function Test-AddressMatch {
 }
 
 function Resolve-HostIPAddress {
-    <#  Résout un nom d'hôte en adresse(s) IPv4 via DNS. Renvoie un tableau (vide si échec).  #>
+    <#  Resolves a hostname to its IPv4 address(es) via DNS. Returns an array (empty on failure).  #>
     param([string]$HostValue)
 
     if ([string]::IsNullOrWhiteSpace($HostValue)) { return @() }
 
-    # Si le host est déjà une IP, on la renvoie telle quelle
+    # If the host is already an IP, return it as-is
     $parsed = $null
     if ([System.Net.IPAddress]::TryParse($HostValue, [ref]$parsed)) { return @($HostValue) }
 
@@ -232,15 +232,15 @@ function Resolve-HostIPAddress {
         return @($ips | Select-Object -Unique)
     }
     catch {
-        Write-Verbose "Résolution DNS impossible pour '$HostValue' : $($_.Exception.Message)"
+        Write-Verbose "DNS resolution failed for '$HostValue': $($_.Exception.Message)"
         return @()
     }
 }
 
 function Resolve-DomainGroupAndManager {
     <#
-        Pour un nom de membre de safe (potentiellement un groupe de domaine),
-        tente de le résoudre dans l'AD et renvoie le manager (ManagedBy).
+        For a safe member name (potentially a domain group), tries to resolve it
+        in AD and returns the manager (ManagedBy).
     #>
     param([string]$MemberName)
 
@@ -254,7 +254,7 @@ function Resolve-DomainGroupAndManager {
 
     if ($SkipADLookup) { return $result }
 
-    # Le nom peut être "DOMAIN\Groupe", "Groupe@domaine" ou "Groupe"
+    # The name may be "DOMAIN\Group", "Group@domain" or "Group"
     $name = $MemberName
     if ($name -match '\\') { $name = $name.Split('\')[-1] }
     if ($name -match '@') { $name = $name.Split('@')[0] }
@@ -269,7 +269,7 @@ function Resolve-DomainGroupAndManager {
         catch { $grp = $null }
     }
 
-    if (-not $grp) { return $result }   # introuvable dans l'AD => pas un groupe de domaine
+    if (-not $grp) { return $result }   # not found in AD => not a domain group
 
     $result.IsDomainGroup = $true
     $result.GroupName = $grp.Name
@@ -281,14 +281,14 @@ function Resolve-DomainGroupAndManager {
             $result.ManagerEmail = $mgr.mail
             $result.ManagerSource = 'Group.ManagedBy'
         }
-        catch { Write-Verbose "ManagedBy non résolu pour $name : $($_.Exception.Message)" }
+        catch { Write-Verbose "ManagedBy not resolved for $name : $($_.Exception.Message)" }
     }
 
     return $result
 }
 #endregion
 
-#region ----------------------------------------------------------- Programme principal
+#region ----------------------------------------------------------- Main program
 if (-not (Test-Path -LiteralPath $CsvPath)) { throw "CSV introuvable : $CsvPath" }
 if (-not $Credential) { $Credential = Get-Credential -Message "Identifiants CyberArk PVWA ($AuthType)" }
 
@@ -304,7 +304,7 @@ $token = Invoke-PvwaLogon -Cred $Credential -Type $AuthType
 Write-Host "Connecté. Traitement de $($rows.Count) ligne(s)." -ForegroundColor Green
 
 $results = New-Object System.Collections.Generic.List[object]
-$safeMembersCache = @{}   # évite de re-listter les membres d'un même safe
+$safeMembersCache = @{}   # avoids re-listing the members of a same safe
 $i = 0
 
 try {
@@ -337,7 +337,7 @@ try {
             $results.Add([pscustomobject]$rec); continue
         }
 
-        # --- 1) Recherche du compte dans CyberArk ---
+        # --- 1) Search for the account in CyberArk ---
         try {
             $found = Get-PvwaAccounts -Token $token -Search "$username $hostName"
         }
@@ -353,13 +353,13 @@ try {
 
         if ($match) { $rec.MatchType = 'Hostname' }
 
-        # --- 1bis) Repli par IP : si non trouvé par nom d'hôte, on résout le host en IP ---
+        # --- 1b) IP fallback: if not found by hostname, resolve the host to an IP ---
         if (-not $match -and -not $SkipIPCheck) {
             $ips = Resolve-HostIPAddress -HostValue $hostName
             if ($ips.Count -gt 0) {
                 $rec.ResolvedIP = ($ips -join '; ')
                 foreach ($ip in $ips) {
-                    # On recherche d'abord parmi les comptes déjà remontés, puis via une requête dédiée par IP
+                    # First look among the already-returned accounts, then via a dedicated search by IP
                     $match = $found | Where-Object {
                         $_.userName -and ($_.userName.ToLower() -eq $username.ToLower()) -and ($_.address -eq $ip)
                     } | Select-Object -First 1
@@ -390,7 +390,7 @@ try {
         $rec.PlatformId = $match.platformId
         $rec.SafeName = $match.safeName
 
-        # --- 2) Membres / groupes du safe ---
+        # --- 2) Safe members / groups ---
         $safe = $match.safeName
         if (-not $safeMembersCache.ContainsKey($safe)) {
             try { $safeMembersCache[$safe] = Get-PvwaSafeMembers -Token $token -SafeName $safe }
@@ -404,17 +404,17 @@ try {
 
         $rec.AllSafeGroups = (($members | ForEach-Object { $_.memberName }) -join '; ')
 
-        # --- 3) Candidats = groupes non par défaut ---
+        # --- 3) Candidates = non-default groups ---
         $candidates = $members | Where-Object {
             $_.memberType -eq 'Group' -and ($DefaultSafeGroups -notcontains $_.memberName)
         }
 
-        # --- 4) Résolution AD : on garde les groupes réellement présents dans le domaine ---
+        # --- 4) AD resolution: keep only the groups actually present in the domain ---
         $domainGroups = @()
         foreach ($cand in $candidates) {
             $r = Resolve-DomainGroupAndManager -MemberName $cand.memberName
             if ($SkipADLookup) {
-                # Sans AD on ne peut pas certifier le domaine : on retient le candidat tel quel
+                # Without AD we cannot certify the domain: keep the candidate as-is
                 $domainGroups += [pscustomobject]@{ GroupName = $cand.memberName; Manager = $null; ManagerEmail = $null }
             }
             elseif ($r.IsDomainGroup) {
