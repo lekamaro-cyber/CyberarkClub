@@ -32,7 +32,15 @@
     PVWA authentication method: CyberArk | LDAP | RADIUS. Default: CyberArk
 
 .PARAMETER UsernameColumn / HostColumn
-    CSV column names. Defaults: 'username' and 'host'.
+    CSV column names. Defaults: 'username' and 'host'. If those are absent, the
+    script auto-detects common alternatives (e.g. 'UserSam'/'Server' produced by
+    extractSudoRootV0.7.ps1, or 'userName'/'address').
+
+.PARAMETER CandidateColumn
+    Name of the column holding the CyberArk onboarding candidacy (CA_Candidate
+    from extractSudoRootV0.7.ps1). When this column exists, a non-onboarded
+    account is reported as a real anomaly only when CA_Candidate is YES/YES-SSH;
+    a value of NO means "not onboarded is expected" (no privilege / offline host).
 
 .PARAMETER AddressMatch
     Matching strategy between 'host' (CSV) and 'address' (CyberArk):
@@ -79,6 +87,10 @@ param(
 
     [string]$UsernameColumn = 'username',
     [string]$HostColumn = 'host',
+
+    # Column carrying the CyberArk onboarding candidacy (produced by extractSudoRootV0.7.ps1).
+    # When present, a non-onboarded account is only flagged as an anomaly if its value is YES/YES-SSH.
+    [string]$CandidateColumn = 'CA_Candidate',
 
     [ValidateSet('Exact', 'Hostname', 'Contains')]
     [string]$AddressMatch = 'Hostname',
@@ -292,12 +304,31 @@ function Resolve-DomainGroupAndManager {
 if (-not (Test-Path -LiteralPath $CsvPath)) { throw "CSV introuvable : $CsvPath" }
 if (-not $Credential) { $Credential = Get-Credential -Message "Identifiants CyberArk PVWA ($AuthType)" }
 
+# Auto-detect the delimiter from the header (extractSudoRoot output uses ';')
+if (-not $PSBoundParameters.ContainsKey('CsvDelimiter')) {
+    $headerLine = Get-Content -LiteralPath $CsvPath -TotalCount 1
+    if ($headerLine -match ';') { $CsvDelimiter = ';' }
+}
+
 $rows = Import-Csv -LiteralPath $CsvPath -Delimiter $CsvDelimiter
 if ($rows.Count -eq 0) { throw "Le CSV ne contient aucune ligne." }
 $cols = $rows[0].PSObject.Properties.Name
-foreach ($c in @($UsernameColumn, $HostColumn)) {
-    if ($cols -notcontains $c) { throw "Colonne '$c' absente du CSV. Colonnes trouvées : $($cols -join ', ')" }
+
+# Resolve the username/host columns: use the requested names if present,
+# otherwise fall back to known alternatives (extractSudoRoot, CyberArk export...)
+function Resolve-Column {
+    param([string]$Requested, [string[]]$Fallbacks, [string[]]$Available)
+    if ($Available -contains $Requested) { return $Requested }
+    foreach ($f in $Fallbacks) { if ($Available -contains $f) { return $f } }
+    return $null
 }
+$UsernameColumn = Resolve-Column -Requested $UsernameColumn -Fallbacks @('UserSam', 'userName', 'user', 'Nom de l''utilisateur') -Available $cols
+$HostColumn = Resolve-Column -Requested $HostColumn -Fallbacks @('Server', 'address', 'host', 'NAME_SERVER', 'Adresse') -Available $cols
+if (-not $UsernameColumn -or -not $HostColumn) {
+    throw "Impossible de trouver les colonnes username/host dans le CSV. Colonnes trouvées : $($cols -join ', ')"
+}
+$HasCandidate = ($cols -contains $CandidateColumn)
+Write-Host "Colonnes utilisées : username='$UsernameColumn', host='$HostColumn'$(if ($HasCandidate) { ", candidat='$CandidateColumn'" })" -ForegroundColor DarkCyan
 
 Write-Host "Connexion au PVWA $PvwaUrl ..." -ForegroundColor Cyan
 $token = Invoke-PvwaLogon -Cred $Credential -Type $AuthType
@@ -312,14 +343,17 @@ try {
         $i++
         $username = "$($row.$UsernameColumn)".Trim()
         $hostName = "$($row.$HostColumn)".Trim()
+        $candidate = if ($HasCandidate) { "$($row.$CandidateColumn)".Trim() } else { $null }
         Write-Progress -Activity "Vérification CyberArk" -Status "$i/$($rows.Count) : $username@$hostName" -PercentComplete (($i / $rows.Count) * 100)
 
         $rec = [ordered]@{
-            Inventory           = $row.inventory
-            Host                = $hostName
-            Username            = $username
-            Onboarded           = 'No'
-            MatchType           = $null
+            Inventory            = $row.inventory
+            Host                 = $hostName
+            Username             = $username
+            CA_Candidate         = $candidate
+            Onboarded            = 'No'
+            OnboardingAssessment = $null
+            MatchType            = $null
             ResolvedIP          = $null
             AccountName         = $null
             AccountAddress      = $null
@@ -381,10 +415,18 @@ try {
 
         if (-not $match) {
             $rec.Notes = 'Compte non embarqué (aucune correspondance username+address, ni par nom ni par IP)'
+            # Qualify the "not onboarded" result using CA_Candidate (extractSudoRoot)
+            switch -Regex ($candidate) {
+                '^(?i)YES'             { $rec.OnboardingAssessment = 'ANOMALIE - candidat CyberArk non embarqué' }
+                '^(?i)CHECK-INVENTORY' { $rec.OnboardingAssessment = 'À vérifier - statut inventaire inconnu' }
+                '^(?i)NO$'             { $rec.OnboardingAssessment = 'Normal - non candidat (pas de privilège / hors ligne)' }
+                default                { $rec.OnboardingAssessment = if ($HasCandidate) { 'Non candidat (valeur CA_Candidate vide)' } else { 'Non évalué (colonne CA_Candidate absente)' } }
+            }
             $results.Add([pscustomobject]$rec); continue
         }
 
         $rec.Onboarded = 'Yes'
+        $rec.OnboardingAssessment = if ($candidate -match '^(?i)NO$') { 'Embarqué (alors que non candidat - à confirmer)' } else { 'OK - embarqué' }
         $rec.AccountName = $match.name
         $rec.AccountAddress = $match.address
         $rec.PlatformId = $match.platformId
@@ -452,10 +494,16 @@ finally {
 $results | Export-Csv -LiteralPath $OutputPath -NoTypeInformation -Encoding UTF8 -Delimiter $CsvDelimiter
 
 $onb = ($results | Where-Object { $_.Onboarded -eq 'Yes' }).Count
+$anomalies = ($results | Where-Object { $_.OnboardingAssessment -like 'ANOMALIE*' }).Count
+$normalMissing = ($results | Where-Object { $_.OnboardingAssessment -like 'Normal*' }).Count
 Write-Host ""
 Write-Host "===== Synthèse =====" -ForegroundColor Yellow
-Write-Host "Lignes traitées      : $($results.Count)"
-Write-Host "Comptes embarqués    : $onb"
-Write-Host "Non embarqués        : $($results.Count - $onb)"
-Write-Host "Résultats écrits dans : $OutputPath" -ForegroundColor Green
+Write-Host "Lignes traitées               : $($results.Count)"
+Write-Host "Comptes embarqués             : $onb"
+Write-Host "Non embarqués                 : $($results.Count - $onb)"
+if ($HasCandidate) {
+    Write-Host "  -> ANOMALIES (candidat non embarqué) : $anomalies" -ForegroundColor Red
+    Write-Host "  -> Normal (non candidat)             : $normalMissing" -ForegroundColor Gray
+}
+Write-Host "Résultats écrits dans         : $OutputPath" -ForegroundColor Green
 #endregion

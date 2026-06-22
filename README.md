@@ -24,12 +24,37 @@ Le tout est exporté dans un CSV de résultats.
 ## Format du CSV d'entrée
 
 Les colonnes minimales attendues sont `host` et `username` (paramétrables via
-`-HostColumn` / `-UsernameColumn`). Exemple fourni : `sample-accounts.csv`.
+`-HostColumn` / `-UsernameColumn`). Si ces noms sont absents, le script
+**détecte automatiquement** les variantes courantes : `UserSam`/`Server`
+(produites par `extractSudoRootV0.7.ps1`), `userName`/`address`, `NAME_SERVER`, etc.
+Le séparateur (`,` ou `;`) est aussi détecté automatiquement. Exemple : `sample-accounts.csv`.
 
 | inventory | host       | username   | home dir         | shell     | ... |
 |-----------|------------|------------|------------------|-----------|-----|
 | dev       | anthill    | adminunx   | /home/adminunx   | /bin/bash | ... |
 | dev       | awx01dev   | root       | /root            | /bin/bash | ... |
+
+### Enchaînement avec `extractSudoRootV0.7.ps1` (CA_Candidate)
+
+Le script `extractSudoRootV0.7.ps1` (branche `claude/review-code-improvements-eZpQ5`)
+produit un audit mensuel `Audit_Privileges_Unix_AAAA-MM.csv` (séparateur `;`) qui
+contient, pour chaque couple `UserSam`/`Server`, une colonne **`CA_Candidate`**
+(`YES` / `YES-SSH` / `NO` / `CHECK-INVENTORY`).
+
+Vous pouvez passer **directement ce fichier** en entrée de `Verify-CyberArkAccounts.ps1`.
+Le script lit alors `CA_Candidate` et **qualifie** chaque compte non embarqué :
+
+- `CA_Candidate = YES`/`YES-SSH` mais non embarqué → **ANOMALIE** (devrait être dans CyberArk).
+- `CA_Candidate = NO` et non embarqué → **Normal** (pas de privilège / serveur hors ligne).
+- `CA_Candidate = CHECK-INVENTORY` → **À vérifier** (statut inventaire inconnu).
+
+```powershell
+# Pipeline complet : on part de la sortie de extractSudoRoot
+.\Verify-CyberArkAccounts.ps1 `
+    -PvwaUrl https://oneconnection.intra.corp `
+    -CsvPath .\output\Audit_Privileges_Unix_2026-06.csv `
+    -AuthType LDAP
+```
 
 ## Utilisation
 
@@ -63,8 +88,9 @@ $cred = Get-Credential
 | `-AuthType`            | `CyberArk` (défaut) / `LDAP` / `RADIUS`.                             |
 | `-AddressMatch`        | `Hostname` (défaut, compare le hostname court), `Exact`, `Contains`. |
 | `-DefaultSafeGroups`   | Liste des groupes par défaut à exclure (surchargeable).             |
-| `-HostColumn` / `-UsernameColumn` | Noms des colonnes du CSV.                                 |
-| `-CsvDelimiter`        | Séparateur du CSV (`,` par défaut ; mettre `;` si Excel FR).          |
+| `-HostColumn` / `-UsernameColumn` | Noms des colonnes du CSV (auto-détectés sinon).           |
+| `-CandidateColumn`     | Colonne de candidature CyberArk (`CA_Candidate` par défaut).         |
+| `-CsvDelimiter`        | Séparateur du CSV (auto-détecté `,`/`;` sinon).                      |
 | `-SkipADLookup`        | Désactive la partie Active Directory.                               |
 | `-SkipIPCheck`         | Désactive le repli par IP (voir ci-dessous).                       |
 | `-SkipCertificateCheck`| Ignore la validation TLS du PVWA.                                  |
@@ -83,7 +109,9 @@ Désactivable avec `-SkipIPCheck`.
 | Colonne               | Description                                                |
 |-----------------------|------------------------------------------------------------|
 | `Inventory/Host/Username` | Rappel de la ligne source.                             |
+| `CA_Candidate`        | Valeur reprise du fichier d'entrée (si présente).         |
 | `Onboarded`           | `Yes` / `No` — compte trouvé dans CyberArk.               |
+| `OnboardingAssessment`| Verdict croisé : `OK - embarqué`, `ANOMALIE - candidat non embarqué`, `Normal - non candidat`, `À vérifier`, etc. |
 | `MatchType`           | `Hostname` ou `IP (x.x.x.x)` selon le mode de correspondance. |
 | `ResolvedIP`          | IP(s) résolue(s) par DNS lors du repli (ou `non résolu`). |
 | `AccountName`         | Nom de l'objet compte CyberArk.                           |
