@@ -370,6 +370,7 @@ Write-Host "Colonnes utilisées : username='$UsernameColumn', host='$HostColumn'
 
 $results     = New-Object System.Collections.Generic.List[object]
 $safeMembersCache = @{}
+$safeMembersError = @{}
 $neededSafes = New-Object 'System.Collections.Generic.HashSet[string]'
 $token = $null
 
@@ -488,8 +489,16 @@ try {
     foreach ($safe in $neededSafes) {
         $sN++
         Write-Progress -Activity "Lecture des membres des safes" -Status "$sN/$($neededSafes.Count) : $safe" -PercentComplete (($sN / [Math]::Max(1, $neededSafes.Count)) * 100)
-        try { $safeMembersCache[$safe] = Get-PvwaSafeMembers -Token $token -SafeName $safe }
-        catch { $safeMembersCache[$safe] = $null }
+        try {
+            $m = Get-PvwaSafeMembers -Token $token -SafeName $safe
+            $safeMembersCache[$safe] = $m
+            Write-Host "    [$safe] $(@($m).Count) membre(s)" -ForegroundColor Gray
+        }
+        catch {
+            $safeMembersCache[$safe] = $null
+            $safeMembersError[$safe] = $_.Exception.Message
+            Write-Warning "    [$safe] erreur lecture membres : $($_.Exception.Message)"
+        }
     }
     Write-Progress -Activity "Lecture des membres des safes" -Completed
 }
@@ -508,13 +517,19 @@ foreach ($rec in $onboardedRecs) {
     Write-Progress -Activity "Résolution AD" -Status "$j/$($onboardedRecs.Count) : $($rec.SafeName)" -PercentComplete (($j / [Math]::Max(1, $onboardedRecs.Count)) * 100)
     $members = $safeMembersCache[$rec.SafeName]
     if (-not $members) {
-        if (-not $rec.Notes) { $rec.Notes = 'Aucun membre retourné pour le safe' }
+        $reason = if ($safeMembersError.ContainsKey($rec.SafeName)) { $safeMembersError[$rec.SafeName] } else { 'aucun membre retourné par l''API' }
+        $rec.Notes = "Membres du safe indisponibles : $reason"
         continue
     }
-    $rec.AllSafeGroups = (($members | ForEach-Object { $_.memberName }) -join '; ')
+    # List every member with its type, for traceability/diagnostic
+    $rec.AllSafeGroups = (($members | ForEach-Object { "$($_.memberName)[$($_.memberType)]" }) -join '; ')
 
-    # Candidates = members that are groups and are NOT default groups (exact name or pattern)
-    $candidates = $members | Where-Object { $_.memberType -eq 'Group' -and -not (Test-IsDefaultGroup $_.memberName) }
+    # Candidates = members that are NOT default groups and NOT plain users.
+    # (We do not strictly require memberType='Group' so a domain group is never missed
+    #  if the API labels it differently; we only drop members explicitly typed 'User'.)
+    $candidates = $members | Where-Object {
+        -not (Test-IsDefaultGroup $_.memberName) -and ("$($_.memberType)" -ne 'User')
+    }
 
     # Score each candidate by name resemblance to the safe name, resolve in AD
     $domainGroups = @()
