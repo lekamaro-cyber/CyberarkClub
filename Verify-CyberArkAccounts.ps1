@@ -78,6 +78,7 @@ $SafeGroupSuffixLength = 5
 $SkipADLookup        = $false      # $true = ne pas interroger l'Active Directory
 $SkipIPCheck         = $false      # $true = ne pas tenter le repli par IP (DNS)
 $SkipCertificateCheck = $false     # $true = ignorer la validation TLS du PVWA
+$DebugMode           = $false      # $true = afficher le détail (membres, candidats, choix) par compte
 
 # --- Groupes par défaut du safe à exclure pour isoler le groupe de domaine externe ---
 # Noms exacts :
@@ -536,6 +537,7 @@ foreach ($rec in $onboardedRecs) {
     if (-not $members) {
         $reason = if ($safeMembersError.ContainsKey($rec.SafeName)) { $safeMembersError[$rec.SafeName] } else { 'aucun membre retourné par l''API' }
         $rec.Notes = "Membres du safe indisponibles : $reason"
+        if ($DebugMode) { Write-Host "[DEBUG] $($rec.Username)@$($rec.Host) -> safe '$($rec.SafeName)' : MEMBRES INDISPONIBLES ($reason)" -ForegroundColor Red }
         continue
     }
     # List every member with its type, for traceability/diagnostic
@@ -546,6 +548,12 @@ foreach ($rec in $onboardedRecs) {
     #  if the API labels it differently; we only drop members explicitly typed 'User'.)
     $candidates = $members | Where-Object {
         -not (Test-IsDefaultGroup $_.memberName) -and ("$($_.memberType)" -ne 'User')
+    }
+
+    if ($DebugMode) {
+        Write-Host "[DEBUG] $($rec.Username)@$($rec.Host) -> safe '$($rec.SafeName)' : $(@($members).Count) membre(s)" -ForegroundColor Magenta
+        Write-Host "[DEBUG]   membres   : $($rec.AllSafeGroups)" -ForegroundColor DarkGray
+        Write-Host "[DEBUG]   candidats : $((@($candidates) | ForEach-Object { $_.memberName }) -join ', ')" -ForegroundColor DarkGray
     }
 
     # For each candidate: suffix match with the safe name (primary rule),
@@ -590,6 +598,7 @@ foreach ($rec in $onboardedRecs) {
         $rec.GroupSafeSimilarity = $best.Score
         $rec.GroupManager = $best.Manager
         $rec.GroupManagerEmail = $best.ManagerEmail
+        if ($DebugMode) { Write-Host "[DEBUG]   choisi    : $($best.GroupName) (suffix=$($best.SuffixMatch), sim=$($best.Score), AD=$($best.InAD), manager=$($best.Manager))" -ForegroundColor Green }
 
         $notes = @()
         if ($best.SuffixMatch) { $notes += "Sélectionné par suffixe commun avec le safe ($SafeGroupSuffixLength derniers car.)" }
