@@ -9,8 +9,8 @@
 
 .DESCRIPTION
     Relies on the CyberArk PVWA REST API (logon -> account search ->
-    safe members -> logoff) and on the ActiveDirectory module (RSAT) to
-    resolve domain groups and their manager (ManagedBy attribute).
+    safe members -> logoff) and on ADSI (System.DirectoryServices) to resolve
+    domain groups and their manager (ManagedBy attribute). ADSI needs NO RSAT module.
 
     The searched pair is:
         username (CSV column)  ==  userName of the CyberArk account
@@ -27,8 +27,8 @@
     YES/YES-SSH) or expected (NO = no privilege / offline host).
 
 .NOTES
-    Requires PowerShell 5.1+ . The ActiveDirectory module is only required when
-    $SkipADLookup is left to $false.
+    Requires PowerShell 5.1+ . AD resolution uses ADSI (no RSAT module needed);
+    it only runs when $SkipADLookup is left to $false.
 #>
 
 # =====================================================================================
@@ -151,15 +151,9 @@ else {
 $PvwaUrl = $PvwaUrl.TrimEnd('/')
 $ApiBase = "$PvwaUrl/PasswordVault/api"
 
-if (-not $SkipADLookup) {
-    if (-not (Get-Module -ListAvailable -Name ActiveDirectory)) {
-        Write-Warning "ActiveDirectory module not found. AD resolution will be disabled (set `$SkipADLookup = `$true to hide this warning)."
-        $SkipADLookup = $true
-    }
-    else {
-        Import-Module ActiveDirectory -ErrorAction SilentlyContinue
-    }
-}
+# Active Directory access uses ADSI (System.DirectoryServices), which does NOT
+# require the RSAT ActiveDirectory module. It works on any domain-joined host,
+# including hardened PAM servers. AD is only used when $SkipADLookup is $false.
 #endregion
 
 #region ----------------------------------------------------------- CyberArk functions
@@ -228,28 +222,45 @@ $script:GroupMap = @{}     # group name / sAMAccountName -> { GroupName; Managed
 $script:MgrCache = @{}     # manager DN -> { Name; Email }
 $script:GroupMapBuilt = $false
 
-function Get-AdServerParam {
-    <#  Returns a splattable @{Server=...} when a DC or domain is configured, else @{}.  #>
-    if ($AdServer) { return @{ Server = $AdServer } }
-    if ($AdDomain) { return @{ Server = $AdDomain } }
-    return @{}
+function Get-AdSearchRoot {
+    <#  Returns a System.DirectoryServices.DirectoryEntry for the search root:
+        the given DN if provided, otherwise the domain root (from $AdDomain or RootDSE).
+        Honors $AdServer / $AdDomain as the LDAP server.  #>
+    param([string]$Dn)
+    $srv = if ($AdServer) { $AdServer } elseif ($AdDomain) { $AdDomain } else { $null }
+    if (-not $Dn) {
+        if ($AdDomain) { $Dn = 'DC=' + ($AdDomain -replace '\.', ',DC=') }
+        else { try { $Dn = "$(([adsi]'LDAP://RootDSE').defaultNamingContext)" } catch { $Dn = '' } }
+    }
+    $path = if ($srv) { "LDAP://$srv/$Dn" } else { "LDAP://$Dn" }
+    return New-Object System.DirectoryServices.DirectoryEntry($path)
 }
 
 function Build-GroupManagerMap {
-    <#  Enumerate the configured OU ONCE: all groups + their ManagedBy, into $script:GroupMap.
-        Much faster than one AD query per group.  #>
-    if ($SkipADLookup -or -not $GroupsOU) { return }
+    <#  Enumerate the configured OU ONCE (all groups + their ManagedBy) into
+        $script:GroupMap via ADSI. Much faster than one query per group.  #>
+    if ($SkipADLookup) { Write-Host "OU group map skipped: AD lookup disabled (`$SkipADLookup = `$true)." -ForegroundColor Yellow; return }
+    if (-not $GroupsOU) { Write-Host "OU group map skipped: `$GroupsOU is empty (will search AD per group)." -ForegroundColor Yellow; return }
     try {
-        $p = @{ SearchBase = $GroupsOU; Filter = '*'; Properties = @('ManagedBy', 'sAMAccountName'); ErrorAction = 'Stop' }
-        $p += Get-AdServerParam
-        $ouGroups = Get-ADGroup @p
-        foreach ($g in $ouGroups) {
-            $entry = [pscustomobject]@{ GroupName = $g.Name; ManagedBy = $g.ManagedBy }
-            if ($g.Name) { $script:GroupMap["$($g.Name)".ToLower()] = $entry }
-            if ($g.sAMAccountName) { $script:GroupMap["$($g.sAMAccountName)".ToLower()] = $entry }
+        $root = Get-AdSearchRoot -Dn $GroupsOU
+        $ds = New-Object System.DirectoryServices.DirectorySearcher($root)
+        $ds.Filter = '(objectClass=group)'
+        $ds.PageSize = 1000
+        [void]$ds.PropertiesToLoad.Add('name')
+        [void]$ds.PropertiesToLoad.Add('samaccountname')
+        [void]$ds.PropertiesToLoad.Add('managedby')
+        $found = $ds.FindAll()
+        $n = 0
+        foreach ($r in $found) {
+            $nm = if ($r.Properties['name'].Count) { "$($r.Properties['name'][0])" } else { '' }
+            $sam = if ($r.Properties['samaccountname'].Count) { "$($r.Properties['samaccountname'][0])" } else { '' }
+            $mb = if ($r.Properties['managedby'].Count) { "$($r.Properties['managedby'][0])" } else { '' }
+            $entry = [pscustomobject]@{ GroupName = $nm; ManagedBy = $mb }
+            if ($nm) { $script:GroupMap[$nm.ToLower()] = $entry; $n++ }
+            if ($sam) { $script:GroupMap[$sam.ToLower()] = $entry }
         }
         $script:GroupMapBuilt = $true
-        Write-Host "OU group map: $(@($ouGroups).Count) group(s) enumerated from $GroupsOU" -ForegroundColor DarkCyan
+        Write-Host "OU group map: $n group(s) enumerated from $GroupsOU" -ForegroundColor DarkCyan
     }
     catch {
         Write-Warning "Could not enumerate OU '$GroupsOU': $($_.Exception.Message). Falling back to per-group AD search."
@@ -257,18 +268,21 @@ function Build-GroupManagerMap {
 }
 
 function Resolve-ManagerByDN {
-    <#  Resolve a ManagedBy DN to a manager (name + email), cached by DN.  #>
+    <#  Resolve a ManagedBy DN to a manager (name + email) via ADSI, cached by DN.  #>
     param([string]$Dn)
     if ([string]::IsNullOrWhiteSpace($Dn)) { return $null }
     if ($script:MgrCache.ContainsKey($Dn)) { return $script:MgrCache[$Dn] }
     $m = $null
-    $p = @{ Identity = $Dn; Properties = @('displayName', 'mail'); ErrorAction = 'SilentlyContinue' }
-    $p += Get-AdServerParam
-    $o = Get-ADObject @p
-    if ($o) {
-        $nm = if ($o.displayName) { $o.displayName } else { $o.Name }
-        $m = [pscustomobject]@{ Name = $nm; Email = $o.mail }
+    try {
+        $srv = if ($AdServer) { $AdServer } elseif ($AdDomain) { $AdDomain } else { $null }
+        $path = if ($srv) { "LDAP://$srv/$Dn" } else { "LDAP://$Dn" }
+        $u = New-Object System.DirectoryServices.DirectoryEntry($path)
+        $disp = "$($u.Properties['displayName'].Value)"
+        if (-not $disp) { $disp = "$($u.Properties['cn'].Value)" }
+        $mail = "$($u.Properties['mail'].Value)"
+        if ($disp -or $mail) { $m = [pscustomobject]@{ Name = $disp; Email = $mail } }
     }
+    catch { Write-Verbose "Manager DN not resolved ($Dn): $($_.Exception.Message)" }
     $script:MgrCache[$Dn] = $m
     return $m
 }
@@ -405,21 +419,27 @@ function Resolve-DomainGroupAndManager {
         return $result
     }
 
-    # 2) Fallback: direct AD search (group not in the OU map).
-    # Use -Filter (not -Identity) so a "not found" returns empty instead of throwing.
-    $f = $name -replace "'", "''"
-    $grpParams = @{ Filter = "Name -eq '$f' -or sAMAccountName -eq '$f'"; Properties = @('ManagedBy', 'mail'); ErrorAction = 'SilentlyContinue' }
-    $grpParams += Get-AdServerParam
-    $grp = Get-ADGroup @grpParams | Select-Object -First 1
-
-    if (-not $grp) { return $result }   # not found in AD => not a domain group
-
-    $result.IsDomainGroup = $true
-    $result.GroupName = $grp.Name
-    if ($grp.ManagedBy) {
-        $mgr = Resolve-ManagerByDN -Dn $grp.ManagedBy
-        if ($mgr) { $result.Manager = $mgr.Name; $result.ManagerEmail = $mgr.Email; $result.ManagerSource = 'AD.ManagedBy' }
+    # 2) Fallback: direct ADSI search from the domain root (group not in the OU map)
+    try {
+        $f = $name -replace '([\\\*\(\)\/])', '\$1'   # escape LDAP filter special chars
+        $root = Get-AdSearchRoot
+        $ds = New-Object System.DirectoryServices.DirectorySearcher($root)
+        $ds.Filter = "(&(objectClass=group)(|(cn=$f)(samAccountName=$f)))"
+        $ds.PageSize = 10
+        [void]$ds.PropertiesToLoad.Add('name')
+        [void]$ds.PropertiesToLoad.Add('managedby')
+        $r1 = $ds.FindOne()
+        if ($r1) {
+            $result.IsDomainGroup = $true
+            $result.GroupName = if ($r1.Properties['name'].Count) { "$($r1.Properties['name'][0])" } else { $name }
+            $mb = if ($r1.Properties['managedby'].Count) { "$($r1.Properties['managedby'][0])" } else { '' }
+            if ($mb) {
+                $mgr = Resolve-ManagerByDN -Dn $mb
+                if ($mgr) { $result.Manager = $mgr.Name; $result.ManagerEmail = $mgr.Email; $result.ManagerSource = 'AD.ManagedBy' }
+            }
+        }
     }
+    catch { Write-Verbose "AD group search failed for $name : $($_.Exception.Message)" }
 
     return $result
 }

@@ -18,8 +18,9 @@ Le tout est exporté dans un CSV de résultats.
 
 - PowerShell 5.1+ (ou PowerShell 7 — gère alors `$SkipCertificateCheck` nativement).
 - Accès réseau au **PVWA** CyberArk et un compte **admin** avec droits API.
-- Pour la résolution AD : le module **ActiveDirectory** (RSAT) et un poste joint
-  au domaine (ou des droits de lecture sur l'annuaire). Sinon mettre `$SkipADLookup = $true`.
+- Pour la résolution AD : un poste **joint au domaine** (ou des droits de lecture
+  sur l'annuaire). La résolution utilise **ADSI** (`System.DirectoryServices`),
+  donc **aucun module RSAT n'est requis**. Sinon mettre `$SkipADLookup = $true`.
 
 ## Format du CSV d'entrée
 
