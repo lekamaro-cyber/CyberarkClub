@@ -12,7 +12,9 @@ d'un CSV listant des couples **compte / serveur**, vérifie pour chacun :
 5. **Manager** : on lit ce groupe dans l'Active Directory et on récupère son
    manager via l'attribut `ManagedBy`.
 
-Le tout est exporté dans un CSV de résultats.
+Par défaut, le script **n'ajoute aucune ligne** : il **enrichit le fichier d'entrée
+avec des colonnes** d'analyse (mêmes lignes, correspondance 1:1). Mettez un
+`$OutputPath` seulement si vous préférez un fichier séparé.
 
 ## Pré-requis
 
@@ -80,7 +82,7 @@ $PvwaUsername = ''                               # vide = saisie à l'exécution
 $PvwaPassword = ''                               # vide = saisie sécurisée (recommandé)
 
 $CsvPath    = "$PSScriptRoot\Input\Audit_Privileges_Unix.csv"
-$OutputPath = "$PSScriptRoot\Output\CyberArk-Verification-Results_$(Get-Date -Format 'yyyy-MM').csv"
+$OutputPath = ''                                 # vide = ajoute les colonnes au fichier d'entrée (pas de nouveau fichier)
 
 $UsernameColumn  = 'Auto'          # 'Auto' = détection automatique
 $HostColumn      = 'Auto'
@@ -105,7 +107,7 @@ $SkipCertificateCheck = $false
 | `$AuthType`            | `CyberArk` / `LDAP` / `RADIUS`.                                      |
 | `$PvwaUsername` / `$PvwaPassword` | Identifiants (laisser le mot de passe vide = saisie sécurisée). |
 | `$CsvPath`             | CSV source (peut être la sortie de `extractSudoRootV0.7.ps1`).       |
-| `$OutputPath`          | CSV de résultats (le dossier est créé si besoin).                   |
+| `$OutputPath`          | **Vide = ajoute les colonnes au fichier d'entrée** (mêmes lignes, 1:1, pas de nouveau fichier). Mettre un chemin uniquement pour un fichier séparé. |
 | `$AccountsExtractPath` | Fichier où l'extrait de tous les comptes CyberArk est sauvegardé.   |
 | `$AddressMatch`        | `Hostname` (défaut), `Exact`, `Contains`.                            |
 | `$AdServer`            | DC AD à cibler (optionnel, réduit la latence). Vide = automatique.   |
@@ -172,12 +174,13 @@ avec une **adresse IP** plutôt qu'un nom dans CyberArk. Le résultat indique al
 `MatchType = IP (x.x.x.x)` et la colonne `ResolvedIP` liste les IP testées.
 Désactivable avec `$SkipIPCheck = $true`.
 
-## Colonnes du CSV de sortie
+## Colonnes ajoutées au fichier
+
+Toutes les colonnes d'origine sont conservées ; les colonnes suivantes sont
+**ajoutées à la fin** de chaque ligne :
 
 | Colonne               | Description                                                |
 |-----------------------|------------------------------------------------------------|
-| `Inventory/Host/Username` | Rappel de la ligne source.                             |
-| `CA_Candidate`        | Valeur reprise du fichier d'entrée (si présente).         |
 | `Onboarded`           | `Yes` / `No` — compte trouvé dans CyberArk.               |
 | `OnboardingAssessment`| Verdict croisé : `OK - embarqué`, `ANOMALIE - candidat non embarqué`, `Normal - non candidat`, `À vérifier`, etc. |
 | `MatchType`           | `Hostname` ou `IP (x.x.x.x)` selon le mode de correspondance. |

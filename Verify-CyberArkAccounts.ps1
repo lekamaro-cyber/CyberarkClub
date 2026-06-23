@@ -51,7 +51,9 @@ $PvwaPassword = ''                               # empty = prompt at runtime
 # Can also be the output of extractSudoRootV0.7.ps1 (UserSam,Server,...,CA_Candidate):
 # columns and delimiter are auto-detected.
 $CsvPath    = "$PSScriptRoot\Input\accounts.csv"
-$OutputPath = "$PSScriptRoot\Output\CyberArk-Verification-Results_$(Get-Date -Format 'yyyy-MM').csv"
+# Output: leave EMPTY to add the analysis columns to the input file itself (no new
+# file, same rows, 1:1). Set a path only if you want a separate results file.
+$OutputPath = ''
 
 # --- CyberArk accounts source ---
 # The script ALWAYS downloads all accounts once (extraction), saves them to the
@@ -535,7 +537,9 @@ if (-not $UsernameColumn -or -not $HostColumn) {
     throw "Cannot find the username/host columns in the CSV. Columns found: $($cols -join ', ')"
 }
 $HasCandidate = ($cols -contains $CandidateColumn)
-$OutDir = Split-Path -Parent $OutputPath
+# Destination: empty $OutputPath => enrich the input file in place (no new file)
+$DestPath = if ([string]::IsNullOrWhiteSpace($OutputPath)) { $CsvPath } else { $OutputPath }
+$OutDir = Split-Path -Parent $DestPath
 if ($OutDir -and -not (Test-Path -LiteralPath $OutDir)) {
     New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 }
@@ -543,7 +547,7 @@ Write-Host "Columns used: username='$UsernameColumn', host='$HostColumn'$(if ($H
 if ($DebugMode) {
     Write-Host "[DEBUG] ===== Configuration =====" -ForegroundColor Magenta
     Write-Host "[DEBUG] PVWA=$PvwaUrl | AuthType=$AuthType | User=$($Credential.UserName)" -ForegroundColor DarkGray
-    Write-Host "[DEBUG] CSV=$CsvPath (delim='$CsvDelimiter') | Output=$OutputPath" -ForegroundColor DarkGray
+    Write-Host "[DEBUG] CSV=$CsvPath (delim='$CsvDelimiter') | Output=$DestPath" -ForegroundColor DarkGray
     Write-Host "[DEBUG] AddressMatch=$AddressMatch | SuffixLen=$SafeGroupSuffixLength | SkipAD=$SkipADLookup | SkipIP=$SkipIPCheck" -ForegroundColor DarkGray
     Write-Host "[DEBUG] MaxAccounts=$MaxAccounts (rows to process=$($rows.Count))" -ForegroundColor DarkGray
 }
@@ -601,26 +605,16 @@ try {
         $candidate = if ($HasCandidate) { "$($row.$CandidateColumn)".Trim() } else { $null }
         Write-Progress -Activity "Matching CyberArk" -Status "$i/$($rows.Count): $username@$hostName" -PercentComplete (($i / $rows.Count) * 100)
 
-        $rec = [ordered]@{
-            Inventory            = $row.inventory
-            Host                 = $hostName
-            Username             = $username
-            CA_Candidate         = $candidate
-            Onboarded            = 'No'
-            OnboardingAssessment = $null
-            MatchType            = $null
-            ResolvedIP           = $null
-            AccountName          = $null
-            AccountAddress       = $null
-            PlatformId           = $null
-            SafeName             = $null
-            AllSafeGroups        = $null
-            ExternalDomainGroup  = $null
-            GroupSafeSimilarity  = $null
-            GroupManager         = $null
-            GroupManagerEmail    = $null
-            Notes                = $null
+        # Start from the original row (keep ALL its columns), then add/refresh the
+        # analysis columns. This guarantees one output row per input row (no extra rows).
+        $rec = [ordered]@{}
+        foreach ($p in $row.PSObject.Properties) { $rec[$p.Name] = $p.Value }
+        foreach ($c in 'Onboarded', 'OnboardingAssessment', 'MatchType', 'ResolvedIP',
+            'AccountName', 'AccountAddress', 'PlatformId', 'SafeName', 'AllSafeGroups',
+            'ExternalDomainGroup', 'GroupSafeSimilarity', 'GroupManager', 'GroupManagerEmail', 'Notes') {
+            $rec[$c] = $null
         }
+        $rec['Onboarded'] = 'No'
         $results.Add($rec)
 
       try {
@@ -833,7 +827,7 @@ $tAD = Get-Date
 
 # ============================= EXPORT & SUMMARY =====================================================
 $final = $results | ForEach-Object { [pscustomobject]$_ }
-$final | Export-Csv -LiteralPath $OutputPath -NoTypeInformation -Encoding UTF8 -Delimiter $CsvDelimiter
+$final | Export-Csv -LiteralPath $DestPath -NoTypeInformation -Encoding UTF8 -Delimiter $CsvDelimiter
 
 $onb = ($final | Where-Object { $_.Onboarded -eq 'Yes' }).Count
 $anomalies = ($final | Where-Object { $_.OnboardingAssessment -like 'ANOMALY*' }).Count
@@ -862,5 +856,5 @@ Write-Host "  Matching (+DNS fallback)    : $(Format-Span $tExtract $tMatch)"
 Write-Host "  Safe members (API)          : $(Format-Span $tMatch $tMembers)"
 Write-Host "  AD resolution (manager)     : $(Format-Span $tMembers $tAD)"
 Write-Host "Total time                    : $([int]$elapsed.TotalSeconds)s"
-Write-Host "Results written to            : $OutputPath" -ForegroundColor Green
+Write-Host "Columns added to              : $DestPath" -ForegroundColor Green
 #endregion
