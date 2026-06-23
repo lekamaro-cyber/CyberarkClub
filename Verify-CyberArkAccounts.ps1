@@ -557,6 +557,7 @@ $scriptStart = Get-Date
 # Build the OU group->manager map FIRST (one AD enumeration), before anything else,
 # so later group resolution is just an in-memory lookup.
 Build-GroupManagerMap
+$tMap = Get-Date
 
 try {
     # ============================= PHASE 1: EXTRACTION (session open) =============================
@@ -591,6 +592,7 @@ try {
     }
 
     # ============================= PHASE 2: MATCHING (memory + DNS, no API call) =================
+    $tExtract = Get-Date
     $i = 0
     foreach ($row in $rows) {
         $i++
@@ -693,6 +695,7 @@ try {
       }
     }
     Write-Progress -Activity "Matching CyberArk" -Completed
+    $tMatch = Get-Date
     if ($DebugMode) { Write-Host "[DEBUG] Safes to query: $((@($neededSafes)) -join ', ')" -ForegroundColor Magenta }
 
     # ============================= PHASE 3: Members of the matched safes (session open) ===========
@@ -713,6 +716,7 @@ try {
         }
     }
     Write-Progress -Activity "Reading safe members" -Completed
+    $tMembers = Get-Date
 }
 finally {
     # ============================= PHASE 4: Close the session (extraction done) ===========
@@ -825,6 +829,7 @@ foreach ($rec in $onboardedRecs) {
     if ($res.Notes) { $rec.Notes = $res.Notes }
 }
 Write-Progress -Activity "AD resolution" -Completed
+$tAD = Get-Date
 
 # ============================= EXPORT & SUMMARY =====================================================
 $final = $results | ForEach-Object { [pscustomobject]$_ }
@@ -847,6 +852,15 @@ Write-Host "Unique safes queried          : $($safeMembersCache.Count)"
 if ($GroupsOU) { Write-Host "Groups in OU map              : $($script:GroupMap.Count)" }
 Write-Host "Unique group resolutions      : $($script:AdCache.Count)"
 Write-Host "Manager (DN) lookups          : $($script:MgrCache.Count)"
+Write-Host "DNS lookups (cache size)      : $($script:DnsCache.Count)"
+Write-Host ""
+Write-Host "----- Time per phase -----" -ForegroundColor Yellow
+function Format-Span { param($a, $b) if ($a -and $b) { return "$([int](($b - $a).TotalSeconds))s" } else { return 'n/a' } }
+Write-Host "  OU group map (AD enum)      : $(Format-Span $scriptStart $tMap)"
+Write-Host "  Extraction (logon+download) : $(Format-Span $tMap $tExtract)"
+Write-Host "  Matching (+DNS fallback)    : $(Format-Span $tExtract $tMatch)"
+Write-Host "  Safe members (API)          : $(Format-Span $tMatch $tMembers)"
+Write-Host "  AD resolution (manager)     : $(Format-Span $tMembers $tAD)"
 Write-Host "Total time                    : $([int]$elapsed.TotalSeconds)s"
 Write-Host "Results written to            : $OutputPath" -ForegroundColor Green
 #endregion
