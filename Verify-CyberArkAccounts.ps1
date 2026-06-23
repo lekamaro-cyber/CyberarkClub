@@ -429,13 +429,14 @@ try {
     catch { Write-Warning "Impossible de sauvegarder l'extrait : $($_.Exception.Message)" }
     Write-Host " $($allAccounts.Count) comptes chargés." -ForegroundColor Green
 
-    # 1b) Index des comptes par nom d'utilisateur (matching ensuite 100% en mémoire)
+    # 1b) Index des comptes par nom d'utilisateur (tableaux simples : pas de List
+    #     générique ni @() sur collection, qui peuvent échouer en mode langage restreint)
     $caByUser = @{}
     foreach ($a in $allAccounts) {
-        if (-not $a.userName) { continue }
-        $k = $a.userName.ToLower().Trim()
-        if (-not $caByUser.ContainsKey($k)) { $caByUser[$k] = New-Object System.Collections.Generic.List[object] }
-        $caByUser[$k].Add($a)
+        $k = "$($a.userName)".ToLower().Trim()
+        if (-not $k) { continue }
+        if ($caByUser.ContainsKey($k)) { $caByUser[$k] = $caByUser[$k] + $a }
+        else { $caByUser[$k] = @($a) }
     }
 
     # ============================= PHASE 2 : MATCHING (mémoire + DNS, sans appel API) =================
@@ -469,30 +470,46 @@ try {
         }
         $results.Add($rec)
 
+      try {
         if ([string]::IsNullOrWhiteSpace($username) -or [string]::IsNullOrWhiteSpace($hostName)) {
             $rec.Notes = 'Ligne ignorée (username ou host vide)'; continue
         }
 
-        $accts = $caByUser[$username.ToLower()]
-        $acctsArr = @($accts)
+        $accts = $caByUser[$username.ToLower()]          # tableau d'objets compte, ou $null
+        $acctCount = if ($null -ne $accts) { $accts.Count } else { 0 }
+
         if ($DebugMode) {
-            $info = if ($acctsArr.Count -gt 0) { (($acctsArr | ForEach-Object { "$($_.address)|$($_.safeName)" }) -join ' ; ') } else { '(aucun)' }
-            Write-Host "[DEBUG] Ligne $i : $username@$hostName -> $($acctsArr.Count) compte(s). [address|safe]: $info" -ForegroundColor DarkGray
+            if ($acctCount -gt 0) {
+                Write-Host "[DEBUG] Ligne $i : $username@$hostName -> $acctCount compte(s) :" -ForegroundColor DarkGray
+                foreach ($a in $accts) {
+                    Write-Host "[DEBUG]     name='$($a.name)' addr='$($a.address)' safe='$($a.safeName)' plat='$($a.platformId)'" -ForegroundColor DarkGray
+                }
+            }
+            else {
+                Write-Host "[DEBUG] Ligne $i : $username@$hostName -> 0 compte pour ce user" -ForegroundColor DarkGray
+            }
         }
+
+        # Match by hostname (no @() / pipeline, to stay safe in restricted language mode)
         $match = $null
-        if ($acctsArr.Count -gt 0) {
-            $match = $acctsArr | Where-Object { Test-AddressMatch -Address $_.address -HostValue $hostName -Strategy $AddressMatch } | Select-Object -First 1
-            if ($match) { $rec.MatchType = 'Hostname' }
+        if ($acctCount -gt 0) {
+            foreach ($a in $accts) {
+                if (Test-AddressMatch -Address $a.address -HostValue $hostName -Strategy $AddressMatch) {
+                    $match = $a; $rec.MatchType = 'Hostname'; break
+                }
+            }
         }
 
         # IP fallback (DNS), still no CyberArk call
-        if (-not $match -and -not $SkipIPCheck) {
+        if (-not $match -and -not $SkipIPCheck -and $acctCount -gt 0) {
             $ips = Resolve-HostIPAddress -HostValue $hostName
             if ($ips.Count -gt 0) {
                 $rec.ResolvedIP = ($ips -join '; ')
                 foreach ($ip in $ips) {
-                    $match = $acctsArr | Where-Object { $_.address -eq $ip } | Select-Object -First 1
-                    if ($match) { $rec.MatchType = "IP ($ip)"; break }
+                    foreach ($a in $accts) {
+                        if ("$($a.address)" -eq $ip) { $match = $a; $rec.MatchType = "IP ($ip)"; break }
+                    }
+                    if ($match) { break }
                 }
             }
             else { $rec.ResolvedIP = 'non résolu' }
@@ -518,6 +535,11 @@ try {
         $rec.SafeName = $match.safeName
         if ($match.safeName) { [void]$neededSafes.Add($match.safeName) }
         if ($DebugMode) { Write-Host "[DEBUG]   -> EMBARQUÉ ($($rec.MatchType)) : compte '$($match.name)' adresse '$($match.address)' safe '$($match.safeName)'" -ForegroundColor Green }
+      }
+      catch {
+        $rec.Notes = "Erreur traitement ligne : $($_.Exception.Message)"
+        if ($DebugMode) { Write-Host "[DEBUG]   -> ERREUR ligne $i : $($_.Exception.Message)" -ForegroundColor Red }
+      }
     }
     Write-Progress -Activity "Matching CyberArk" -Completed
     if ($DebugMode) { Write-Host "[DEBUG] Safes à interroger : $((@($neededSafes)) -join ', ')" -ForegroundColor Magenta }
