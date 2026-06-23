@@ -474,13 +474,14 @@ try {
         }
 
         $accts = $caByUser[$username.ToLower()]
+        $acctsArr = @($accts)
         if ($DebugMode) {
-            $addrList = if ($accts) { (@($accts) | ForEach-Object { $_.address }) -join ', ' } else { '(aucun)' }
-            Write-Host "[DEBUG] Ligne $i : $username@$hostName -> $(@($accts).Count) compte(s) pour ce user. Adresses: $addrList" -ForegroundColor DarkGray
+            $info = if ($acctsArr.Count -gt 0) { (($acctsArr | ForEach-Object { "$($_.address)|$($_.safeName)" }) -join ' ; ') } else { '(aucun)' }
+            Write-Host "[DEBUG] Ligne $i : $username@$hostName -> $($acctsArr.Count) compte(s). [address|safe]: $info" -ForegroundColor DarkGray
         }
         $match = $null
-        if ($accts) {
-            $match = $accts | Where-Object { Test-AddressMatch -Address $_.address -HostValue $hostName -Strategy $AddressMatch } | Select-Object -First 1
+        if ($acctsArr.Count -gt 0) {
+            $match = $acctsArr | Where-Object { Test-AddressMatch -Address $_.address -HostValue $hostName -Strategy $AddressMatch } | Select-Object -First 1
             if ($match) { $rec.MatchType = 'Hostname' }
         }
 
@@ -489,11 +490,9 @@ try {
             $ips = Resolve-HostIPAddress -HostValue $hostName
             if ($ips.Count -gt 0) {
                 $rec.ResolvedIP = ($ips -join '; ')
-                if ($accts) {
-                    foreach ($ip in $ips) {
-                        $match = $accts | Where-Object { $_.address -eq $ip } | Select-Object -First 1
-                        if ($match) { $rec.MatchType = "IP ($ip)"; break }
-                    }
+                foreach ($ip in $ips) {
+                    $match = $acctsArr | Where-Object { $_.address -eq $ip } | Select-Object -First 1
+                    if ($match) { $rec.MatchType = "IP ($ip)"; break }
                 }
             }
             else { $rec.ResolvedIP = 'non résolu' }
