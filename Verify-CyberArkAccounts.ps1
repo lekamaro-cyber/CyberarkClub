@@ -84,9 +84,12 @@ $AdDomain = ''                     # e.g. 'intra.corp'
 
 # OU that contains the domain groups granted on the safes. When set, the script
 # enumerates this OU ONCE (all groups + their ManagedBy) to build an in-memory map,
-# which is far faster than one AD query per group. If a group is not found in the
-# map, the script falls back to a direct AD search.
+# which is far faster than one AD query per group.
 $GroupsOU = ''                     # e.g. 'OU=PAM-Groups,OU=Groups,DC=intra,DC=corp'
+
+# When a group is NOT found in the OU map, optionally search the whole domain for it.
+# Set to $false if the OU already contains every relevant group (avoids any domain scan).
+$DomainSearchFallback = $true
 
 # --- Options ---
 $SkipADLookup        = $false      # $true = do not query Active Directory
@@ -419,7 +422,9 @@ function Resolve-DomainGroupAndManager {
         return $result
     }
 
-    # 2) Fallback: direct ADSI search from the domain root (group not in the OU map)
+    # 2) Fallback: direct ADSI search from the domain root (group not in the OU map).
+    #    Skipped entirely when $DomainSearchFallback is $false (no domain scan).
+    if (-not $DomainSearchFallback) { return $result }
     try {
         $f = $name -replace '([\\\*\(\)\/])', '\$1'   # escape LDAP filter special chars
         $root = Get-AdSearchRoot
@@ -512,6 +517,10 @@ $safeMembersError = @{}
 $neededSafes = New-Object 'System.Collections.Generic.HashSet[string]'
 $token = $null
 $scriptStart = Get-Date
+
+# Build the OU group->manager map FIRST (one AD enumeration), before anything else,
+# so later group resolution is just an in-memory lookup.
+Build-GroupManagerMap
 
 try {
     # ============================= PHASE 1: EXTRACTION (session open) =============================
@@ -679,7 +688,6 @@ finally {
 # Resolve each UNIQUE safe only ONCE (many accounts can share a safe), and run at
 # most one AD lookup for the chosen group (cached). This is where AD is the bottleneck.
 Write-Host "Resolving domain groups and managers (Active Directory)..." -ForegroundColor Cyan
-Build-GroupManagerMap   # one-shot OU enumeration (group -> manager) if $GroupsOU is set
 $onboardedRecs = @($results | Where-Object { $_.Onboarded -eq 'Yes' })
 $safeNames = @($onboardedRecs | ForEach-Object { $_.SafeName } | Select-Object -Unique)
 $safeResolution = @{}

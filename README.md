@@ -110,7 +110,8 @@ $SkipCertificateCheck = $false
 | `$AddressMatch`        | `Hostname` (défaut), `Exact`, `Contains`.                            |
 | `$AdServer`            | DC AD à cibler (optionnel, réduit la latence). Vide = automatique.   |
 | `$AdDomain`            | Domaine DNS des groupes (sert de serveur AD si `$AdServer` vide).    |
-| `$GroupsOU`            | OU des groupes : énumérée **une fois** pour bâtir une table groupe→manager (repli sur recherche AD si absent). |
+| `$GroupsOU`            | OU des groupes : énumérée **une fois** (au tout début) pour bâtir une table groupe→manager. |
+| `$DomainSearchFallback`| `$true` = si un groupe n'est pas dans l'OU, le chercher dans tout le domaine ; `$false` = pas de scan domaine. |
 | `$DefaultSafeGroups`   | Groupes par défaut à exclure (noms exacts).                          |
 | `$DefaultSafeGroupPatterns` | Motifs (wildcards) de groupes par défaut org (`*_PAM_Auth_*`, `PAM_CyberArk_*`...). |
 | `$UsernameColumn` / `$HostColumn` | Colonnes (`'Auto'` = détection).                         |
@@ -144,11 +145,12 @@ sauvegarde l'extrait dans `$AccountsExtractPath`.
 Les requêtes AD (groupe + manager) sont le principal frein. Pour les minimiser :
 
 - Renseignez **`$GroupsOU`** (l'OU qui contient les groupes de domaine accordés sur
-  les safes) : le script **énumère cette OU une seule fois** (tous les groupes +
-  leur `ManagedBy`) et bâtit une **table en mémoire** `groupe → manager`. La
-  résolution devient alors un simple lookup, sans requête AD par groupe.
-- Si un groupe n'est **pas** dans l'OU, le script **retombe** sur une recherche AD
-  directe (`Get-ADGroup -Filter`).
+  les safes) : **tout au début du script**, une **seule** énumération de cette OU
+  (tous les groupes + leur `ManagedBy`) bâtit une **table en mémoire**
+  `groupe → manager`. La résolution de chaque safe devient ensuite un **simple
+  lookup** en mémoire — aucune requête AD par groupe.
+- Si un groupe n'est **pas** dans l'OU : recherche dans tout le domaine **seulement
+  si** `$DomainSearchFallback = $true` (sinon aucun scan domaine).
 - **`$AdDomain`** / **`$AdServer`** ciblent le domaine / un DC précis pour réduire
   la latence réseau.
 - Les managers (`ManagedBy`) et les groupes sont mis en **cache** (résolus une fois).
