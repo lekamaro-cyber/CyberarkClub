@@ -107,6 +107,9 @@ $SkipCertificateCheck = $false
 | `$OutputPath`          | CSV de résultats (le dossier est créé si besoin).                   |
 | `$AccountsExtractPath` | Fichier où l'extrait de tous les comptes CyberArk est sauvegardé.   |
 | `$AddressMatch`        | `Hostname` (défaut), `Exact`, `Contains`.                            |
+| `$AdServer`            | DC AD à cibler (optionnel, réduit la latence). Vide = automatique.   |
+| `$AdDomain`            | Domaine DNS des groupes (sert de serveur AD si `$AdServer` vide).    |
+| `$GroupsOU`            | OU des groupes : énumérée **une fois** pour bâtir une table groupe→manager (repli sur recherche AD si absent). |
 | `$DefaultSafeGroups`   | Groupes par défaut à exclure (noms exacts).                          |
 | `$DefaultSafeGroupPatterns` | Motifs (wildcards) de groupes par défaut org (`*_PAM_Auth_*`, `PAM_CyberArk_*`...). |
 | `$UsernameColumn` / `$HostColumn` | Colonnes (`'Auto'` = détection).                         |
@@ -134,6 +137,20 @@ Auparavant le script faisait un appel API de recherche **par ligne** du CSV, en
 gardant la session ouverte pendant tout le travail AD : c'était l'origine de la
 lenteur. Le script réalise désormais **toujours** cette extraction unique et
 sauvegarde l'extrait dans `$AccountsExtractPath`.
+
+### Active Directory : table de correspondance via l'OU
+
+Les requêtes AD (groupe + manager) sont le principal frein. Pour les minimiser :
+
+- Renseignez **`$GroupsOU`** (l'OU qui contient les groupes de domaine accordés sur
+  les safes) : le script **énumère cette OU une seule fois** (tous les groupes +
+  leur `ManagedBy`) et bâtit une **table en mémoire** `groupe → manager`. La
+  résolution devient alors un simple lookup, sans requête AD par groupe.
+- Si un groupe n'est **pas** dans l'OU, le script **retombe** sur une recherche AD
+  directe (`Get-ADGroup -Filter`).
+- **`$AdDomain`** / **`$AdServer`** ciblent le domaine / un DC précis pour réduire
+  la latence réseau.
+- Les managers (`ManagedBy`) et les groupes sont mis en **cache** (résolus une fois).
 
 ### Repli (fallback) par IP
 

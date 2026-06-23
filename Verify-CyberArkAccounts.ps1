@@ -79,6 +79,15 @@ $SafeGroupSuffixLength = 5
 # Leave empty ('') to let Windows pick the DC automatically.
 $AdServer = ''                     # e.g. 'dc01.intra.corp'
 
+# Domain (DNS name) hosting the groups. Used as the AD server when $AdServer is empty.
+$AdDomain = ''                     # e.g. 'intra.corp'
+
+# OU that contains the domain groups granted on the safes. When set, the script
+# enumerates this OU ONCE (all groups + their ManagedBy) to build an in-memory map,
+# which is far faster than one AD query per group. If a group is not found in the
+# map, the script falls back to a direct AD search.
+$GroupsOU = ''                     # e.g. 'OU=PAM-Groups,OU=Groups,DC=intra,DC=corp'
+
 # --- Options ---
 $SkipADLookup        = $false      # $true = do not query Active Directory
 $SkipIPCheck         = $false      # $true = do not attempt the IP fallback (DNS)
@@ -214,11 +223,59 @@ function Get-PvwaSafeMembers {
 #region ----------------------------------------------------------- Matching helpers
 # Caches to avoid repeated network round-trips (DNS / Active Directory)
 $script:DnsCache = @{}
-$script:AdCache = @{}
+$script:AdCache = @{}      # group name -> resolution (fallback direct AD search)
+$script:GroupMap = @{}     # group name / sAMAccountName -> { GroupName; ManagedBy } from the OU
+$script:MgrCache = @{}     # manager DN -> { Name; Email }
+$script:GroupMapBuilt = $false
+
+function Get-AdServerParam {
+    <#  Returns a splattable @{Server=...} when a DC or domain is configured, else @{}.  #>
+    if ($AdServer) { return @{ Server = $AdServer } }
+    if ($AdDomain) { return @{ Server = $AdDomain } }
+    return @{}
+}
+
+function Build-GroupManagerMap {
+    <#  Enumerate the configured OU ONCE: all groups + their ManagedBy, into $script:GroupMap.
+        Much faster than one AD query per group.  #>
+    if ($SkipADLookup -or -not $GroupsOU) { return }
+    try {
+        $p = @{ SearchBase = $GroupsOU; Filter = '*'; Properties = @('ManagedBy', 'sAMAccountName'); ErrorAction = 'Stop' }
+        $p += Get-AdServerParam
+        $ouGroups = Get-ADGroup @p
+        foreach ($g in $ouGroups) {
+            $entry = [pscustomobject]@{ GroupName = $g.Name; ManagedBy = $g.ManagedBy }
+            if ($g.Name) { $script:GroupMap["$($g.Name)".ToLower()] = $entry }
+            if ($g.sAMAccountName) { $script:GroupMap["$($g.sAMAccountName)".ToLower()] = $entry }
+        }
+        $script:GroupMapBuilt = $true
+        Write-Host "OU group map: $(@($ouGroups).Count) group(s) enumerated from $GroupsOU" -ForegroundColor DarkCyan
+    }
+    catch {
+        Write-Warning "Could not enumerate OU '$GroupsOU': $($_.Exception.Message). Falling back to per-group AD search."
+    }
+}
+
+function Resolve-ManagerByDN {
+    <#  Resolve a ManagedBy DN to a manager (name + email), cached by DN.  #>
+    param([string]$Dn)
+    if ([string]::IsNullOrWhiteSpace($Dn)) { return $null }
+    if ($script:MgrCache.ContainsKey($Dn)) { return $script:MgrCache[$Dn] }
+    $m = $null
+    $p = @{ Identity = $Dn; Properties = @('displayName', 'mail'); ErrorAction = 'SilentlyContinue' }
+    $p += Get-AdServerParam
+    $o = Get-ADObject @p
+    if ($o) {
+        $nm = if ($o.displayName) { $o.displayName } else { $o.Name }
+        $m = [pscustomobject]@{ Name = $nm; Email = $o.mail }
+    }
+    $script:MgrCache[$Dn] = $m
+    return $m
+}
 
 function Get-CachedDomainGroup {
     <#  Resolve-DomainGroupAndManager with a cache keyed by group name, so a group
-        shared by many safes triggers only ONE AD query.  #>
+        shared by many safes triggers only ONE resolution.  #>
     param([string]$Name)
     if (-not $script:AdCache.ContainsKey($Name)) {
         $script:AdCache[$Name] = Resolve-DomainGroupAndManager -MemberName $Name
@@ -335,28 +392,33 @@ function Resolve-DomainGroupAndManager {
     $name = $MemberName
     if ($name -match '\\') { $name = $name.Split('\')[-1] }
     if ($name -match '@') { $name = $name.Split('@')[0] }
-    $f = $name -replace "'", "''"   # escape single quotes for the AD filter
 
-    # Use -Filter (not -Identity) so a "not found" returns empty instead of throwing
-    # (PowerShell exceptions are slow); SilentlyContinue keeps it non-fatal.
+    # 1) Fast path: look the group up in the pre-built OU map (no AD round-trip)
+    $entry = $script:GroupMap[$name.ToLower()]
+    if ($entry) {
+        $result.IsDomainGroup = $true
+        $result.GroupName = $entry.GroupName
+        if ($entry.ManagedBy) {
+            $mgr = Resolve-ManagerByDN -Dn $entry.ManagedBy
+            if ($mgr) { $result.Manager = $mgr.Name; $result.ManagerEmail = $mgr.Email; $result.ManagerSource = 'OU.ManagedBy' }
+        }
+        return $result
+    }
+
+    # 2) Fallback: direct AD search (group not in the OU map).
+    # Use -Filter (not -Identity) so a "not found" returns empty instead of throwing.
+    $f = $name -replace "'", "''"
     $grpParams = @{ Filter = "Name -eq '$f' -or sAMAccountName -eq '$f'"; Properties = @('ManagedBy', 'mail'); ErrorAction = 'SilentlyContinue' }
-    if ($AdServer) { $grpParams['Server'] = $AdServer }
+    $grpParams += Get-AdServerParam
     $grp = Get-ADGroup @grpParams | Select-Object -First 1
 
     if (-not $grp) { return $result }   # not found in AD => not a domain group
 
     $result.IsDomainGroup = $true
     $result.GroupName = $grp.Name
-
     if ($grp.ManagedBy) {
-        $mgrParams = @{ Identity = $grp.ManagedBy; Properties = @('displayName', 'mail'); ErrorAction = 'SilentlyContinue' }
-        if ($AdServer) { $mgrParams['Server'] = $AdServer }
-        $mgr = Get-ADObject @mgrParams
-        if ($mgr) {
-            $result.Manager = if ($mgr.displayName) { $mgr.displayName } else { $mgr.Name }
-            $result.ManagerEmail = $mgr.mail
-            $result.ManagerSource = 'Group.ManagedBy'
-        }
+        $mgr = Resolve-ManagerByDN -Dn $grp.ManagedBy
+        if ($mgr) { $result.Manager = $mgr.Name; $result.ManagerEmail = $mgr.Email; $result.ManagerSource = 'AD.ManagedBy' }
     }
 
     return $result
@@ -597,6 +659,7 @@ finally {
 # Resolve each UNIQUE safe only ONCE (many accounts can share a safe), and run at
 # most one AD lookup for the chosen group (cached). This is where AD is the bottleneck.
 Write-Host "Resolving domain groups and managers (Active Directory)..." -ForegroundColor Cyan
+Build-GroupManagerMap   # one-shot OU enumeration (group -> manager) if $GroupsOU is set
 $onboardedRecs = @($results | Where-Object { $_.Onboarded -eq 'Yes' })
 $safeNames = @($onboardedRecs | ForEach-Object { $_.SafeName } | Select-Object -Unique)
 $safeResolution = @{}
@@ -717,7 +780,9 @@ if ($HasCandidate) {
     Write-Host "  -> Normal (not a candidate)            : $normalMissing" -ForegroundColor Gray
 }
 Write-Host "Unique safes queried          : $($safeMembersCache.Count)"
-Write-Host "Unique AD group lookups       : $($script:AdCache.Count)"
+if ($GroupsOU) { Write-Host "Groups in OU map              : $($script:GroupMap.Count)" }
+Write-Host "Unique group resolutions      : $($script:AdCache.Count)"
+Write-Host "Manager (DN) lookups          : $($script:MgrCache.Count)"
 Write-Host "Total time                    : $([int]$elapsed.TotalSeconds)s"
 Write-Host "Results written to            : $OutputPath" -ForegroundColor Green
 #endregion
