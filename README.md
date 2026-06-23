@@ -140,6 +140,14 @@ gardant la session ouverte pendant tout le travail AD : c'était l'origine de la
 lenteur. Le script réalise désormais **toujours** cette extraction unique et
 sauvegarde l'extrait dans `$AccountsExtractPath`.
 
+### Reconnexion automatique (session perdue / 401)
+
+Si la session CyberArk expire pendant le traitement (erreur **401 Unauthorized**),
+le script **se reconnecte automatiquement** (nouveau token) et **réessaie** la
+requête, puis continue son travail — jusqu'à `3` tentatives par requête. Aucune
+intervention n'est nécessaire ; un message `Session lost (401) -> re-logon...`
+s'affiche le cas échéant.
+
 ### Active Directory : table de correspondance via l'OU
 
 Les requêtes AD (groupe + manager) sont le principal frein. Pour les minimiser :

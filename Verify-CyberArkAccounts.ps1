@@ -185,19 +185,52 @@ function Invoke-PvwaLogoff {
     catch { Write-Verbose "Logoff: $($_.Exception.Message)" }
 }
 
+function Get-HttpStatusCode {
+    <#  Extract the HTTP status code from a terminating error (PS 5.1 & Core).  #>
+    param($ErrorRecord)
+    try { if ($ErrorRecord.Exception.Response) { return [int]$ErrorRecord.Exception.Response.StatusCode } } catch {}
+    if ("$($ErrorRecord.Exception.Message)" -match '\((\d{3})\)') { return [int]$Matches[1] }
+    return 0
+}
+
+function Invoke-PvwaRequest {
+    <#  Wrapper around Invoke-RestMethod that uses $script:Token and, on a 401
+        (expired/lost session), automatically re-logs in and retries the request.  #>
+    param([string]$Url, [string]$Method = 'Get', $Body = $null)
+
+    $tries = 0
+    while ($true) {
+        $tries++
+        try {
+            $headers = @{ Authorization = $script:Token }
+            if ($Body) {
+                return Invoke-RestMethod -Uri $Url -Method $Method -Headers $headers -Body $Body -ContentType 'application/json' @script:IrmExtra
+            }
+            return Invoke-RestMethod -Uri $Url -Method $Method -Headers $headers @script:IrmExtra
+        }
+        catch {
+            $status = Get-HttpStatusCode $_
+            if ($status -eq 401 -and $tries -le $script:MaxRelogon) {
+                Write-Host "    Session lost (401) -> re-logon ($tries/$script:MaxRelogon)..." -ForegroundColor Yellow
+                Start-Sleep -Milliseconds 500
+                $script:Token = Invoke-PvwaLogon -Cred $script:Credential -Type $script:AuthType
+                continue   # retry the same request with the fresh token
+            }
+            throw
+        }
+    }
+}
+
 function Get-PvwaAllAccounts {
     <#  Downloads ALL accounts once (paged). One bulk extraction instead of
         one search per CSV row, so the session can be closed quickly afterwards.  #>
-    param([string]$Token)
-
-    $headers = @{ Authorization = $Token }
     $all = @()
     $offset = 0
     $limit = 1000
 
     do {
         $url = "$ApiBase/Accounts?limit=$limit&offset=$offset"
-        $resp = Invoke-RestMethod -Uri $url -Method Get -Headers $headers @script:IrmExtra
+        $resp = Invoke-PvwaRequest -Url $url
         if ($resp.value) { $all += $resp.value }
         $offset += $limit
         $hasMore = ($null -ne $resp.value) -and ($resp.value.Count -eq $limit)
@@ -208,11 +241,9 @@ function Get-PvwaAllAccounts {
 }
 
 function Get-PvwaSafeMembers {
-    param([string]$Token, [string]$SafeName)
-
-    $headers = @{ Authorization = $Token }
+    param([string]$SafeName)
     $url = "$ApiBase/Safes/$([uri]::EscapeDataString($SafeName))/Members?limit=1000"
-    $resp = Invoke-RestMethod -Uri $url -Method Get -Headers $headers @script:IrmExtra
+    $resp = Invoke-PvwaRequest -Url $url
     return $resp.value
 }
 #endregion
@@ -467,6 +498,12 @@ if (-not $Credential) {
     }
 }
 
+# Session state used by Invoke-PvwaRequest for transparent re-logon on 401
+$script:Credential = $Credential
+$script:AuthType   = $AuthType
+$script:Token      = $null
+$script:MaxRelogon = 3        # max re-logon attempts per request when the session is lost
+
 # Auto-detect the delimiter from the header when set to 'Auto' (extractSudoRoot output uses ';')
 if ($CsvDelimiter -eq 'Auto') {
     $headerLine = Get-Content -LiteralPath $CsvPath -TotalCount 1
@@ -515,7 +552,6 @@ $results     = New-Object System.Collections.Generic.List[object]
 $safeMembersCache = @{}
 $safeMembersError = @{}
 $neededSafes = New-Object 'System.Collections.Generic.HashSet[string]'
-$token = $null
 $scriptStart = Get-Date
 
 # Build the OU group->manager map FIRST (one AD enumeration), before anything else,
@@ -525,12 +561,12 @@ Build-GroupManagerMap
 try {
     # ============================= PHASE 1: EXTRACTION (session open) =============================
     Write-Host "Connecting to PVWA $PvwaUrl ..." -ForegroundColor Cyan
-    $token = Invoke-PvwaLogon -Cred $Credential -Type $AuthType
+    $script:Token = Invoke-PvwaLogon -Cred $Credential -Type $AuthType
     Write-Host "Connected." -ForegroundColor Green
 
     # 1a) Extraction: all accounts in one shot, then save the extract
     Write-Host "Extracting all accounts from the PVWA..." -ForegroundColor Cyan
-    $allAccounts = Get-PvwaAllAccounts -Token $token
+    $allAccounts = Get-PvwaAllAccounts
     try {
         $extractDir = Split-Path -Parent $AccountsExtractPath
         if ($extractDir -and -not (Test-Path -LiteralPath $extractDir)) { New-Item -ItemType Directory -Force -Path $extractDir | Out-Null }
@@ -666,7 +702,7 @@ try {
         $sN++
         Write-Progress -Activity "Reading safe members" -Status "$sN/$($neededSafes.Count): $safe" -PercentComplete (($sN / [Math]::Max(1, $neededSafes.Count)) * 100)
         try {
-            $m = Get-PvwaSafeMembers -Token $token -SafeName $safe
+            $m = Get-PvwaSafeMembers -SafeName $safe
             $safeMembersCache[$safe] = $m
             Write-Host "    [$safe] $(@($m).Count) member(s)" -ForegroundColor Gray
         }
@@ -680,7 +716,7 @@ try {
 }
 finally {
     # ============================= PHASE 4: Close the session (extraction done) ===========
-    if ($token) { Invoke-PvwaLogoff -Token $token }
+    if ($script:Token) { Invoke-PvwaLogoff -Token $script:Token }
     Write-Host "CyberArk session closed (extraction done)." -ForegroundColor Cyan
 }
 
