@@ -207,6 +207,20 @@ function Get-PvwaSafeMembers {
 #endregion
 
 #region ----------------------------------------------------------- Matching helpers
+# Caches to avoid repeated network round-trips (DNS / Active Directory)
+$script:DnsCache = @{}
+$script:AdCache = @{}
+
+function Get-CachedDomainGroup {
+    <#  Resolve-DomainGroupAndManager with a cache keyed by group name, so a group
+        shared by many safes triggers only ONE AD query.  #>
+    param([string]$Name)
+    if (-not $script:AdCache.ContainsKey($Name)) {
+        $script:AdCache[$Name] = Resolve-DomainGroupAndManager -MemberName $Name
+    }
+    return $script:AdCache[$Name]
+}
+
 function Test-AddressMatch {
     param([string]$Address, [string]$HostValue, [string]$Strategy)
     if ([string]::IsNullOrWhiteSpace($Address) -or [string]::IsNullOrWhiteSpace($HostValue)) { return $false }
@@ -267,26 +281,32 @@ function Get-NameSimilarityScore {
 }
 
 function Resolve-HostIPAddress {
-    <#  Resolves a hostname to its IPv4 address(es) via DNS. Returns an array (empty on failure).  #>
+    <#  Resolves a hostname to its IPv4 address(es) via DNS. Returns an array (empty on failure).
+        Results are cached so a repeated host is resolved only once.  #>
     param([string]$HostValue)
 
     if ([string]::IsNullOrWhiteSpace($HostValue)) { return @() }
+    $key = $HostValue.ToLower().Trim()
+    if ($script:DnsCache.ContainsKey($key)) { return $script:DnsCache[$key] }
 
     # If the host is already an IP, return it as-is
     $parsed = $null
-    if ([System.Net.IPAddress]::TryParse($HostValue, [ref]$parsed)) { return @($HostValue) }
+    if ([System.Net.IPAddress]::TryParse($HostValue, [ref]$parsed)) { $script:DnsCache[$key] = @($HostValue); return $script:DnsCache[$key] }
 
+    $out = @()
     try {
         $addrs = [System.Net.Dns]::GetHostAddresses($HostValue)
-        $ips = $addrs |
+        $out = @($addrs |
             Where-Object { $_.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork } |
-            ForEach-Object { $_.IPAddressToString }
-        return @($ips | Select-Object -Unique)
+            ForEach-Object { $_.IPAddressToString } |
+            Select-Object -Unique)
     }
     catch {
         Write-Verbose "DNS resolution failed for '$HostValue': $($_.Exception.Message)"
-        return @()
+        $out = @()
     }
+    $script:DnsCache[$key] = $out
+    return $out
 }
 
 function Resolve-DomainGroupAndManager {
@@ -406,6 +426,7 @@ $safeMembersCache = @{}
 $safeMembersError = @{}
 $neededSafes = New-Object 'System.Collections.Generic.HashSet[string]'
 $token = $null
+$scriptStart = Get-Date
 
 try {
     # ============================= PHASE 1: EXTRACTION (session open) =============================
@@ -570,89 +591,108 @@ finally {
 }
 
 # ============================= PHASE 5: OFFLINE enrichment (external group + AD manager) =====
+# Resolve each UNIQUE safe only ONCE (many accounts can share a safe), and run at
+# most one AD lookup for the chosen group (cached). This is where AD is the bottleneck.
 Write-Host "Resolving domain groups and managers (Active Directory)..." -ForegroundColor Cyan
-$onboardedRecs = $results | Where-Object { $_.Onboarded -eq 'Yes' }
-$j = 0
-foreach ($rec in $onboardedRecs) {
-    $j++
-    Write-Progress -Activity "AD resolution" -Status "$j/$($onboardedRecs.Count): $($rec.SafeName)" -PercentComplete (($j / [Math]::Max(1, $onboardedRecs.Count)) * 100)
-    $members = $safeMembersCache[$rec.SafeName]
+$onboardedRecs = @($results | Where-Object { $_.Onboarded -eq 'Yes' })
+$safeNames = @($onboardedRecs | ForEach-Object { $_.SafeName } | Select-Object -Unique)
+$safeResolution = @{}
+$sCount = 0
+
+foreach ($safe in $safeNames) {
+    $sCount++
+    Write-Progress -Activity "AD resolution" -Status "$sCount/$($safeNames.Count): $safe" -PercentComplete (($sCount / [Math]::Max(1, $safeNames.Count)) * 100)
+
+    $res = [ordered]@{ AllSafeGroups = $null; ExternalDomainGroup = $null; Score = $null; Manager = $null; ManagerEmail = $null; Notes = $null }
+    $members = $safeMembersCache[$safe]
     if (-not $members) {
-        $reason = if ($safeMembersError.ContainsKey($rec.SafeName)) { $safeMembersError[$rec.SafeName] } else { 'no members returned by the API' }
-        $rec.Notes = "Safe members unavailable: $reason"
-        if ($DebugMode) { Write-Host "[DEBUG] $($rec.Username)@$($rec.Host) -> safe '$($rec.SafeName)': MEMBERS UNAVAILABLE ($reason)" -ForegroundColor Red }
+        $reason = if ($safeMembersError.ContainsKey($safe)) { $safeMembersError[$safe] } else { 'no members returned by the API' }
+        $res.Notes = "Safe members unavailable: $reason"
+        $safeResolution[$safe] = $res
+        if ($DebugMode) { Write-Host "[DEBUG] safe '$safe': MEMBERS UNAVAILABLE ($reason)" -ForegroundColor Red }
         continue
     }
-    # List every member with its type, for traceability/diagnostic
-    $rec.AllSafeGroups = (($members | ForEach-Object { "$($_.memberName)[$($_.memberType)]" }) -join '; ')
+    $res.AllSafeGroups = (($members | ForEach-Object { "$($_.memberName)[$($_.memberType)]" }) -join '; ')
 
     # Candidates = members that are NOT default groups and NOT plain users.
-    # (We do not strictly require memberType='Group' so a domain group is never missed
-    #  if the API labels it differently; we only drop members explicitly typed 'User'.)
-    $candidates = $members | Where-Object {
-        -not (Test-IsDefaultGroup $_.memberName) -and ("$($_.memberType)" -ne 'User')
+    $candidates = $members | Where-Object { -not (Test-IsDefaultGroup $_.memberName) -and ("$($_.memberType)" -ne 'User') }
+
+    # Score candidates in memory (suffix + similarity) — NO AD call yet.
+    $scored = @()
+    foreach ($cand in $candidates) {
+        $scored += [pscustomobject]@{
+            Name   = $cand.memberName
+            Suffix = (Test-SuffixMatch -A $cand.memberName -B $safe -Len $SafeGroupSuffixLength)
+            Score  = (Get-NameSimilarityScore -Name $cand.memberName -Reference $safe)
+        }
     }
 
     if ($DebugMode) {
-        Write-Host "[DEBUG] $($rec.Username)@$($rec.Host) -> safe '$($rec.SafeName)': $(@($members).Count) member(s)" -ForegroundColor Magenta
-        Write-Host "[DEBUG]   members   : $($rec.AllSafeGroups)" -ForegroundColor DarkGray
-        Write-Host "[DEBUG]   candidates: $((@($candidates) | ForEach-Object { $_.memberName }) -join ', ')" -ForegroundColor DarkGray
+        Write-Host "[DEBUG] safe '$safe': $(@($members).Count) member(s)" -ForegroundColor Magenta
+        Write-Host "[DEBUG]   members   : $($res.AllSafeGroups)" -ForegroundColor DarkGray
+        Write-Host "[DEBUG]   candidates: $((@($scored) | ForEach-Object { $_.Name }) -join ', ')" -ForegroundColor DarkGray
     }
 
-    # For each candidate: suffix match with the safe name (primary rule),
-    # name-resemblance score (secondary), and AD resolution (manager).
-    $domainGroups = @()
-    foreach ($cand in $candidates) {
-        $suffix = Test-SuffixMatch -A $cand.memberName -B $rec.SafeName -Len $SafeGroupSuffixLength
-        $score = Get-NameSimilarityScore -Name $cand.memberName -Reference $rec.SafeName
-        $r = Resolve-DomainGroupAndManager -MemberName $cand.memberName
-        $domainGroups += [pscustomobject]@{
-            GroupName    = if ($r.GroupName) { $r.GroupName } else { $cand.memberName }
-            Manager      = $r.Manager
-            ManagerEmail = $r.ManagerEmail
-            InAD         = $r.IsDomainGroup
-            Score        = $score
-            SuffixMatch  = $suffix
+    if ($scored.Count -eq 0) {
+        $res.Notes = 'No external domain group found on the safe (excluding default groups)'
+        $safeResolution[$safe] = $res
+        continue
+    }
+
+    # Choose the group: 1) common suffix (deterministic), else 2) best name resemblance.
+    # AD is queried only for the chosen group (cached) — not for every candidate.
+    $chosen = $null
+    $r = $null
+    $bySuffix = @($scored | Where-Object { $_.Suffix } | Sort-Object -Property Score -Descending)
+    if ($bySuffix.Count -gt 0) {
+        $chosen = $bySuffix[0]
+        if (-not $SkipADLookup) { $r = Get-CachedDomainGroup -Name $chosen.Name }
+    }
+    else {
+        $ordered = @($scored | Sort-Object -Property Score -Descending)
+        if ($SkipADLookup) {
+            $chosen = $ordered[0]
+        }
+        else {
+            # Resolve in resemblance order, stop at the first AD-confirmed group
+            foreach ($c in $ordered) {
+                $rr = Get-CachedDomainGroup -Name $c.Name
+                if ($rr.IsDomainGroup) { $chosen = $c; $r = $rr; break }
+            }
+            if (-not $chosen) { $chosen = $ordered[0]; $r = Get-CachedDomainGroup -Name $chosen.Name }
         }
     }
 
-    # Selection priority:
-    #  1) groups sharing the safe's last N characters (deterministic rule)
-    #  2) otherwise AD-confirmed groups, ranked by name resemblance
-    #  3) otherwise any candidate, ranked by name resemblance
-    $suffixMatches = @($domainGroups | Where-Object { $_.SuffixMatch } | Sort-Object -Property Score -Descending)
-    if ($suffixMatches.Count -gt 0) {
-        $pool = $suffixMatches
-    }
-    else {
-        $confirmed = @($domainGroups | Where-Object { $_.InAD })
-        $pool = if ($SkipADLookup) { $domainGroups }
-        elseif ($confirmed.Count -gt 0) { $confirmed }
-        else { $domainGroups }
-        $pool = @($pool | Sort-Object -Property Score -Descending)
-    }
+    $res.ExternalDomainGroup = if ($r -and $r.GroupName) { $r.GroupName } else { $chosen.Name }
+    $res.Score = $chosen.Score
+    if ($r) { $res.Manager = $r.Manager; $res.ManagerEmail = $r.ManagerEmail }
 
-    if ($pool.Count -eq 0) {
-        $rec.Notes = 'No external domain group found on the safe (excluding default groups)'
+    $notes = @()
+    if ($chosen.Suffix) { $notes += "Selected by common suffix with the safe (last $SafeGroupSuffixLength chars)" }
+    elseif (-not $SkipADLookup -and $r -and -not $r.IsDomainGroup) { $notes += 'Probable group by resemblance (not confirmed in AD)' }
+    if (-not $SkipADLookup -and $r -and $r.IsDomainGroup -and -not $r.Manager) { $notes += 'No manager (empty ManagedBy)' }
+    $otherList = @($scored | Where-Object { $_.Name -ne $chosen.Name })
+    if ($otherList.Count -gt 0) {
+        $others = ($otherList | ForEach-Object { "$($_.Name) (sim=$($_.Score))" }) -join ', '
+        $notes += "Other candidate groups: $others"
     }
-    else {
-        $best = $pool[0]
-        $rec.ExternalDomainGroup = $best.GroupName
-        $rec.GroupSafeSimilarity = $best.Score
-        $rec.GroupManager = $best.Manager
-        $rec.GroupManagerEmail = $best.ManagerEmail
-        if ($DebugMode) { Write-Host "[DEBUG]   chosen    : $($best.GroupName) (suffix=$($best.SuffixMatch), sim=$($best.Score), AD=$($best.InAD), manager=$($best.Manager))" -ForegroundColor Green }
+    if ($notes.Count -gt 0) { $res.Notes = ($notes -join ' | ') }
 
-        $notes = @()
-        if ($best.SuffixMatch) { $notes += "Selected by common suffix with the safe (last $SafeGroupSuffixLength chars)" }
-        elseif (-not $SkipADLookup -and -not $best.InAD) { $notes += 'Probable group by resemblance (not confirmed in AD)' }
-        if (-not $best.Manager -and -not $SkipADLookup -and $best.InAD) { $notes += 'No manager (empty ManagedBy)' }
-        if ($pool.Count -gt 1) {
-            $others = ($pool | Select-Object -Skip 1 | ForEach-Object { "$($_.GroupName) (sim=$($_.Score))" }) -join ', '
-            $notes += "Other candidate groups: $others"
-        }
-        if ($notes.Count -gt 0) { $rec.Notes = ($notes -join ' | ') }
-    }
+    if ($DebugMode) { Write-Host "[DEBUG]   chosen    : $($res.ExternalDomainGroup) (suffix=$($chosen.Suffix), sim=$($chosen.Score), manager=$($res.Manager))" -ForegroundColor Green }
+
+    $safeResolution[$safe] = $res
+}
+
+# Apply each per-safe resolution to every onboarded account in that safe
+foreach ($rec in $onboardedRecs) {
+    $res = $safeResolution[$rec.SafeName]
+    if (-not $res) { continue }
+    $rec.AllSafeGroups       = $res.AllSafeGroups
+    $rec.ExternalDomainGroup = $res.ExternalDomainGroup
+    $rec.GroupSafeSimilarity = $res.Score
+    $rec.GroupManager        = $res.Manager
+    $rec.GroupManagerEmail   = $res.ManagerEmail
+    if ($res.Notes) { $rec.Notes = $res.Notes }
 }
 Write-Progress -Activity "AD resolution" -Completed
 
@@ -663,6 +703,7 @@ $final | Export-Csv -LiteralPath $OutputPath -NoTypeInformation -Encoding UTF8 -
 $onb = ($final | Where-Object { $_.Onboarded -eq 'Yes' }).Count
 $anomalies = ($final | Where-Object { $_.OnboardingAssessment -like 'ANOMALY*' }).Count
 $normalMissing = ($final | Where-Object { $_.OnboardingAssessment -like 'Normal*' }).Count
+$elapsed = (Get-Date) - $scriptStart
 Write-Host ""
 Write-Host "===== Summary =====" -ForegroundColor Yellow
 Write-Host "Rows processed                : $($final.Count)"
@@ -672,5 +713,8 @@ if ($HasCandidate) {
     Write-Host "  -> ANOMALIES (candidate not onboarded) : $anomalies" -ForegroundColor Red
     Write-Host "  -> Normal (not a candidate)            : $normalMissing" -ForegroundColor Gray
 }
+Write-Host "Unique safes queried          : $($safeMembersCache.Count)"
+Write-Host "Unique AD group lookups       : $($script:AdCache.Count)"
+Write-Host "Total time                    : $([int]$elapsed.TotalSeconds)s"
 Write-Host "Results written to            : $OutputPath" -ForegroundColor Green
 #endregion
