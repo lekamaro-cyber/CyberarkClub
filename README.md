@@ -112,6 +112,7 @@ $SkipCertificateCheck = $false
 | `$AddressMatch`        | `Hostname` (défaut), `Exact`, `Contains`.                            |
 | `$AdServer`            | DC AD à cibler (optionnel, réduit la latence). Vide = automatique.   |
 | `$AdDomain`            | Domaine DNS des groupes (sert de serveur AD si `$AdServer` vide).    |
+| `$AdExtraDomains`      | Autres domaines à interroger si le groupe n'est pas trouvé dans le domaine par défaut (essayés dans l'ordre). |
 | `$GroupsOU`            | OU des groupes : énumérée **une fois** (au tout début) pour bâtir une table groupe→manager. |
 | `$DomainSearchFallback`| `$true` = si un groupe n'est pas dans l'OU, le chercher dans tout le domaine ; `$false` = pas de scan domaine. |
 | `$DefaultSafeGroups`   | Groupes par défaut à exclure (noms exacts).                          |
@@ -161,6 +162,10 @@ Les requêtes AD (groupe + manager) sont le principal frein. Pour les minimiser 
   lookup** en mémoire — aucune requête AD par groupe.
 - Si un groupe n'est **pas** dans l'OU : recherche dans tout le domaine **seulement
   si** `$DomainSearchFallback = $true` (sinon aucun scan domaine).
+- **Plusieurs domaines** : renseignez `$AdExtraDomains = @('emea.corp','apac.corp')`.
+  Si le groupe n'est pas trouvé dans le domaine par défaut, le repli cherche dans
+  chaque domaine de la liste (dans l'ordre) jusqu'à le trouver, avec son manager.
+  La colonne `Notes`/source indique dans quel domaine il a été trouvé.
 - **`$AdDomain`** / **`$AdServer`** ciblent le domaine / un DC précis pour réduire
   la latence réseau.
 - Les managers (`ManagedBy`) et les groupes sont mis en **cache** (résolus une fois).

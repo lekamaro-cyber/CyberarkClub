@@ -84,6 +84,10 @@ $AdServer = ''                     # e.g. 'dc01.intra.corp'
 # Domain (DNS name) hosting the groups. Used as the AD server when $AdServer is empty.
 $AdDomain = ''                     # e.g. 'intra.corp'
 
+# Additional domains to search when a group is NOT found in the default domain/OU.
+# Tried in order, after the default domain. (Requires reachability / trust.)
+$AdExtraDomains = @()              # e.g. @('emea.corp', 'apac.corp')
+
 # OU that contains the domain groups granted on the safes. When set, the script
 # enumerates this OU ONCE (all groups + their ManagedBy) to build an in-memory map,
 # which is far faster than one AD query per group.
@@ -304,13 +308,14 @@ function Build-GroupManagerMap {
 }
 
 function Resolve-ManagerByDN {
-    <#  Resolve a ManagedBy DN to a manager (name + email) via ADSI, cached by DN.  #>
-    param([string]$Dn)
+    <#  Resolve a ManagedBy DN to a manager (name + email) via ADSI, cached by DN.
+        Optional $Server points the bind at a specific domain/DC (cross-domain).  #>
+    param([string]$Dn, [string]$Server)
     if ([string]::IsNullOrWhiteSpace($Dn)) { return $null }
     if ($script:MgrCache.ContainsKey($Dn)) { return $script:MgrCache[$Dn] }
     $m = $null
     try {
-        $srv = if ($AdServer) { $AdServer } elseif ($AdDomain) { $AdDomain } else { $null }
+        $srv = if ($Server) { $Server } elseif ($AdServer) { $AdServer } elseif ($AdDomain) { $AdDomain } else { $null }
         $path = if ($srv) { "LDAP://$srv/$Dn" } else { "LDAP://$Dn" }
         $u = New-Object System.DirectoryServices.DirectoryEntry($path)
         $disp = "$($u.Properties['displayName'].Value)"
@@ -321,6 +326,43 @@ function Resolve-ManagerByDN {
     catch { Write-Verbose "Manager DN not resolved ($Dn): $($_.Exception.Message)" }
     $script:MgrCache[$Dn] = $m
     return $m
+}
+
+function Search-GroupInDomain {
+    <#  ADSI search for a group by cn/sAMAccountName in a given domain (empty = default).
+        Returns @{ GroupName; ManagedBy; Server; DomainLabel } or $null.  #>
+    param([string]$Name, [string]$Domain)
+    try {
+        $f = $Name -replace '([\\\*\(\)\/])', '\$1'   # escape LDAP filter chars
+        if ($Domain) {
+            $srv = $Domain
+            $dn = 'DC=' + ($Domain -replace '\.', ',DC=')
+        }
+        else {
+            $srv = if ($AdServer) { $AdServer } elseif ($AdDomain) { $AdDomain } else { $null }
+            if ($AdDomain) { $dn = 'DC=' + ($AdDomain -replace '\.', ',DC=') }
+            else { try { $dn = "$(([adsi]'LDAP://RootDSE').defaultNamingContext)" } catch { $dn = '' } }
+        }
+        $path = if ($srv) { "LDAP://$srv/$dn" } else { "LDAP://$dn" }
+        $root = New-Object System.DirectoryServices.DirectoryEntry($path)
+        $ds = New-Object System.DirectoryServices.DirectorySearcher($root)
+        $ds.Filter = "(&(objectClass=group)(|(cn=$f)(samAccountName=$f)))"
+        $ds.PageSize = 10
+        [void]$ds.PropertiesToLoad.Add('name')
+        [void]$ds.PropertiesToLoad.Add('managedby')
+        $r1 = $ds.FindOne()
+        if ($r1) {
+            return [pscustomobject]@{
+                GroupName   = if ($r1.Properties['name'].Count) { "$($r1.Properties['name'][0])" } else { $Name }
+                ManagedBy   = if ($r1.Properties['managedby'].Count) { "$($r1.Properties['managedby'][0])" } else { '' }
+                Server      = $srv
+                DomainLabel = if ($Domain) { $Domain } else { 'default' }
+            }
+        }
+    }
+    catch { Write-Verbose "Group search failed in domain '$Domain' for $Name : $($_.Exception.Message)" }
+    return $null
+}
 }
 
 function Get-CachedDomainGroup {
@@ -455,29 +497,23 @@ function Resolve-DomainGroupAndManager {
         return $result
     }
 
-    # 2) Fallback: direct ADSI search from the domain root (group not in the OU map).
+    # 2) Fallback: ADSI search, default domain first then each extra domain in the list.
     #    Skipped entirely when $DomainSearchFallback is $false (no domain scan).
     if (-not $DomainSearchFallback) { return $result }
-    try {
-        $f = $name -replace '([\\\*\(\)\/])', '\$1'   # escape LDAP filter special chars
-        $root = Get-AdSearchRoot
-        $ds = New-Object System.DirectoryServices.DirectorySearcher($root)
-        $ds.Filter = "(&(objectClass=group)(|(cn=$f)(samAccountName=$f)))"
-        $ds.PageSize = 10
-        [void]$ds.PropertiesToLoad.Add('name')
-        [void]$ds.PropertiesToLoad.Add('managedby')
-        $r1 = $ds.FindOne()
-        if ($r1) {
+    $domainsToTry = @('') + @($AdExtraDomains)   # '' = default domain
+    foreach ($dom in $domainsToTry) {
+        $hit = Search-GroupInDomain -Name $name -Domain $dom
+        if ($hit) {
             $result.IsDomainGroup = $true
-            $result.GroupName = if ($r1.Properties['name'].Count) { "$($r1.Properties['name'][0])" } else { $name }
-            $mb = if ($r1.Properties['managedby'].Count) { "$($r1.Properties['managedby'][0])" } else { '' }
-            if ($mb) {
-                $mgr = Resolve-ManagerByDN -Dn $mb
-                if ($mgr) { $result.Manager = $mgr.Name; $result.ManagerEmail = $mgr.Email; $result.ManagerSource = 'AD.ManagedBy' }
+            $result.GroupName = $hit.GroupName
+            if ($hit.ManagedBy) {
+                $mgr = Resolve-ManagerByDN -Dn $hit.ManagedBy -Server $hit.Server
+                if ($mgr) { $result.Manager = $mgr.Name; $result.ManagerEmail = $mgr.Email }
             }
+            $result.ManagerSource = "AD.ManagedBy ($($hit.DomainLabel))"
+            break
         }
     }
-    catch { Write-Verbose "AD group search failed for $name : $($_.Exception.Message)" }
 
     return $result
 }
