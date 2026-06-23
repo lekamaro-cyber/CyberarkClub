@@ -78,7 +78,8 @@ $SafeGroupSuffixLength = 5
 $SkipADLookup        = $false      # $true = ne pas interroger l'Active Directory
 $SkipIPCheck         = $false      # $true = ne pas tenter le repli par IP (DNS)
 $SkipCertificateCheck = $false     # $true = ignorer la validation TLS du PVWA
-$DebugMode           = $false      # $true = afficher le détail (membres, candidats, choix) par compte
+$DebugMode           = $true       # $true = afficher en détail TOUT ce que fait le script
+$MaxAccounts         = 10          # nombre max de comptes (lignes) à traiter ; 0 = tous
 
 # --- Groupes par défaut du safe à exclure pour isoler le groupe de domaine externe ---
 # Noms exacts :
@@ -366,6 +367,13 @@ $rows = Import-Csv -LiteralPath $CsvPath -Delimiter $CsvDelimiter
 if ($rows.Count -eq 0) { throw "Le CSV ne contient aucune ligne." }
 $cols = $rows[0].PSObject.Properties.Name
 
+# Limit the number of processed rows (debug / test)
+$totalRows = $rows.Count
+if ($MaxAccounts -gt 0 -and $rows.Count -gt $MaxAccounts) {
+    $rows = @($rows | Select-Object -First $MaxAccounts)
+    Write-Host "LIMITE : traitement des $MaxAccounts premières lignes sur $totalRows (MaxAccounts=$MaxAccounts)." -ForegroundColor Yellow
+}
+
 # Resolve the username/host columns: use the configured name if present,
 # otherwise (or when set to 'Auto') fall back to known alternatives.
 function Resolve-Column {
@@ -385,6 +393,13 @@ if ($OutDir -and -not (Test-Path -LiteralPath $OutDir)) {
     New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 }
 Write-Host "Colonnes utilisées : username='$UsernameColumn', host='$HostColumn'$(if ($HasCandidate) { ", candidat='$CandidateColumn'" })" -ForegroundColor DarkCyan
+if ($DebugMode) {
+    Write-Host "[DEBUG] ===== Configuration =====" -ForegroundColor Magenta
+    Write-Host "[DEBUG] PVWA=$PvwaUrl | AuthType=$AuthType | User=$($Credential.UserName)" -ForegroundColor DarkGray
+    Write-Host "[DEBUG] CSV=$CsvPath (delim='$CsvDelimiter') | Sortie=$OutputPath" -ForegroundColor DarkGray
+    Write-Host "[DEBUG] AddressMatch=$AddressMatch | SuffixLen=$SafeGroupSuffixLength | SkipAD=$SkipADLookup | SkipIP=$SkipIPCheck" -ForegroundColor DarkGray
+    Write-Host "[DEBUG] MaxAccounts=$MaxAccounts (lignes à traiter=$($rows.Count))" -ForegroundColor DarkGray
+}
 
 $results     = New-Object System.Collections.Generic.List[object]
 $safeMembersCache = @{}
@@ -459,6 +474,10 @@ try {
         }
 
         $accts = $caByUser[$username.ToLower()]
+        if ($DebugMode) {
+            $addrList = if ($accts) { (@($accts) | ForEach-Object { $_.address }) -join ', ' } else { '(aucun)' }
+            Write-Host "[DEBUG] Ligne $i : $username@$hostName -> $(@($accts).Count) compte(s) pour ce user. Adresses: $addrList" -ForegroundColor DarkGray
+        }
         $match = $null
         if ($accts) {
             $match = $accts | Where-Object { Test-AddressMatch -Address $_.address -HostValue $hostName -Strategy $AddressMatch } | Select-Object -First 1
@@ -481,6 +500,7 @@ try {
         }
 
         if (-not $match) {
+            if ($DebugMode) { Write-Host "[DEBUG]   -> NON EMBARQUÉ (pas de correspondance d'adresse)" -ForegroundColor DarkYellow }
             $rec.Notes = 'Compte non embarqué (aucune correspondance username+address, ni par nom ni par IP)'
             switch -Regex ($candidate) {
                 '^(?i)YES'             { $rec.OnboardingAssessment = 'ANOMALIE - candidat CyberArk non embarqué' }
@@ -498,8 +518,10 @@ try {
         $rec.PlatformId = $match.platformId
         $rec.SafeName = $match.safeName
         if ($match.safeName) { [void]$neededSafes.Add($match.safeName) }
+        if ($DebugMode) { Write-Host "[DEBUG]   -> EMBARQUÉ ($($rec.MatchType)) : compte '$($match.name)' adresse '$($match.address)' safe '$($match.safeName)'" -ForegroundColor Green }
     }
     Write-Progress -Activity "Matching CyberArk" -Completed
+    if ($DebugMode) { Write-Host "[DEBUG] Safes à interroger : $((@($neededSafes)) -join ', ')" -ForegroundColor Magenta }
 
     # ============================= PHASE 3 : Membres des safes concernés (session ouverte) ===========
     Write-Host "Lecture des membres de $($neededSafes.Count) safe(s) concerné(s)..." -ForegroundColor Cyan

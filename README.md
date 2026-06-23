@@ -115,6 +115,8 @@ $SkipCertificateCheck = $false
 | `$SkipADLookup`        | `$true` = désactive la partie Active Directory.                     |
 | `$SkipIPCheck`         | `$true` = désactive le repli par IP (voir ci-dessous).             |
 | `$SkipCertificateCheck`| `$true` = ignore la validation TLS du PVWA.                        |
+| `$DebugMode`           | `$true` = affiche en détail tout ce que fait le script (config, matching, membres, candidats, choix). |
+| `$MaxAccounts`         | Limite le nombre de lignes traitées (ex. 10 pour un test). `0` = toutes. |
 
 ### Performance : extraction puis session fermée
 
