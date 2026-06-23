@@ -74,6 +74,11 @@ $AddressMatch = 'Hostname'         # 'Hostname' (short name) | 'Exact' | 'Contai
 # 'C-NPR'). Set to 0 to disable this rule.
 $SafeGroupSuffixLength = 5
 
+# --- Active Directory ---
+# Optional: target a specific domain controller to avoid referral latency.
+# Leave empty ('') to let Windows pick the DC automatically.
+$AdServer = ''                     # e.g. 'dc01.intra.corp'
+
 # --- Options ---
 $SkipADLookup        = $false      # $true = do not query Active Directory
 $SkipIPCheck         = $false      # $true = do not attempt the IP fallback (DNS)
@@ -330,16 +335,13 @@ function Resolve-DomainGroupAndManager {
     $name = $MemberName
     if ($name -match '\\') { $name = $name.Split('\')[-1] }
     if ($name -match '@') { $name = $name.Split('@')[0] }
+    $f = $name -replace "'", "''"   # escape single quotes for the AD filter
 
-    try {
-        $grp = Get-ADGroup -Identity $name -Properties ManagedBy, mail -ErrorAction Stop
-    }
-    catch {
-        try {
-            $grp = Get-ADGroup -Filter "Name -eq '$name' -or sAMAccountName -eq '$name'" -Properties ManagedBy, mail -ErrorAction Stop | Select-Object -First 1
-        }
-        catch { $grp = $null }
-    }
+    # Use -Filter (not -Identity) so a "not found" returns empty instead of throwing
+    # (PowerShell exceptions are slow); SilentlyContinue keeps it non-fatal.
+    $grpParams = @{ Filter = "Name -eq '$f' -or sAMAccountName -eq '$f'"; Properties = @('ManagedBy', 'mail'); ErrorAction = 'SilentlyContinue' }
+    if ($AdServer) { $grpParams['Server'] = $AdServer }
+    $grp = Get-ADGroup @grpParams | Select-Object -First 1
 
     if (-not $grp) { return $result }   # not found in AD => not a domain group
 
@@ -347,13 +349,14 @@ function Resolve-DomainGroupAndManager {
     $result.GroupName = $grp.Name
 
     if ($grp.ManagedBy) {
-        try {
-            $mgr = Get-ADObject -Identity $grp.ManagedBy -Properties displayName, mail, manager -ErrorAction Stop
+        $mgrParams = @{ Identity = $grp.ManagedBy; Properties = @('displayName', 'mail'); ErrorAction = 'SilentlyContinue' }
+        if ($AdServer) { $mgrParams['Server'] = $AdServer }
+        $mgr = Get-ADObject @mgrParams
+        if ($mgr) {
             $result.Manager = if ($mgr.displayName) { $mgr.displayName } else { $mgr.Name }
             $result.ManagerEmail = $mgr.mail
             $result.ManagerSource = 'Group.ManagedBy'
         }
-        catch { Write-Verbose "ManagedBy not resolved for $name : $($_.Exception.Message)" }
     }
 
     return $result
