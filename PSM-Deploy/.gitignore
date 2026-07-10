@@ -10,6 +10,10 @@ media/*
 installers/*
 !installers/.gitkeep
 
+# Artefacts de la démo (générés à l'exécution)
+demo/.demo-state/
+demo/.demo-logs/
+
 # Ne jamais committer de secret / credential file
 *.cred
 *.pfx
