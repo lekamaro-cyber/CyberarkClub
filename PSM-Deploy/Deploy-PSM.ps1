@@ -72,6 +72,8 @@ try {
     # ===================== PHASE : PreVol =====================
     if (-not (Test-PSMPhaseComplete 'PreVol')) {
         Confirm-PSMZone -ZoneConfig $ZoneConfig -NonInteractive:$NonInteractive
+        # Controle de connectivite des serveurs de licence RDS (non bloquant : WARN).
+        Test-PSMLicenseServers -Servers $Settings.Rds.LicenseServers | Out-Null
         # TODO (deploiement) : verifs connectivite Vault/PVWA, OS supporte, media present.
         if ($PSCmdlet.ShouldProcess('PreVol', 'Valider les prerequis de vol')) {
             Set-PSMPhaseComplete 'PreVol'

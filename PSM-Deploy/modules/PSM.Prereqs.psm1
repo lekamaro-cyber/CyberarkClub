@@ -11,6 +11,43 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+function Test-PSMLicenseServers {
+    <#
+        Controle de connectivite vers le/les serveur(s) de licence RDS.
+        Port 135 = RPC endpoint mapper (utilise par le service de licences RDS).
+        Non bloquant par defaut : journalise OK/WARN et renvoie $true si tous joignables.
+    #>
+    [CmdletBinding()]
+    param(
+        [string[]] $Servers,
+        [int]      $Port      = 135,
+        [int]      $TimeoutMs = 3000
+    )
+    $allOk = $true
+    foreach ($srv in (@($Servers) | Where-Object { $_ })) {
+        $ok = $false
+        try {
+            $client = [System.Net.Sockets.TcpClient]::new()
+            $iar    = $client.BeginConnect($srv, $Port, $null, $null)
+            if ($iar.AsyncWaitHandle.WaitOne($TimeoutMs)) {
+                $client.EndConnect($iar)
+                $ok = $client.Connected
+            }
+            $client.Close()
+        }
+        catch { $ok = $false }
+
+        if ($ok) {
+            Write-PSMLog -Level OK   -Message "Serveur de licence RDS joignable : $srv (TCP $Port)."
+        }
+        else {
+            Write-PSMLog -Level WARN -Message "Serveur de licence RDS INJOIGNABLE : $srv (TCP $Port) - verifier DNS/pare-feu."
+            $allOk = $false
+        }
+    }
+    return $allOk
+}
+
 function Invoke-PSMPrereqs {
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -65,4 +102,4 @@ function Invoke-PSMPrereqs {
     return $rebootRequired
 }
 
-Export-ModuleMember -Function Invoke-PSMPrereqs
+Export-ModuleMember -Function Invoke-PSMPrereqs, Test-PSMLicenseServers
