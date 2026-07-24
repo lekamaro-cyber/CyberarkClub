@@ -11,6 +11,26 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+function Get-PSMRegValue {
+    <#
+        Lecture registre robuste : renvoie la valeur, ou $null si la cle/valeur
+        n'existe pas. Evite l'exception StrictMode sur une propriete absente
+        (contrairement a (Get-ItemProperty ...).<Nom>).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [string] $Name
+    )
+    try {
+        $key = Get-Item -Path $Path -ErrorAction Stop
+        return $key.GetValue($Name, $null)   # $null si la valeur n'existe pas
+    }
+    catch {
+        return $null                          # la cle n'existe pas
+    }
+}
+
 function Test-PSMLicenseServers {
     <#
         Controle de connectivite vers le/les serveur(s) de licence RDS.
@@ -77,7 +97,7 @@ function Invoke-PSMPrereqs {
     Invoke-IdempotentStep -Name "Mode licence RDS ($licMode)" `
         -Test   {
             $modeVal = if ($licMode -eq 'PerUser') { 4 } else { 2 }
-            (Get-ItemProperty -Path $rdKey -Name 'LicensingMode' -ErrorAction SilentlyContinue).LicensingMode -eq $modeVal
+            (Get-PSMRegValue -Path $rdKey -Name 'LicensingMode') -eq $modeVal
         } `
         -Action {
             if (-not (Test-Path $rdKey)) { New-Item -Path $rdKey -Force | Out-Null }
@@ -87,9 +107,9 @@ function Invoke-PSMPrereqs {
 
     Invoke-IdempotentStep -Name "Serveur(s) de licence RDS ($licSrvStr)" `
         -Test   {
-            $cur = (Get-ItemProperty -Path "$rdKey" -Name 'LicenseServers' -ErrorAction SilentlyContinue).LicenseServers
-            # Comparaison insensible aux espaces autour des virgules.
-            ($cur -replace '\s*,\s*', ',') -eq $licSrvStr
+            $cur = Get-PSMRegValue -Path $rdKey -Name 'LicenseServers'
+            # Comparaison insensible aux espaces autour des virgules ($null -> '').
+            ((($cur -as [string]) -replace '\s*,\s*', ',')) -eq $licSrvStr
         } `
         -Action {
             if (-not (Test-Path $rdKey)) { New-Item -Path $rdKey -Force | Out-Null }
