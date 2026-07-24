@@ -9,8 +9,13 @@
 
     # --- Licences RD Session Host ---------------------------------------
     Rds = @{
-        LicenseMode   = 'PerUser'                 # 'PerUser' | 'PerDevice'
-        LicenseServer = '<RDS-LICENSE-SERVER>'    # TODO (deploiement) : FQDN du serveur de licence RDS
+        LicenseMode    = 'PerUser'                 # 'PerUser' | 'PerDevice'
+        # Un OU plusieurs serveurs de licence, dans l'ordre de preference.
+        # Ecrits dans la valeur registre 'LicenseServers' (liste separee par des virgules).
+        LicenseServers = @(
+            '<RDS-LICENSE-SERVER-1>'               # TODO (deploiement) : FQDN du/des serveur(s)
+            # '<RDS-LICENSE-SERVER-2>'
+        )
     }
 
     # --- Installation du binaire PSM (scripts d'automatisation CyberArk) -

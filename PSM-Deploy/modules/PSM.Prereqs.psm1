@@ -31,9 +31,11 @@ function Invoke-PSMPrereqs {
 
     # --- Mode de licence RDS + serveur de licence -----------------------------
     # TODO (deploiement) : valider les cles registre selon la version d'OS.
-    $licMode = $Settings.Rds.LicenseMode      # 'PerUser' | 'PerDevice'
-    $licSrv  = $Settings.Rds.LicenseServer    # ex: 'rds-lic.example.local'
-    $rdKey   = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
+    $licMode = $Settings.Rds.LicenseMode          # 'PerUser' | 'PerDevice'
+    # Accepte un tableau OU une chaine unique ; on normalise en liste ordonnee.
+    $licSrvList = @($Settings.Rds.LicenseServers) | Where-Object { $_ }
+    $licSrvStr  = $licSrvList -join ','            # valeur registre = liste separee par des virgules
+    $rdKey      = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
 
     Invoke-IdempotentStep -Name "Mode licence RDS ($licMode)" `
         -Test   {
@@ -46,14 +48,15 @@ function Invoke-PSMPrereqs {
             Set-ItemProperty -Path $rdKey -Name 'LicensingMode' -Value $modeVal -Type DWord
         }
 
-    Invoke-IdempotentStep -Name "Serveur de licence RDS ($licSrv)" `
+    Invoke-IdempotentStep -Name "Serveur(s) de licence RDS ($licSrvStr)" `
         -Test   {
             $cur = (Get-ItemProperty -Path "$rdKey" -Name 'LicenseServers' -ErrorAction SilentlyContinue).LicenseServers
-            $cur -eq $licSrv
+            # Comparaison insensible aux espaces autour des virgules.
+            ($cur -replace '\s*,\s*', ',') -eq $licSrvStr
         } `
         -Action {
             if (-not (Test-Path $rdKey)) { New-Item -Path $rdKey -Force | Out-Null }
-            Set-ItemProperty -Path $rdKey -Name 'LicenseServers' -Value $licSrv -Type String
+            Set-ItemProperty -Path $rdKey -Name 'LicenseServers' -Value $licSrvStr -Type String
         }
 
     # --- .NET / fonctionnalites requises (TODO: completer selon version PSM) --
