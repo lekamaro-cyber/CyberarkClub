@@ -23,12 +23,12 @@ administrateur.
 | Livraison | Dossier **auto-portant** copié sur la cible |
 | Topologie | PSM **in-domain**, **derrière Load Balancer**, **2 datacenters à flux fermés** |
 | Vault | **Central unique** joignable des 2 DC |
-| Zones | 2 datacenters → mapping `zone ⇄ {PVWA, CCP, AppID, Safe, Object, cert?}` |
+| Zones | 2 datacenters → mapping `zone ⇄ {PVWA, AuthMethod, compte d'install}` |
 | Install PSM | Scripts d'**automatisation CyberArk** |
-| Comptes composants | **PSMApp/PSMGw auto-créés** via REST PVWA |
+| Comptes composants | **PSMApp/PSMGw** enregistrés via la registration automation du média |
 | Comptes connexion | **PSMConnect/PSMAdminConnect = comptes de domaine gérés par CPM** — mots de passe récupérés à l'exécution par le service PSM (Safe PSMConnect), **non fournis à l'install** |
-| Secrets via CCP | **Uniquement** le compte admin/install Vault |
-| CCP | `Get-CcpCredential` gère cert (TLS mutuel) **ou** IP selon la zone |
+| Récupération des secrets | **Via l'API REST PVWA** (pas de CCP/AIM) — l'admin qui installe s'authentifie au PVWA et le script récupère le compte d'install Vault |
+| Auth PVWA | `Connect-PvwaSession` : CyberArk / LDAP / Windows / RADIUS ; `SkipCertificateCheck` en lab |
 | Logiciels additionnels | Pilotés par `config/software.psd1` (cmd + détection) |
 | AppLocker | **Politique contrôlée embarquée** (`applocker/`), appliquée par le script |
 | Hardening | **CyberArk complet** (PSMHardening + AppLocker) |
@@ -45,14 +45,14 @@ PSM-Deploy/
 ├─ Deploy-PSM.ps1            # Orchestrateur (phases + machine à états + reboot/reprise)
 ├─ config/
 │  ├─ settings.psd1          # Version PSM, licence RDS, chemins
-│  ├─ zones.psd1             # Mapping par datacenter (PVWA/CCP/AppID/Safe/Object/cert)
+│  ├─ zones.psd1             # Mapping par datacenter (PVWA/AuthMethod/compte d'install)
 │  └─ software.psd1          # Logiciels additionnels (cmd silencieuse + détection)
 ├─ modules/
 │  ├─ PSM.Common.psm1        # Idempotence, logs+masquage, état/reprise, confirmations
-│  ├─ PSM.Ccp.psm1           # Get-CcpCredential (cert OU ip)
+│  ├─ PSM.Pvwa.psm1          # API REST PVWA : logon + Get-PvwaAccountPassword (secrets)
 │  ├─ PSM.Prereqs.psm1       # RDS/RDSH, licence RDS, registre
 │  ├─ PSM.Install.psm1       # Wrapper scripts d'automatisation CyberArk
-│  ├─ PSM.Register.psm1      # REST PVWA : enregistrement PSMApp/PSMGw
+│  ├─ PSM.Register.psm1      # Enregistrement PSMApp/PSMGw (session PVWA + registration automation)
 │  ├─ PSM.Hardening.psm1     # PSMHardening + politique AppLocker contrôlée
 │  └─ PSM.Software.psm1      # Install générique config-driven
 ├─ applocker/PSMConfigureAppLocker.xml   # Politique AppLocker contrôlée (placeholder)
@@ -67,7 +67,7 @@ PSM-Deploy/
 
 ```
 PreVol → Prereqs(RDS) → [reboot+reprise] → Software → InstallPSM
-       → Register(REST PVWA, secret CCP) → Hardening(+AppLocker) → Validation
+       → Register(session PVWA + secret via API PVWA) → Hardening(+AppLocker) → Validation
 ```
 Chaque phase est marquée terminée dans `state/progress.json`. Après reboot, une
 tâche planifiée relance le script (`-Resume`) qui **reprend à la phase non terminée**.
@@ -95,16 +95,17 @@ tâche planifiée relance le script (`-Resume`) qui **reprend à la phase non te
 
 - Secrets en `SecureString`, **masqués** dans tous les logs ; aucun secret versionné.
 - `#Requires -RunAsAdministrator` + contrôle d'élévation au démarrage.
-- CCP : préférer à terme un **endpoint dédié `Require client certificate`** pour les
-  zones sensibles (renseigner `ClientCertThumbprint` dans `zones.psd1`).
+- Récupération des secrets **via l'API REST PVWA** avec la session de l'admin qui installe
+  (pas de CCP/AIM à provisionner). Le jeton de session est fermé (`Logoff`) en fin de phase.
+- `SkipCertificateCheck` réservé au **lab** ; en production, laisser la validation TLS active.
 
 ## À compléter avant déploiement (`TODO` / `STUB`)
 
 - `media/` + `Install.AutomationScript`/`ResponseFile` : brancher les scripts CyberArk.
-- `PSM.Register.psm1` : logique REST de création/enregistrement des composants.
+- `PSM.Register.psm1` : brancher la registration automation du média + détection d'idempotence.
 - `PSM.Hardening.psm1` : exécution PSMHardening + application AppLocker.
 - `applocker/PSMConfigureAppLocker.xml` : politique réelle (+ binaires additionnels).
-- `zones.psd1` / `settings.psd1` : valeurs réelles (PVWA, CCP, AppID, Safe, licence RDS).
+- `zones.psd1` / `settings.psd1` : valeurs réelles (PVWA, méthode d'auth, compte d'install, licence RDS).
 - Persistance de la zone pour la reprise post-reboot.
 
 ## Tests

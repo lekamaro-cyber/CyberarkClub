@@ -1,36 +1,48 @@
 @{
     # =====================================================================
-    # Mapping ZONE (datacenter) -> parametres Vault / PVWA / CCP.
+    # Mapping ZONE (datacenter) -> parametres Vault / PVWA.
     # Les 2 datacenters ont des flux fermes entre eux : on selectionne la
     # zone au lancement (-Zone) puis on confirme interactivement.
     #
-    # Aucun secret ici. Le mot de passe du compte admin/install Vault est
-    # recupere via le CCP au runtime (par AppID/Safe/Object ci-dessous).
+    # Recuperation des secrets : via l'API REST du PVWA (PAS de CCP/AIM).
+    #   -> L'admin qui realise l'installation s'authentifie sur le PVWA
+    #      (il a acces a tous les comptes CyberArk) ; le script recupere a la
+    #      volee le mot de passe du compte d'install/admin Vault.
     #
-    # ClientCertThumbprint :
-    #   - renseigne -> appel CCP en TLS mutuel (endpoint "Require client cert")
-    #   - vide      -> appel CCP par IP/OS autorisee (endpoint legacy)
+    # InstallAccountSafe / InstallAccountUserName :
+    #   - renseignes -> le script recupere ce compte via l'API PVWA et l'utilise
+    #                   pour l'enregistrement (registration automation du media).
+    #   - vides      -> le script reutilise directement le compte de l'admin
+    #                   connecte au PVWA comme compte d'install.
+    #
+    # SkipCertificateCheck : $true UNIQUEMENT en lab (PVWA a certificat auto-signe).
     # =====================================================================
 
+    # --- Bac a sable / demo (PVWA de test) ------------------------------
+    LAB = @{
+        Name                   = 'LAB'
+        PvwaUrl                = 'https://<PVWA-LAB>'      # TODO : URL PVWA du bac a sable
+        PvwaAuthMethod         = 'CyberArk'                # CyberArk | LDAP | Windows | RADIUS
+        SkipCertificateCheck   = $true                     # lab : certificat auto-signe tolere
+        InstallAccountSafe     = ''                        # vide -> utilise le compte admin connecte
+        InstallAccountUserName = ''
+    }
+
     DC1 = @{
-        Name                 = 'DC1'
-        PvwaUrl              = 'https://<PVWA-DC1>'        # TODO (deploiement)
-        PvwaAuthMethod       = 'CyberArk'                  # CyberArk | LDAP | RADIUS
-        CcpUrl               = 'https://<CCP-DC1>'         # TODO (deploiement)
-        ClientCertThumbprint = ''                          # TODO : thumbprint si endpoint cert
-        AppId                = '<APPID-DC1>'               # AppID CCP pour le compte admin Vault
-        Safe                 = '<SAFE-ADMIN-DC1>'          # Safe du compte admin/install
-        ObjectName           = '<OBJECT-ADMIN-DC1>'        # Nom d'objet du compte admin/install
+        Name                   = 'DC1'
+        PvwaUrl                = 'https://<PVWA-DC1>'      # TODO (deploiement)
+        PvwaAuthMethod         = 'LDAP'                     # admin de domaine -> LDAP en general
+        SkipCertificateCheck   = $false
+        InstallAccountSafe     = '<SAFE-INSTALL-DC1>'      # Safe du compte d'install Vault
+        InstallAccountUserName = '<USER-INSTALL-DC1>'      # nom du compte d'install a recuperer
     }
 
     DC2 = @{
-        Name                 = 'DC2'
-        PvwaUrl              = 'https://<PVWA-DC2>'        # TODO (deploiement)
-        PvwaAuthMethod       = 'CyberArk'
-        CcpUrl               = 'https://<CCP-DC2>'         # TODO (deploiement)
-        ClientCertThumbprint = ''                          # TODO : thumbprint si endpoint cert
-        AppId                = '<APPID-DC2>'
-        Safe                 = '<SAFE-ADMIN-DC2>'
-        ObjectName           = '<OBJECT-ADMIN-DC2>'
+        Name                   = 'DC2'
+        PvwaUrl                = 'https://<PVWA-DC2>'      # TODO (deploiement)
+        PvwaAuthMethod         = 'LDAP'
+        SkipCertificateCheck   = $false
+        InstallAccountSafe     = '<SAFE-INSTALL-DC2>'
+        InstallAccountUserName = '<USER-INSTALL-DC2>'
     }
 }

@@ -1,7 +1,7 @@
 @{
     # =====================================================================
     # Parametres GLOBAUX non sensibles du deploiement PSM.
-    # Aucune valeur sensible ici (les secrets viennent du CCP au runtime).
+    # Aucune valeur sensible ici (les secrets sont recuperes via l'API PVWA au runtime).
     # =====================================================================
 
     # Version cible : '12.6' ou '14.0'. Pilote les chemins/branches version-specifiques.

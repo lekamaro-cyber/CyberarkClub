@@ -22,16 +22,21 @@
 - Nommage des comptes composants : **`PSM-<SERVERNAME>` en MAJUSCULES**.
 - Credential files (.cred) **liés à la machine** (CreateCredFile avec restrictions).
 
-## CCP (secrets)
-- **Un CCP par datacenter, derrière une VIP** → `CcpUrl` = VIP par zone.
-- Passage prévu à l'**authentification par certificat client** de l'AppID.
-  - **[Action utilisateur]** récupérer/créer le certificat, puis renseigner le **thumbprint** par zone.
-- **[L2/à récupérer]** AppID / Safe / Object du compte admin par DC.
+## Récupération des secrets — **DÉCISION RÉVISÉE : via l'API PVWA (pas de CCP/AIM)**
+- L'**admin qui réalise l'installation s'authentifie lui-même sur le PVWA** (il a accès à
+  tous les comptes CyberArk). Le script récupère le mot de passe du **compte d'install/admin
+  Vault** à la volée via l'**API REST PVWA** (`Get-PvwaAccountPassword`).
+- **Plus de CCP/AIM** : ni AppID, ni certificat applicatif à provisionner.
+- Auth PVWA supportée : **CyberArk / LDAP / Windows / RADIUS** (par zone). En lab,
+  `SkipCertificateCheck = $true` pour tolérer le certificat auto-signé.
+- **[L2/à récupérer]** Safe + nom du compte d'install à récupérer par DC (ou : l'admin
+  connecté fait office de compte d'install → `InstallAccount*` laissés vides).
+- ~~Un CCP par datacenter derrière VIP + certificat client~~ *(approche abandonnée)*.
 
 ## Vault / PVWA / enregistrement
 - **Vault central unique** joignable des 2 DC.
 - Enregistrement via la **« registration automation » présente dans les sources** + **XML posés à la main**, avec **confirmation manuelle AVANT** exécution.
-- **Idempotence** : on se connecte au **PVWA avec le compte admin (récupéré via CCP)** pour vérifier si le PSM est **déjà enregistré** avant d'agir.
+- **Idempotence** : on se connecte au **PVWA avec le compte de l'admin** (session ouverte pour la récupération des secrets) pour vérifier si le PSM est **déjà enregistré** avant d'agir.
 - **[L2/à récupérer]** contenu/gabarit des XML d'enregistrement + URL PVWA par DC.
 
 ## Logiciels additionnels
@@ -60,8 +65,8 @@
 
 1. **Prereqs** : ne plus installer le rôle RDS (fait par CyberArk) ; conserver uniquement la config **licences RDS locales**.
 2. **Software** : remplacer `config/software.psd1` par un **`config/software.xml`** (schéma : app = nom + exe relatif + arguments + codes retour + test de détection) + dossier source d'installeurs.
-3. **CCP** : `zones.psd1` = **VIP CCP par DC** + **thumbprint** (mode certificat) ; PVWA par DC.
-4. **Register** : appeler la **registration automation** des sources avec les **XML**, précédée d'une **confirmation manuelle** ; **idempotence = check via connexion PVWA** (compte admin CCP).
+3. **Secrets** : `zones.psd1` = **PVWA par DC** + méthode d'auth + compte d'install (récupéré via API PVWA). *(CCP abandonné.)*
+4. **Register** : appeler la **registration automation** des sources avec les **XML**, précédée d'une **confirmation manuelle** ; **idempotence = check via connexion PVWA**.
 5. **Hardening** : brancher le **PSMHardening personnalisé** + appliquer l'**AppLocker XML maison** versionné.
 6. **Nommage** : composants `PSM-<SERVERNAME>` en majuscules.
 7. **Validation** : smoke test = **services up** uniquement.
@@ -74,5 +79,5 @@
 - [ ] PSMHardening personnalisé
 - [ ] XML AppLocker maison
 - [ ] XML logiciels additionnels + .exe + lignes de commande
-- [ ] Valeurs par DC : VIP CCP, URL PVWA, AppID, Safe, Object, FQDN serveur licence RDS
+- [ ] Valeurs par DC : URL PVWA, méthode d'auth, Safe + compte d'install à récupérer, FQDN serveur licence RDS
 - [ ] Points de reboot exacts dans la procédure

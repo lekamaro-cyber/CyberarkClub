@@ -14,7 +14,7 @@
              -> Register(REST PVWA) -> Hardening(+AppLocker) -> Validation
 
 .PARAMETER Zone
-    Cle de zone dans config\zones.psd1 (ex: DC1, DC2). Selectionne Vault/PVWA/CCP.
+    Cle de zone dans config\zones.psd1 (ex: DC1, DC2). Selectionne Vault/PVWA.
 
 .PARAMETER Resume
     Reprise apres reboot (declenchee par la tache planifiee). Reprend a la 1ere phase non terminee.
@@ -34,7 +34,12 @@
 param(
     [Parameter(Mandatory)] [string] $Zone,
     [switch] $Resume,
-    [switch] $NonInteractive
+    [switch] $NonInteractive,
+
+    # Compte PVWA de l'admin qui realise l'installation. Si omis en interactif,
+    # il est demande via Get-Credential. Les secrets Vault sont ensuite recuperes
+    # via l'API REST PVWA (pas de CCP/AIM).
+    [pscredential] $PvwaCredential
 )
 
 Set-StrictMode -Version Latest
@@ -67,7 +72,7 @@ try {
     # ===================== PHASE : PreVol =====================
     if (-not (Test-PSMPhaseComplete 'PreVol')) {
         Confirm-PSMZone -ZoneConfig $ZoneConfig -NonInteractive:$NonInteractive
-        # TODO (deploiement) : verifs connectivite Vault/PVWA/CCP, OS supporte, media present.
+        # TODO (deploiement) : verifs connectivite Vault/PVWA, OS supporte, media present.
         if ($PSCmdlet.ShouldProcess('PreVol', 'Valider les prerequis de vol')) {
             Set-PSMPhaseComplete 'PreVol'
         }
@@ -101,14 +106,39 @@ try {
 
     # ===================== PHASE : Enregistrement Vault =====================
     if (-not (Test-PSMPhaseComplete 'Register')) {
-        # Recuperation du compte admin/install Vault via CCP (selon la zone).
-        $admin = Get-CcpCredential `
-                    -CcpUrl $ZoneConfig.CcpUrl `
-                    -AppId  $ZoneConfig.AppId `
-                    -Safe   $ZoneConfig.Safe `
-                    -ObjectName $ZoneConfig.ObjectName `
-                    -ClientCertThumbprint $ZoneConfig.ClientCertThumbprint
-        Invoke-PSMRegister -Settings $Settings -ZoneConfig $ZoneConfig -AdminCredential $admin.Credential
+        # 1) Authentification PVWA de l'admin realisant l'installation.
+        $pvwaCred = $PvwaCredential
+        if (-not $pvwaCred) {
+            if ($NonInteractive) {
+                throw "PVWA : credential requis en mode NonInteractive (parametre -PvwaCredential)."
+            }
+            $pvwaCred = Get-Credential -Message "Compte PVWA de l'admin ($($ZoneConfig.PvwaAuthMethod)) - zone $($ZoneConfig.Name)"
+        }
+
+        $session = Connect-PvwaSession -PvwaUrl $ZoneConfig.PvwaUrl -Credential $pvwaCred `
+                        -AuthMethod $ZoneConfig.PvwaAuthMethod `
+                        -SkipCertificateCheck:$ZoneConfig.SkipCertificateCheck
+        try {
+            # 2) Mot de passe du compte d'install/admin Vault, recupere via l'API PVWA.
+            #    Si aucun compte d'install n'est configure pour la zone, on reutilise
+            #    directement le compte de l'admin connecte.
+            if ($ZoneConfig.InstallAccountSafe) {
+                $install = Get-PvwaAccountPassword -Session $session `
+                                -Safe     $ZoneConfig.InstallAccountSafe `
+                                -UserName $ZoneConfig.InstallAccountUserName
+                $installCred = $install.Credential
+            }
+            else {
+                $installCred = $pvwaCred
+            }
+
+            # 3) Enregistrement (utilise la session + le compte d'install).
+            Invoke-PSMRegister -Settings $Settings -ZoneConfig $ZoneConfig `
+                -Session $session -InstallCredential $installCred -SourcesRoot $SourcesRoot
+        }
+        finally {
+            Disconnect-PvwaSession -Session $session
+        }
         Set-PSMPhaseComplete 'Register'
     }
 

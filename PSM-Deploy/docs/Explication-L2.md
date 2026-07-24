@@ -24,13 +24,13 @@ Hardening ......................... OK
 
 ## Comment on garde le contrôle (anti-bêtise)
 - **Mode « plan » (`-WhatIf`)** : on lance à blanc, il **dit ce qu'il ferait** sans rien modifier.
-- **Confirmation de la zone** : avant d'agir, il affiche le datacenter, le PVWA, le CCP visés,
+- **Confirmation de la zone** : avant d'agir, il affiche le datacenter et le PVWA visés,
   et **demande OUI** — pour éviter de dérouler sur le mauvais DC.
 - **Confirmation avant l'enregistrement Vault** (l'étape sensible).
 - **Fail-fast** : à la première erreur, il **s'arrête** ; on corrige, on relance, il **reprend où il en était**.
 
 ## Ce que le script fait, dans l'ordre (calqué sur ta procédure)
-1. **Pré-vol** : vérifie les droits admin, la zone, les accès Vault/PVWA/CCP.
+1. **Pré-vol** : vérifie les droits admin, la zone, les accès Vault/PVWA.
 2. **Prérequis** : licence RDS locale (le rôle RDS, lui, est posé par l'auto-install CyberArk).
 3. **Logiciels additionnels** : installe les clients/outils (piloté par un fichier de config + un dossier d'exe).
 4. **Installation PSM** : lance l'installation automatisée CyberArk (ta commande).
@@ -40,11 +40,14 @@ Hardening ......................... OK
 8. **Reboots** : gérés automatiquement, avec **reprise automatique** après redémarrage.
 
 ## Où viennent les mots de passe (sécurité)
-- Le seul secret dont le script a besoin (**compte admin Vault** pour l'enregistrement) est
-  **récupéré à la volée depuis le CCP** — jamais écrit en dur, jamais dans les logs.
+- **L'admin qui réalise l'installation s'authentifie lui-même sur le PVWA** (il a déjà
+  accès à tous les comptes CyberArk). Le script récupère alors, **à la volée via l'API REST
+  du PVWA**, le mot de passe du compte d'install/admin Vault dont il a besoin —
+  **jamais écrit en dur, jamais dans les logs** (masqué automatiquement).
+- **Pas de CCP/AIM** : rien à provisionner (ni AppID, ni certificat applicatif). C'est la
+  session de l'admin qui autorise la récupération.
 - Les mots de passe **PSMConnect/PSMAdminConnect** ne sont **pas** saisis : le service PSM
   les récupère tout seul à l'exécution (via le Safe PSMConnect), comme aujourd'hui.
-- Le CCP passera en **authentification par certificat** (plus sûr que par IP).
 
 ## Ce qu'on NE change PAS
 - La **façon** dont CyberArk installe (on utilise **tes** commandes/scripts CyberArk).

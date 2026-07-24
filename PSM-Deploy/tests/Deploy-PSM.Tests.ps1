@@ -47,13 +47,29 @@ Describe 'Contrat d idempotence (Invoke-IdempotentStep)' {
 }
 
 Describe 'Config zones' {
-    It 'Definit 2 zones avec les cles requises' {
+    It 'Definit au moins 2 zones avec les cles PVWA requises' {
         $z = Import-PowerShellDataFile (Join-Path $root 'config\zones.psd1')
         $z.Keys.Count | Should -BeGreaterOrEqual 2
         foreach ($k in $z.Keys) {
-            foreach ($req in 'PvwaUrl','CcpUrl','AppId','Safe','ObjectName') {
+            foreach ($req in 'PvwaUrl','PvwaAuthMethod','SkipCertificateCheck') {
                 $z[$k].ContainsKey($req) | Should -BeTrue
             }
         }
+    }
+}
+
+Describe 'Module PVWA (recuperation des secrets via API REST)' {
+    BeforeAll {
+        Import-Module (Join-Path $root 'modules\PSM.Common.psm1') -Force
+        Import-Module (Join-Path $root 'modules\PSM.Pvwa.psm1')   -Force
+    }
+    It 'Expose les fonctions attendues' {
+        foreach ($fn in 'Connect-PvwaSession','Disconnect-PvwaSession','Get-PvwaAccountPassword','Find-PvwaAccount') {
+            Get-Command $fn -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
+        }
+    }
+    It 'N a plus de dependance au CCP/AIM' {
+        Get-Command 'Get-CcpCredential' -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
+        Test-Path (Join-Path $root 'modules\PSM.Ccp.psm1') | Should -BeFalse
     }
 }

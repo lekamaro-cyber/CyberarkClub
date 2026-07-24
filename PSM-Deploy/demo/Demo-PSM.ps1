@@ -63,12 +63,11 @@ Write-Host '########  DEMO — Moteur de deploiement PSM (simulation)  ########'
 # --- Demonstration du masquage des secrets -----------------------------------
 $fakeSecret = 'S3cr3t-DemoPassword!'
 Register-PSMSecret -Secret $fakeSecret
-Write-PSMLog -Level INFO -Message "Secret recupere via CCP (demo) = $fakeSecret  <= doit apparaitre MASQUE dans les logs"
+Write-PSMLog -Level INFO -Message "Secret recupere via API PVWA (demo) = $fakeSecret  <= doit apparaitre MASQUE dans les logs"
 
 # --- Confirmation de zone (anti-bourde) --------------------------------------
 $zoneCfg = [pscustomobject]@{
-    Name = $Zone; PvwaUrl = 'https://pvwa.demo.local'
-    CcpUrl = 'https://ccp.demo.local'; Safe = 'PSM-Components'
+    Name = $Zone; PvwaUrl = 'https://pvwa.demo.local'; PvwaAuthMethod = 'LDAP'
 }
 Confirm-PSMZone -ZoneConfig $zoneCfg -NonInteractive:$NonInteractive
 

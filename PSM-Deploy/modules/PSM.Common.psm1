@@ -256,8 +256,7 @@ function Confirm-PSMZone {
     Write-Host ''
     Write-Host "Zone ciblee : $($ZoneConfig.Name)"        -ForegroundColor Yellow
     Write-Host "  PVWA     : $($ZoneConfig.PvwaUrl)"
-    Write-Host "  CCP      : $($ZoneConfig.CcpUrl)"
-    Write-Host "  Safe     : $($ZoneConfig.Safe)"
+    Write-Host "  Auth     : $($ZoneConfig.PvwaAuthMethod)"
     Write-Host "  Hostname : $env:COMPUTERNAME"
     if ($NonInteractive) {
         Write-PSMLog -Level WARN -Message "Mode non interactif : zone '$($ZoneConfig.Name)' acceptee sans confirmation."
