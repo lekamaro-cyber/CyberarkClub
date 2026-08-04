@@ -58,6 +58,23 @@ Describe 'Config zones' {
     }
 }
 
+Describe 'Module Stages (pilotage Execute-Stage.ps1 de CyberArk)' {
+    BeforeAll {
+        Import-Module (Join-Path $root 'modules\PSM.Stages.psm1') -Force
+    }
+    It 'Expose le moteur de stage et le calcul de chemins' {
+        foreach ($fn in 'Invoke-PSMStage','Get-PSMStagePaths') {
+            Get-Command $fn -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
+        }
+    }
+    It 'Calcule les chemins de stage depuis settings.psd1' {
+        $s = Import-PowerShellDataFile (Join-Path $root 'config\settings.psd1')
+        $p = Get-PSMStagePaths -Settings $s -SourcesRoot $root -StageKey 'Installation'
+        $p.ExecuteStage | Should -Match 'InstallationAutomation'
+        $p.Config       | Should -Match 'InstallationConfig\.xml'
+    }
+}
+
 Describe 'Module PVWA (recuperation des secrets via API REST)' {
     BeforeAll {
         Import-Module (Join-Path $root 'modules\PSM.Common.psm1') -Force

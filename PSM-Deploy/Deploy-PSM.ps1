@@ -9,9 +9,10 @@
     Machine a etats avec reprise automatique apres reboot (RDS/PSM).
     Fail-fast : arret a la premiere erreur, reprise possible apres correction.
 
-    Phases :
-      PreVol -> Prereqs(RDS) -> [reboot] -> Logiciels -> InstallPSM
-             -> Register(REST PVWA) -> Hardening(+AppLocker) -> Validation
+    Phases (les stages CyberArk sont pilotes via InstallationAutomation\Execute-Stage.ps1) :
+      PreVol -> Prereqs(RDS) -> [reboot] -> Logiciels
+             -> Installation -> PostInstallation -> [reboot eventuel a chaque stage]
+             -> Registration(secret via API PVWA) -> Hardening(+AppLocker) -> Validation
 
 .PARAMETER Zone
     Cle de zone dans config\zones.psd1 (ex: DC1, DC2). Selectionne Vault/PVWA.
@@ -76,6 +77,18 @@ $ZoneConfig = $Zones[$Zone]
 
 Write-PSMLog -Level INFO -Message "=== Deploiement PSM $($Settings.PsmVersion) | Zone $Zone | Resume=$Resume | WhatIf=$($WhatIfPreference) ==="
 
+# Programme la reprise supervisee (AtLogOn) puis redemarre. Ne marque PAS la
+# phase courante comme terminee : elle sera rejouee/reprise apres reconnexion.
+function Start-PSMResumeReboot {
+    param([Parameter(Mandatory)] [string] $Reason)
+    Write-PSMLog -Level WARN -Message "Reboot requis ($Reason). Programmation de la reprise (AtLogOn) puis redemarrage."
+    $installUser = Get-PSMStateValue -Name 'InstallUser'
+    if (-not $installUser) { $installUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name }
+    Register-PSMResumeTask -ScriptPath $PSCommandPath -Zone $Zone -User $installUser
+    Write-PSMLog -Level WARN -Message "Reconnectez-vous avec le compte '$installUser' : le deploiement reprendra automatiquement."
+    Restart-Computer -Force
+}
+
 try {
     Assert-PSMElevation
 
@@ -93,81 +106,98 @@ try {
         }
     }
 
-    # ===================== PHASE : Prereqs (RDS) =====================
+    # ===================== PHASE : Prereqs (role RDS + licence) =====================
     if (-not (Test-PSMPhaseComplete 'Prereqs')) {
         $rebootRequired = Invoke-PSMPrereqs -Settings $Settings
-        Set-PSMPhaseComplete 'Prereqs'
         if ($rebootRequired -and -not $WhatIfPreference) {
-            Write-PSMLog -Level WARN -Message "Reboot requis (role RDS). Programmation de la reprise (AtLogOn) puis redemarrage."
-            $installUser = Get-PSMStateValue -Name 'InstallUser'
-            if (-not $installUser) { $installUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name }
-            Register-PSMResumeTask -ScriptPath $MyInvocation.MyCommand.Path -Zone $Zone -User $installUser
-            Write-PSMLog -Level WARN -Message "Reconnectez-vous avec le compte '$installUser' : le deploiement reprendra automatiquement."
-            Restart-Computer -Force
+            Start-PSMResumeReboot -Reason 'role RDS'
             return
         }
+        if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'Prereqs' }
     }
 
     # ===================== PHASE : Logiciels additionnels =====================
     if (-not (Test-PSMPhaseComplete 'Software')) {
         Invoke-PSMSoftware -SoftwareList $Software.Applications -SourcesRoot $SourcesRoot
-        Set-PSMPhaseComplete 'Software'
+        if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'Software' }
     }
 
-    # ===================== PHASE : Installation PSM =====================
-    if (-not (Test-PSMPhaseComplete 'InstallPSM')) {
-        Invoke-PSMInstall -Settings $Settings -SourcesRoot $SourcesRoot
-        Set-PSMPhaseComplete 'InstallPSM'
+    # ===================== STAGE CyberArk : Installation =====================
+    if (-not (Test-PSMPhaseComplete 'Installation')) {
+        $r = Invoke-PSMInstall -Settings $Settings -SourcesRoot $SourcesRoot
+        if (-not $r.Succeeded) { throw "Stage Installation en echec : $($r.ErrorData)" }
+        if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'stage Installation'; return }
+        if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'Installation' }
     }
 
-    # ===================== PHASE : Enregistrement Vault =====================
-    if (-not (Test-PSMPhaseComplete 'Register')) {
-        # 1) Authentification PVWA de l'admin realisant l'installation.
-        $pvwaCred = $PvwaCredential
-        if (-not $pvwaCred) {
-            if ($NonInteractive) {
-                throw "PVWA : credential requis en mode NonInteractive (parametre -PvwaCredential)."
-            }
-            $pvwaCred = Get-Credential -Message "Compte PVWA de l'admin ($($ZoneConfig.PvwaAuthMethod)) - zone $($ZoneConfig.Name)"
-        }
-
-        $session = Connect-PvwaSession -PvwaUrl $ZoneConfig.PvwaUrl -Credential $pvwaCred `
-                        -AuthMethod $ZoneConfig.PvwaAuthMethod `
-                        -SkipCertificateCheck:$ZoneConfig.SkipCertificateCheck
-        try {
-            # 2) Mot de passe du compte d'install/admin Vault, recupere via l'API PVWA.
-            #    Si aucun compte d'install n'est configure pour la zone, on reutilise
-            #    directement le compte de l'admin connecte.
-            if ($ZoneConfig.InstallAccountSafe) {
-                $install = Get-PvwaAccountPassword -Session $session `
-                                -Safe     $ZoneConfig.InstallAccountSafe `
-                                -UserName $ZoneConfig.InstallAccountUserName
-                $installCred = $install.Credential
-            }
-            else {
-                $installCred = $pvwaCred
-            }
-
-            # 3) Enregistrement (utilise la session + le compte d'install).
-            Invoke-PSMRegister -Settings $Settings -ZoneConfig $ZoneConfig `
-                -Session $session -InstallCredential $installCred -SourcesRoot $SourcesRoot
-        }
-        finally {
-            Disconnect-PvwaSession -Session $session
-        }
-        Set-PSMPhaseComplete 'Register'
+    # ===================== STAGE CyberArk : PostInstallation =====================
+    if (-not (Test-PSMPhaseComplete 'PostInstallation')) {
+        $r = Invoke-PSMPostInstall -Settings $Settings -SourcesRoot $SourcesRoot
+        if (-not $r.Succeeded) { throw "Stage PostInstallation en echec : $($r.ErrorData)" }
+        if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'stage PostInstallation'; return }
+        if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'PostInstallation' }
     }
 
-    # ===================== PHASE : Hardening (+ AppLocker) =====================
+    # ===================== STAGE CyberArk : Registration (secret via PVWA) =====================
+    if (-not (Test-PSMPhaseComplete 'Registration')) {
+        if ($WhatIfPreference) {
+            Write-PSMLog -Level INFO -Message "WhatIf : le stage Registration serait execute (mot de passe Vault recupere via l'API PVWA)."
+        }
+        else {
+            # 1) Authentification PVWA de l'admin realisant l'installation.
+            $pvwaCred = $PvwaCredential
+            if (-not $pvwaCred) {
+                if ($NonInteractive) {
+                    throw "PVWA : credential requis en mode NonInteractive (parametre -PvwaCredential)."
+                }
+                $pvwaCred = Get-Credential -Message "Compte PVWA de l'admin ($($ZoneConfig.PvwaAuthMethod)) - zone $($ZoneConfig.Name)"
+            }
+
+            $session = Connect-PvwaSession -PvwaUrl $ZoneConfig.PvwaUrl -Credential $pvwaCred `
+                            -AuthMethod $ZoneConfig.PvwaAuthMethod `
+                            -SkipCertificateCheck:$ZoneConfig.SkipCertificateCheck
+            try {
+                # 2) Mot de passe du compte d'install/admin Vault via l'API PVWA
+                #    (sinon on reutilise le compte de l'admin connecte).
+                if ($ZoneConfig.InstallAccountSafe) {
+                    $install = Get-PvwaAccountPassword -Session $session `
+                                    -Safe     $ZoneConfig.InstallAccountSafe `
+                                    -UserName $ZoneConfig.InstallAccountUserName
+                    $installCred = $install.Credential
+                }
+                else {
+                    $installCred = $pvwaCred
+                }
+
+                # 3) Stage Registration CyberArk (mot de passe injecte via -spwdObj).
+                $r = Invoke-PSMRegister -Settings $Settings -SourcesRoot $SourcesRoot -InstallCredential $installCred
+            }
+            finally {
+                Disconnect-PvwaSession -Session $session
+            }
+            if (-not $r.Succeeded) { throw "Stage Registration en echec : $($r.ErrorData)" }
+            if ($r.RestartRequired) { Start-PSMResumeReboot -Reason 'stage Registration'; return }
+            Set-PSMPhaseComplete 'Registration'
+        }
+    }
+
+    # ===================== STAGE CyberArk : Hardening (+ AppLocker) =====================
     if (-not (Test-PSMPhaseComplete 'Hardening')) {
-        Invoke-PSMHardening -Settings $Settings -SourcesRoot $SourcesRoot
-        Set-PSMPhaseComplete 'Hardening'
+        $r = Invoke-PSMHardening -Settings $Settings -SourcesRoot $SourcesRoot
+        if (-not $r.Succeeded) { throw "Stage Hardening en echec : $($r.ErrorData)" }
+        if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'stage Hardening'; return }
+        if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'Hardening' }
     }
 
     # ===================== PHASE : Validation =====================
     if (-not (Test-PSMPhaseComplete 'Validation')) {
-        # TODO (deploiement) : smoke tests (services PSM up, enregistrement OK, AppLocker actif).
-        Set-PSMPhaseComplete 'Validation'
+        if (Test-PSMInstalled) {
+            Write-PSMLog -Level OK   -Message "Validation : service PSM present."
+        }
+        else {
+            Write-PSMLog -Level WARN -Message "Validation : service PSM introuvable (a verifier)."
+        }
+        if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'Validation' }
     }
 
     # Nettoyage de la tache de reprise une fois tout termine.

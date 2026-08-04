@@ -1,26 +1,27 @@
 <#
 .SYNOPSIS
-    Phase "Installation du binaire PSM" via les scripts d'automatisation CyberArk.
+    Phases "Installation" et "PostInstallation" du PSM : pilotage des stages
+    CyberArk (Execute-Stage.ps1) via le moteur PSM.Stages.
 
 .DESCRIPTION
-    On s'appuie sur les scripts d'installation automatisee fournis par CyberArk
-    (media 12.6 / 14.0). Cette phase est idempotente : si le PSM est deja
-    installe (et a la bonne version), elle ne fait rien.
+    On n'installe pas nous-memes : on lance les stages du framework CyberArk
+    (Installation = setup silencieux via PSMInstallationTemplate.iss ;
+    PostInstallation = configuration PSMConnect/PSMAdminConnect, etc.).
+    L'idempotence est assuree a deux niveaux : notre suivi de phases (progress.json)
+    et le PreCheck de chaque step CyberArk (les steps deja faits se sautent).
 
-    Le bloc d'installation reel differe legerement entre 12.6 et 14.0 ; il est
-    selectionne via settings.psd1 (PsmVersion + chemins).
+    Chaque fonction renvoie l'objet resultat de Invoke-PSMStage
+    ({ Succeeded, RestartRequired, LogPath, ... }) ; l'orchestrateur gere le reboot.
 #>
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 function Test-PSMInstalled {
-    # Detection idempotente : presence du service + (option) version.
+    # Detection : presence du service PSM (utilisee par la phase de validation).
     param([string] $ExpectedVersion)
     $svc = Get-Service -Name 'CyberArk Privileged Session Manager' -ErrorAction SilentlyContinue
-    if (-not $svc) { return $false }
-    # TODO (deploiement) : comparer aussi la version installee a $ExpectedVersion.
-    return $true
+    return [bool]$svc
 }
 
 function Invoke-PSMInstall {
@@ -29,28 +30,22 @@ function Invoke-PSMInstall {
         [Parameter(Mandatory)] $Settings,
         [Parameter(Mandatory)] [string] $SourcesRoot
     )
-
-    $version   = $Settings.PsmVersion
-    $mediaPath = Join-Path $SourcesRoot $Settings.Install.MediaRelativePath
-
-    Invoke-IdempotentStep -Name "Installation PSM $version" `
-        -Test   { Test-PSMInstalled -ExpectedVersion $version } `
-        -Action {
-            if (-not (Test-Path $mediaPath)) {
-                throw "Media PSM introuvable : $mediaPath (deposer le media dans le dossier sources)."
-            }
-            # ---------------------------------------------------------------
-            # TODO (deploiement) : appeler le script d'automatisation CyberArk.
-            # Exemple de structure (a adapter au media reel 12.6 / 14.0) :
-            #
-            #   $auto = Join-Path $mediaPath $Settings.Install.AutomationScript
-            #   & $auto @($Settings.Install.AutomationArgs)
-            #
-            # Les fichiers de reponse (silent) sont a placer dans le media et
-            # references via settings.psd1 (Install.ResponseFile).
-            # ---------------------------------------------------------------
-            throw "STUB : brancher ici le script d'automatisation CyberArk ($version)."
-        }
+    $paths = Get-PSMStagePaths -Settings $Settings -SourcesRoot $SourcesRoot -StageKey 'Installation'
+    return Invoke-PSMStage -StageName 'Installation' `
+                           -ExecuteStagePath $paths.ExecuteStage `
+                           -ConfigFilePath   $paths.Config
 }
 
-Export-ModuleMember -Function Invoke-PSMInstall, Test-PSMInstalled
+function Invoke-PSMPostInstall {
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)] $Settings,
+        [Parameter(Mandatory)] [string] $SourcesRoot
+    )
+    $paths = Get-PSMStagePaths -Settings $Settings -SourcesRoot $SourcesRoot -StageKey 'PostInstallation'
+    return Invoke-PSMStage -StageName 'PostInstallation' `
+                           -ExecuteStagePath $paths.ExecuteStage `
+                           -ConfigFilePath   $paths.Config
+}
+
+Export-ModuleMember -Function Invoke-PSMInstall, Invoke-PSMPostInstall, Test-PSMInstalled

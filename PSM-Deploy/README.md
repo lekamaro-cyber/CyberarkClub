@@ -50,9 +50,10 @@ PSM-Deploy/
 ├─ modules/
 │  ├─ PSM.Common.psm1        # Idempotence, logs+masquage, état/reprise, confirmations
 │  ├─ PSM.Pvwa.psm1          # API REST PVWA : logon + Get-PvwaAccountPassword (secrets)
+│  ├─ PSM.Stages.psm1        # Pilotage "étape par étape" de CyberArk (Execute-Stage.ps1)
 │  ├─ PSM.Prereqs.psm1       # RDS/RDSH, licence RDS, registre
-│  ├─ PSM.Install.psm1       # Wrapper scripts d'automatisation CyberArk
-│  ├─ PSM.Register.psm1      # Enregistrement PSMApp/PSMGw (session PVWA + registration automation)
+│  ├─ PSM.Install.psm1       # Stages CyberArk Installation + PostInstallation
+│  ├─ PSM.Register.psm1      # Stage CyberArk Registration (secret Vault via -spwdObj)
 │  ├─ PSM.Hardening.psm1     # PSMHardening + politique AppLocker contrôlée
 │  └─ PSM.Software.psm1      # Install générique config-driven
 ├─ applocker/PSMConfigureAppLocker.xml   # Politique AppLocker contrôlée (placeholder)

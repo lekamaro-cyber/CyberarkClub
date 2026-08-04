@@ -18,17 +18,18 @@
         )
     }
 
-    # --- Installation du binaire PSM (scripts d'automatisation CyberArk) -
+    # --- Installation PSM : pilotage du framework CyberArk (Execute-Stage.ps1) -
+    # On pilote CyberArk "etape par etape". Chaque stage a son XML de config
+    # (rempli par l'equipe, cf. dossiers Templates du media).
     Install = @{
-        MediaRelativePath = 'media\PSM'           # sous-dossier du media dans les sources
-        AutomationScript  = 'InstallationAutomation.ps1'  # TODO : nom reel selon le media
-        ResponseFile      = ''                    # TODO : fichier de reponse silencieux si requis
-        AutomationArgs    = @()                   # TODO : arguments passes au script CyberArk
-    }
-
-    # --- Hardening -------------------------------------------------------
-    Hardening = @{
-        ScriptsRelativePath = 'media\PSM\Hardening'   # emplacement des scripts CyberArk dans le media
+        MediaRelativePath             = 'media\PSM'              # sous-dossier du media dans les sources
+        InstallationAutomationSubPath = 'InstallationAutomation' # dossier du framework CyberArk
+        Stages = @{
+            Installation     = 'Installation\InstallationConfig.xml'
+            PostInstallation = 'PostInstallation\PostInstallationConfig.xml'
+            Registration     = 'Registration\RegistrationConfig.xml'
+            Hardening        = 'Hardening\HardeningConfig.xml'
+        }
     }
 
     # --- Dossiers de travail (relatifs a la racine des sources) ----------
