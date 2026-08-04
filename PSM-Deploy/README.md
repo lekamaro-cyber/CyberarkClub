@@ -33,7 +33,7 @@ administrateur.
 | AppLocker | **Politique contrôlée embarquée** (`applocker/`), appliquée par le script |
 | Hardening | **CyberArk complet** (PSMHardening + AppLocker) |
 | Licences RDS | Mode + serveur en config |
-| Reboot | **Auto + reprise** (machine à états, tâche planifiée) |
+| Reboot | **Reprise supervisée** : tâche `AtLogOn` de l'admin → reprend dans sa session à la reconnexion (machine à états) |
 | Connection components PVWA | **Hors périmètre** (binaires seulement côté PSM) |
 | Logs | **Local structuré** (transcript + JSONL), secrets masqués |
 | Échec | **Fail-fast** + reprise idempotente |
@@ -69,8 +69,12 @@ PSM-Deploy/
 PreVol → Prereqs(RDS) → [reboot+reprise] → Software → InstallPSM
        → Register(session PVWA + secret via API PVWA) → Hardening(+AppLocker) → Validation
 ```
-Chaque phase est marquée terminée dans `state/progress.json`. Après reboot, une
-tâche planifiée relance le script (`-Resume`) qui **reprend à la phase non terminée**.
+Chaque phase est marquée terminée dans `state/progress.json`. Quand un reboot est
+requis, une **tâche planifiée `AtLogOn`** est créée pour l'**admin installateur** :
+dès qu'il **se reconnecte après le redémarrage**, le script **reprend tout seul dans
+sa session** (`-Resume`, zone relue depuis l'état) à la première phase non terminée.
+La reprise est **interactive** (les prompts `Get-Credential` PVWA fonctionnent) et
+**aucun secret n'est stocké** sur disque. La tâche est supprimée en fin de déploiement.
 
 ## Utilisation
 

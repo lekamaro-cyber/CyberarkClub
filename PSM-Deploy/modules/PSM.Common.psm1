@@ -210,25 +210,50 @@ function Set-PSMPhaseComplete {
     Write-PSMLog -Level INFO -Message "Phase '$Phase' marquee comme terminee."
 }
 
+function Get-PSMStateValue {
+    # Lit une valeur libre de l'etat (progress.json) ; $null si absente.
+    param([Parameter(Mandatory)] [string] $Name)
+    $state = Get-Content $script:StatePath -Raw | ConvertFrom-Json
+    if ($state.PSObject.Properties.Name -contains $Name) { return $state.$Name }
+    return $null
+}
+
+function Set-PSMStateValue {
+    # Persiste une valeur libre dans l'etat (progress.json), sans toucher aux autres cles.
+    param([Parameter(Mandatory)] [string] $Name, $Value)
+    $state = Get-Content $script:StatePath -Raw | ConvertFrom-Json
+    if ($state.PSObject.Properties.Name -contains $Name) {
+        $state.$Name = $Value
+    }
+    else {
+        $state | Add-Member -NotePropertyName $Name -NotePropertyValue $Value
+    }
+    $state | ConvertTo-Json | Set-Content -Path $script:StatePath
+}
+
 function Register-PSMResumeTask {
     <#
-        Cree une tache planifiee qui relance l'orchestrateur apres reboot,
-        sous le compte SYSTEM, pour reprendre a la phase non terminee.
-        TODO (deploiement) : ajuster le declencheur / compte si necessaire.
+        Cree une tache planifiee qui relance l'orchestrateur A L'OUVERTURE DE SESSION
+        de l'admin installateur (reprise supervisee), dans SA session interactive :
+        les prompts (Get-Credential PVWA) fonctionnent et aucun secret n'est stocke.
+        Reprend automatiquement a la premiere phase non terminee.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)] [string] $ScriptPath,
+        [Parameter(Mandatory)] [string] $Zone,
+        [string] $User     = [Security.Principal.WindowsIdentity]::GetCurrent().Name,
         [string] $TaskName = 'PSM-Deploy-Resume'
     )
-    if ($PSCmdlet.ShouldProcess($TaskName, 'Creer tache de reprise')) {
-        $action  = New-ScheduledTaskAction -Execute 'powershell.exe' `
-                    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`" -Resume"
-        $trigger = New-ScheduledTaskTrigger -AtStartup
-        $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+    if ($PSCmdlet.ShouldProcess($TaskName, 'Creer tache de reprise (AtLogOn)')) {
+        # -Zone est transmis explicitement (sinon parametre obligatoire bloquant au reboot).
+        $argument  = "-NoProfile -ExecutionPolicy Bypass -NoExit -File `"$ScriptPath`" -Resume -Zone $Zone"
+        $action    = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $argument
+        $trigger   = New-ScheduledTaskTrigger -AtLogOn -User $User
+        $principal = New-ScheduledTaskPrincipal -UserId $User -LogonType Interactive -RunLevel Highest
         Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
             -Principal $principal -Force | Out-Null
-        Write-PSMLog -Level INFO -Message "Tache de reprise '$TaskName' enregistree."
+        Write-PSMLog -Level INFO -Message "Tache de reprise '$TaskName' enregistree (AtLogOn, utilisateur $User, zone $Zone)."
     }
 }
 

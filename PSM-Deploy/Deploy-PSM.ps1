@@ -32,7 +32,9 @@
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [Parameter(Mandatory)] [string] $Zone,
+    # Zone cible (config\zones.psd1). Obligatoire au premier lancement ; en reprise
+    # (-Resume) elle est relue depuis l'etat si omise (la tache planifiee la transmet).
+    [string] $Zone,
     [switch] $Resume,
     [switch] $NonInteractive,
 
@@ -55,14 +57,22 @@ $Settings = Import-PowerShellDataFile (Join-Path $SourcesRoot 'config\settings.p
 $Zones    = Import-PowerShellDataFile (Join-Path $SourcesRoot 'config\zones.psd1')
 $Software = Import-PowerShellDataFile (Join-Path $SourcesRoot 'config\software.psd1')
 
+# --- Init journalisation + etat --------------------------------------------
+Initialize-PSMLogging -LogDirectory (Join-Path $SourcesRoot $Settings.Paths.Logs)
+Initialize-PSMState   -StateDirectory (Join-Path $SourcesRoot $Settings.Paths.State)
+
+# --- Resolution de la zone (parametre, sinon etat en reprise) --------------
+if (-not $Zone -and $Resume) {
+    $Zone = Get-PSMStateValue -Name 'Zone'
+    if ($Zone) { Write-PSMLog -Level INFO -Message "Reprise : zone '$Zone' relue depuis l'etat." }
+}
+if (-not $Zone) {
+    throw "Parametre -Zone requis pour un premier lancement (aucune zone persistee pour la reprise)."
+}
 if (-not $Zones.ContainsKey($Zone)) {
     throw "Zone '$Zone' inconnue. Zones disponibles : $($Zones.Keys -join ', ')."
 }
 $ZoneConfig = $Zones[$Zone]
-
-# --- Init journalisation + etat --------------------------------------------
-Initialize-PSMLogging -LogDirectory (Join-Path $SourcesRoot $Settings.Paths.Logs)
-Initialize-PSMState   -StateDirectory (Join-Path $SourcesRoot $Settings.Paths.State)
 
 Write-PSMLog -Level INFO -Message "=== Deploiement PSM $($Settings.PsmVersion) | Zone $Zone | Resume=$Resume | WhatIf=$($WhatIfPreference) ==="
 
@@ -76,6 +86,9 @@ try {
         Test-PSMLicenseServers -Servers $Settings.Rds.LicenseServers | Out-Null
         # TODO (deploiement) : verifs connectivite Vault/PVWA, OS supporte, media present.
         if ($PSCmdlet.ShouldProcess('PreVol', 'Valider les prerequis de vol')) {
+            # Persiste la zone + l'admin installateur pour la reprise apres reboot.
+            Set-PSMStateValue -Name 'Zone'        -Value $Zone
+            Set-PSMStateValue -Name 'InstallUser' -Value ([Security.Principal.WindowsIdentity]::GetCurrent().Name)
             Set-PSMPhaseComplete 'PreVol'
         }
     }
@@ -85,10 +98,11 @@ try {
         $rebootRequired = Invoke-PSMPrereqs -Settings $Settings
         Set-PSMPhaseComplete 'Prereqs'
         if ($rebootRequired -and -not $WhatIfPreference) {
-            Write-PSMLog -Level WARN -Message "Reboot requis (role RDS). Programmation de la reprise puis redemarrage."
-            Register-PSMResumeTask -ScriptPath $MyInvocation.MyCommand.Path
-            # La reprise relancera ce script avec -Resume ; on transmet aussi la zone.
-            # TODO (deploiement) : persister la zone dans l'etat pour la reprise.
+            Write-PSMLog -Level WARN -Message "Reboot requis (role RDS). Programmation de la reprise (AtLogOn) puis redemarrage."
+            $installUser = Get-PSMStateValue -Name 'InstallUser'
+            if (-not $installUser) { $installUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name }
+            Register-PSMResumeTask -ScriptPath $MyInvocation.MyCommand.Path -Zone $Zone -User $installUser
+            Write-PSMLog -Level WARN -Message "Reconnectez-vous avec le compte '$installUser' : le deploiement reprendra automatiquement."
             Restart-Computer -Force
             return
         }
