@@ -16,14 +16,20 @@
     #                   connecte au PVWA comme compte d'install.
     #
     # SkipCertificateCheck : $true UNIQUEMENT en lab (PVWA a certificat auto-signe).
+    #
+    # VaultAddress : adresse(s) du Vault pour l'ENREGISTREMENT, format "ipCluster,ipDr"
+    #   (cluster/primaire en premier, DR ensuite). Injectee au runtime dans une copie
+    #   de RegistrationConfig.xml -> une nouvelle source CyberArk ne demande aucune
+    #   edition manuelle du XML.
     # =====================================================================
 
-    # --- Bac a sable / demo (PVWA de test) ------------------------------
-    LAB = @{
-        Name                   = 'LAB'
-        PvwaUrl                = 'https://<PVWA-LAB>'      # TODO : URL PVWA du bac a sable
+    # --- Bac a sable / PRE (PVWA de test) -------------------------------
+    PRE = @{
+        Name                   = 'PRE'
+        PvwaUrl                = 'https://<PVWA-PRE>'      # TODO : URL PVWA du bac a sable
         PvwaAuthMethod         = 'CyberArk'                # CyberArk | LDAP | Windows | RADIUS
         SkipCertificateCheck   = $true                     # lab : certificat auto-signe tolere
+        VaultAddress           = '<IP-CLUSTER-PRE>,<IP-DR-PRE>'  # cluster,DR
         InstallAccountSafe     = ''                        # vide -> utilise le compte admin connecte
         InstallAccountUserName = ''
     }
@@ -33,6 +39,7 @@
         PvwaUrl                = 'https://<PVWA-DC1>'      # TODO (deploiement)
         PvwaAuthMethod         = 'LDAP'                     # admin de domaine -> LDAP en general
         SkipCertificateCheck   = $false
+        VaultAddress           = '<IP-CLUSTER-DC1>,<IP-DR-DC1>'  # cluster,DR
         InstallAccountSafe     = '<SAFE-INSTALL-DC1>'      # Safe du compte d'install Vault
         InstallAccountUserName = '<USER-INSTALL-DC1>'      # nom du compte d'install a recuperer
     }
@@ -42,6 +49,7 @@
         PvwaUrl                = 'https://<PVWA-DC2>'      # TODO (deploiement)
         PvwaAuthMethod         = 'LDAP'
         SkipCertificateCheck   = $false
+        VaultAddress           = '<IP-CLUSTER-DC2>,<IP-DR-DC2>'  # cluster,DR
         InstallAccountSafe     = '<SAFE-INSTALL-DC2>'
         InstallAccountUserName = '<USER-INSTALL-DC2>'
     }

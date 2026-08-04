@@ -59,8 +59,9 @@ $Zones    = Import-PowerShellDataFile (Join-Path $SourcesRoot 'config\zones.psd1
 $Software = Import-PowerShellDataFile (Join-Path $SourcesRoot 'config\software.psd1')
 
 # --- Init journalisation + etat --------------------------------------------
+$StateDir = Join-Path $SourcesRoot $Settings.Paths.State
 Initialize-PSMLogging -LogDirectory (Join-Path $SourcesRoot $Settings.Paths.Logs)
-Initialize-PSMState   -StateDirectory (Join-Path $SourcesRoot $Settings.Paths.State)
+Initialize-PSMState   -StateDirectory $StateDir
 
 # --- Resolution de la zone (parametre, sinon etat en reprise) --------------
 if (-not $Zone -and $Resume) {
@@ -181,8 +182,12 @@ try {
                     $installCred = $pvwaCred
                 }
 
-                # 3) Stage Registration CyberArk (mot de passe injecte via -spwdObj).
-                $r = Invoke-PSMRegister -Settings $Settings -SourcesRoot $SourcesRoot -InstallCredential $installCred
+                # 3) Stage Registration CyberArk : l'adresse Vault (cluster,DR) vient
+                #    de zones.psd1 et est injectee dans une copie de RegistrationConfig.xml
+                #    (on ne modifie pas le media). Mot de passe injecte via -spwdObj.
+                $r = Invoke-PSMRegister -Settings $Settings -SourcesRoot $SourcesRoot `
+                        -InstallCredential $installCred `
+                        -VaultAddress $ZoneConfig.VaultAddress -StateDir $StateDir
             }
             finally {
                 Disconnect-PvwaSession -Session $session

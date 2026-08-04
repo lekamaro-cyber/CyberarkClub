@@ -34,6 +34,16 @@
         }
     }
 
+    # --- Enregistrement : injection de l'adresse Vault depuis zones.psd1 --------
+    # Le script ecrit l'adresse Vault (cluster,DR) de la zone dans une COPIE de
+    # RegistrationConfig.xml -> deposer une nouvelle source CyberArk ne demande
+    # AUCUNE edition manuelle du XML. Adapter le XPath au schema du media si besoin
+    # (si le noeud est introuvable, le script liste les Parameter disponibles).
+    Registration = @{
+        VaultAddressXPath     = "//Parameter[@Name='VaultIP']"  # TODO : confirmer selon RegistrationConfig.xml
+        VaultAddressAttribute = 'Value'                          # attribut a ecrire (vide = InnerText du noeud)
+    }
+
     # --- Dossiers de travail (relatifs a la racine des sources) ----------
     Paths = @{
         State = 'state'
