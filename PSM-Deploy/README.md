@@ -136,6 +136,11 @@ La reprise est **interactive** (les prompts `Get-Credential` PVWA fonctionnent) 
   dans `InstallationAutomation\Templates\`) — c'est la data de l'équipe (PVWA, Vault,
   comptes composants, options de hardening/AppLocker…).
 - `zones.psd1` / `settings.psd1` : valeurs réelles (PVWA, méthode d'auth, compte d'install, licence RDS).
+  - **PSMConnect / PSMAdminConnect** (comptes de session, **domaine**) : `zones.psd1`
+    → `PSMConnectUserName` / `PSMAdminConnectUserName` **par zone** (format `DOMAINE\user`).
+    Ils sont injectés dans une copie de `PostInstallationConfig.xml` (média intact) ;
+    l'emplacement des champs se règle dans `settings.psd1` → `PostInstallation.*`.
+    Les **mots de passe** ne sont pas ici : ils sont gérés dans le **Safe PSM** côté Vault.
 - `config/software.psd1` : logiciels additionnels éventuels.
 
 ## Tests

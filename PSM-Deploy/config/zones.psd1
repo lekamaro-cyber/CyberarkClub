@@ -21,6 +21,13 @@
     #   (cluster/primaire en premier, DR ensuite). Injectee au runtime dans une copie
     #   de RegistrationConfig.xml -> une nouvelle source CyberArk ne demande aucune
     #   edition manuelle du XML.
+    #
+    # PSMConnectUserName / PSMAdminConnectUserName : comptes de session PSM, comptes
+    #   de DOMAINE deja crees (format "DOMAINE\utilisateur"). Injectes au runtime dans
+    #   une copie de PostInstallationConfig.xml (stage PostInstallation) -> aucune
+    #   edition manuelle du XML. Les MOTS DE PASSE ne sont PAS ici : ils sont geres
+    #   dans le Safe PSM cote Vault. L'emplacement des champs dans le XML est
+    #   configurable dans settings.psd1 (PostInstallation.*).
     # =====================================================================
 
     # --- Bac a sable / PRE (PVWA de test) -------------------------------
@@ -32,6 +39,8 @@
         VaultAddress           = '<IP-CLUSTER-PRE>,<IP-DR-PRE>'  # cluster,DR
         InstallAccountSafe     = ''                        # vide -> utilise le compte admin connecte
         InstallAccountUserName = ''
+        PSMConnectUserName      = '<DOMAINE-PRE>\PSMConnect'       # TODO : compte de domaine (session standard)
+        PSMAdminConnectUserName = '<DOMAINE-PRE>\PSMAdminConnect'  # TODO : compte de domaine (session admin)
     }
 
     DC1 = @{
@@ -42,6 +51,8 @@
         VaultAddress           = '<IP-CLUSTER-DC1>,<IP-DR-DC1>'  # cluster,DR
         InstallAccountSafe     = '<SAFE-INSTALL-DC1>'      # Safe du compte d'install Vault
         InstallAccountUserName = '<USER-INSTALL-DC1>'      # nom du compte d'install a recuperer
+        PSMConnectUserName      = '<DOMAINE-DC1>\PSMConnect'       # TODO : compte de domaine (session standard)
+        PSMAdminConnectUserName = '<DOMAINE-DC1>\PSMAdminConnect'  # TODO : compte de domaine (session admin)
     }
 
     DC2 = @{
@@ -52,5 +63,7 @@
         VaultAddress           = '<IP-CLUSTER-DC2>,<IP-DR-DC2>'  # cluster,DR
         InstallAccountSafe     = '<SAFE-INSTALL-DC2>'
         InstallAccountUserName = '<USER-INSTALL-DC2>'
+        PSMConnectUserName      = '<DOMAINE-DC2>\PSMConnect'       # TODO : compte de domaine (session standard)
+        PSMAdminConnectUserName = '<DOMAINE-DC2>\PSMAdminConnect'  # TODO : compte de domaine (session admin)
     }
 }

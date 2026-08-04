@@ -96,8 +96,9 @@ Describe 'Module Stages (pilotage Execute-Stage.ps1 de CyberArk)' {
 
 Describe 'Injection XML des stages (config pilotee, media intact)' {
     BeforeAll {
-        Import-Module (Join-Path $root 'modules\PSM.Common.psm1') -Force
-        Import-Module (Join-Path $root 'modules\PSM.Stages.psm1') -Force
+        Import-Module (Join-Path $root 'modules\PSM.Common.psm1')  -Force
+        Import-Module (Join-Path $root 'modules\PSM.Stages.psm1')  -Force
+        Import-Module (Join-Path $root 'modules\PSM.Install.psm1') -Force
         Initialize-PSMLogging -LogDirectory (Join-Path $env:TEMP 'psm-test-logs')
 
         # Media factice : layout media\PSM\InstallationAutomation\<Stage>\...
@@ -105,24 +106,38 @@ Describe 'Injection XML des stages (config pilotee, media intact)' {
         $script:iaDir = Join-Path $script:src 'media\PSM\InstallationAutomation'
         $regDir       = Join-Path $script:iaDir 'Registration'
         $hardDir      = Join-Path $script:iaDir 'Hardening'
-        New-Item -ItemType Directory -Path $regDir, $hardDir -Force | Out-Null
-        Set-Content -Path (Join-Path $script:iaDir 'Execute-Stage.ps1') -Value '# stub'
+        $postDir      = Join-Path $script:iaDir 'PostInstallation'
+        New-Item -ItemType Directory -Path $regDir, $hardDir, $postDir -Force | Out-Null
+        # Stub Execute-Stage.ps1 : renvoie un JSON de succes (isSucceeded=0).
+        Set-Content -Path (Join-Path $script:iaDir 'Execute-Stage.ps1') -Value @'
+param($configFilePath, $silentMode, $displayJson, $spwdObj)
+'{"isSucceeded":0,"restartRequired":false,"logPath":null,"errorData":null}'
+'@
         $script:regXml  = Join-Path $regDir  'RegistrationConfig.xml'
         $script:hardXml = Join-Path $hardDir 'HardeningConfig.xml'
+        $script:postXml = Join-Path $postDir 'PostInstallationConfig.xml'
         Set-Content -Path $script:regXml  -Value '<Configuration><Parameter Name="VaultIP" Value="" /></Configuration>'
         Set-Content -Path $script:hardXml -Value '<Configuration><Parameter Name="Foo" Value="bar" /></Configuration>'
+        Set-Content -Path $script:postXml -Value '<Configuration><Parameter Name="PSMConnectUserName" Value="" /><Parameter Name="PSMAdminConnectUserName" Value="" /></Configuration>'
 
-        Initialize-PSMState -StateDirectory (Join-Path $TestDrive 'state')
+        $script:stateDir = Join-Path $TestDrive 'state'
+        Initialize-PSMState -StateDirectory $script:stateDir
 
         $script:settings = @{
             Install = @{
                 MediaRelativePath             = 'media\PSM'
                 InstallationAutomationSubPath = 'InstallationAutomation'
                 Stages = @{
-                    Registration = 'Registration\RegistrationConfig.xml'
-                    Hardening    = 'Hardening\HardeningConfig.xml'
+                    Registration     = 'Registration\RegistrationConfig.xml'
+                    Hardening        = 'Hardening\HardeningConfig.xml'
+                    PostInstallation = 'PostInstallation\PostInstallationConfig.xml'
                 }
                 Injections = @{}
+            }
+            PostInstallation = @{
+                PSMConnectXPath      = "//Parameter[@Name='PSMConnectUserName']"
+                PSMAdminConnectXPath = "//Parameter[@Name='PSMAdminConnectUserName']"
+                UserNameAttribute    = 'Value'
             }
         }
     }
@@ -161,6 +176,43 @@ Describe 'Injection XML des stages (config pilotee, media intact)' {
         $stage.ConfigFilePath | Should -Match 'state.config.Hardening'
         ([xml](Get-Content $stage.ConfigFilePath -Raw)).SelectSingleNode("//Parameter[@Name='Foo']").Value |
             Should -Be 'baz'
+    }
+
+    It 'Injecte les comptes PSMConnect/PSMAdminConnect de la zone en PostInstallation' {
+        $zone = @{
+            PSMConnectUserName      = 'CONTOSO\PSMConnect'
+            PSMAdminConnectUserName = 'CONTOSO\PSMAdminConnect'
+        }
+        $r = Invoke-PSMPostInstall -Settings $script:settings -SourcesRoot $script:src -ZoneConfig $zone
+        $r.Succeeded | Should -BeTrue
+
+        $copy = Join-Path $script:stateDir 'config\PostInstallation\PostInstallationConfig.xml'
+        $doc  = [xml](Get-Content $copy -Raw)
+        $doc.SelectSingleNode("//Parameter[@Name='PSMConnectUserName']").Value      | Should -Be 'CONTOSO\PSMConnect'
+        $doc.SelectSingleNode("//Parameter[@Name='PSMAdminConnectUserName']").Value | Should -Be 'CONTOSO\PSMAdminConnect'
+        # Media inchange.
+        ([xml](Get-Content $script:postXml -Raw)).SelectSingleNode("//Parameter[@Name='PSMConnectUserName']").Value |
+            Should -Be ''
+    }
+
+    It 'Sans ZoneConfig, PostInstallation utilise le XML du media tel quel' {
+        $stage = Resolve-PSMStageConfig -Settings $script:settings -SourcesRoot $script:src -StageKey 'PostInstallation'
+        $stage.ConfigFilePath | Should -Be $script:postXml
+    }
+}
+
+Describe 'Get-PSMConfigValue (lecture sure de cles facultatives)' {
+    BeforeAll {
+        Import-Module (Join-Path $root 'modules\PSM.Common.psm1') -Force
+    }
+    It 'Renvoie la valeur quand la cle existe (hashtable)' {
+        Get-PSMConfigValue -Config @{ A = 'x' } -Key 'A' | Should -Be 'x'
+    }
+    It 'Renvoie null quand la cle est absente (sans erreur sous StrictMode)' {
+        Get-PSMConfigValue -Config @{ A = 'x' } -Key 'Absent' | Should -BeNullOrEmpty
+    }
+    It 'Renvoie null quand la config est null' {
+        Get-PSMConfigValue -Config $null -Key 'A' | Should -BeNullOrEmpty
     }
 }
 

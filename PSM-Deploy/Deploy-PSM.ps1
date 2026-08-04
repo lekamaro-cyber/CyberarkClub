@@ -159,7 +159,9 @@ try {
 
     # ===================== STAGE CyberArk : PostInstallation =====================
     if (-not (Test-PSMPhaseComplete 'PostInstallation')) {
-        $r = Invoke-PSMPostInstall -Settings $Settings -SourcesRoot $SourcesRoot
+        # Comptes de session PSM (PSMConnect/PSMAdminConnect) de la zone injectes
+        # dans une copie de PostInstallationConfig.xml (media intact).
+        $r = Invoke-PSMPostInstall -Settings $Settings -SourcesRoot $SourcesRoot -ZoneConfig $ZoneConfig
         if (-not $r.Succeeded) { throw "Stage PostInstallation en echec : $($r.ErrorData)" }
         if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'stage PostInstallation'; return }
         if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'PostInstallation' }

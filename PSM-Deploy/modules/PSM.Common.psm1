@@ -195,6 +195,26 @@ function Initialize-PSMState {
     }
 }
 
+function Get-PSMConfigValue {
+    <#
+        Lit une cle FACULTATIVE d'une table de config (hashtable psd1 ou
+        pscustomobject) de facon sure sous StrictMode ; renvoie $null si absente.
+        Utile pour des cles optionnelles (ex. comptes PSMConnect d'une zone).
+    #>
+    param(
+        [Parameter(Mandatory)] $Config,
+        [Parameter(Mandatory)] [string] $Key
+    )
+    if ($null -eq $Config) { return $null }
+    if ($Config -is [System.Collections.IDictionary]) {
+        if ($Config.Contains($Key)) { return $Config[$Key] }
+        return $null
+    }
+    $prop = $Config.PSObject.Properties[$Key]
+    if ($prop) { return $prop.Value }
+    return $null
+}
+
 function Get-PSMStateDir {
     # Renvoie le dossier d'etat (parent de progress.json), fixe par Initialize-PSMState.
     # Utilise par le moteur de stages pour ecrire les copies patchees des *Config.xml.

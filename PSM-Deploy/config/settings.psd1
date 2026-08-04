@@ -60,6 +60,19 @@
         VaultAddressAttribute = 'Value'                          # attribut a ecrire (vide = InnerText du noeud)
     }
 
+    # --- PostInstallation : comptes de session PSM (PSMConnect/PSMAdminConnect) --
+    # Les comptes de DOMAINE sont definis PAR ZONE (zones.psd1 :
+    # PSMConnectUserName / PSMAdminConnectUserName). Ici on decrit seulement OU les
+    # ecrire dans PostInstallationConfig.xml -> deposer une nouvelle source ne demande
+    # aucune edition manuelle du XML. Adapter les XPath au schema du media (si un
+    # noeud est introuvable, le script liste les Parameter disponibles). Les mots de
+    # passe ne sont PAS injectes : ils sont geres dans le Safe PSM cote Vault.
+    PostInstallation = @{
+        PSMConnectXPath      = "//Parameter[@Name='PSMConnectUserName']"       # TODO : confirmer selon PostInstallationConfig.xml
+        PSMAdminConnectXPath = "//Parameter[@Name='PSMAdminConnectUserName']"  # TODO : confirmer selon PostInstallationConfig.xml
+        UserNameAttribute    = 'Value'                                          # attribut a ecrire (vide = InnerText du noeud)
+    }
+
     # --- Dossiers de travail (relatifs a la racine des sources) ----------
     Paths = @{
         State = 'state'
