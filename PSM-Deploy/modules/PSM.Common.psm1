@@ -204,6 +204,27 @@ function Get-PSMStateDir {
     return Split-Path $script:StatePath -Parent
 }
 
+function Reset-PSMState {
+    <#
+        Remet l'etat de deploiement a zero : progress.json vide (aucune phase
+        terminee) + purge des copies patchees des *Config.xml (regenerees au
+        prochain passage). Ne touche NI au media, NI aux logs, NI a la machine.
+        Sert a "repartir de zero" apres avoir desinstalle/nettoye le PSM, sans
+        laisser un etat perime faire sauter des phases (ex. l'Installation reelle).
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+    if (-not $script:StatePath) {
+        throw "Etat non initialise : appeler Initialize-PSMState avant Reset-PSMState."
+    }
+    if ($PSCmdlet.ShouldProcess($script:StatePath, "Reinitialiser l'etat (progress.json)")) {
+        @{ completedPhases = @() } | ConvertTo-Json | Set-Content -Path $script:StatePath
+        $configDir = Join-Path (Split-Path $script:StatePath -Parent) 'config'
+        if (Test-Path $configDir) { Remove-Item -Path $configDir -Recurse -Force }
+        Write-PSMLog -Level WARN -Message "Etat reinitialise : le deploiement repartira de la premiere phase (PreVol)."
+    }
+}
+
 function Test-PSMPhaseComplete {
     param([Parameter(Mandatory)] [string] $Phase)
     $state = Get-Content $script:StatePath -Raw | ConvertFrom-Json

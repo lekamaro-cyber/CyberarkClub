@@ -105,7 +105,18 @@ La reprise est **interactive** (les prompts `Get-Credential` PVWA fonctionnent) 
 
 # 4) Reprise (normalement automatique via la tâche planifiée après reboot) :
 .\Deploy-PSM.ps1 -Zone DC1 -Resume
+
+# 5) Repartir de ZÉRO (après avoir désinstallé/nettoyé le PSM) : réinitialise
+#    l'état pour rejouer TOUTES les phases (Installation comprise) :
+.\Deploy-PSM.ps1 -Zone DC1 -Reset
 ```
+
+> ⚠️ **`-Reset` est indispensable si tu nettoies le PSM à la main.** L'orchestrateur
+> est idempotent : il lit `state\progress.json` et **saute les phases déjà marquées
+> terminées**. Si tu désinstalles le PSM sans réinitialiser l'état, il sautera
+> l'`Installation` réelle et enchaînera sur `PostInstallation` sur une machine sans
+> PSM (« *PSM was not located or properly installed* »). `-Reset` (ou supprimer le
+> dossier `state\`) remet le compteur à zéro. `-Reset` est incompatible avec `-Resume`.
 
 > 🔒 **Confirmation de zone obligatoire** avant action (sauf `-NonInteractive`) :
 > une mauvaise zone = mauvais Vault/PVWA/compte. Anti-bourde voulu.

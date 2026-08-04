@@ -46,6 +46,24 @@ Describe 'Contrat d idempotence (Invoke-IdempotentStep)' {
     }
 }
 
+Describe 'Reinitialisation de l etat (-Reset / partir de zero)' {
+    BeforeAll {
+        Import-Module (Join-Path $root 'modules\PSM.Common.psm1') -Force
+        Initialize-PSMLogging -LogDirectory (Join-Path $env:TEMP 'psm-test-logs')
+        Initialize-PSMState   -StateDirectory (Join-Path $TestDrive 'state-reset')
+    }
+    It 'Vide les phases terminees' {
+        Set-PSMPhaseComplete 'PreVol'
+        Set-PSMPhaseComplete 'Installation'
+        Test-PSMPhaseComplete 'Installation' | Should -BeTrue
+
+        Reset-PSMState -Confirm:$false
+
+        Test-PSMPhaseComplete 'PreVol'       | Should -BeFalse
+        Test-PSMPhaseComplete 'Installation' | Should -BeFalse
+    }
+}
+
 Describe 'Config zones' {
     It 'Definit au moins 2 zones avec les cles PVWA requises' {
         $z = Import-PowerShellDataFile (Join-Path $root 'config\zones.psd1')

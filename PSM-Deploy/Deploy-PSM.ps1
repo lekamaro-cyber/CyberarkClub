@@ -37,6 +37,11 @@ param(
     # (-Resume) elle est relue depuis l'etat si omise (la tache planifiee la transmet).
     [string] $Zone,
     [switch] $Resume,
+
+    # Repart de zero : reinitialise l'etat (progress.json) avant de deployer, pour
+    # rejouer TOUTES les phases (utile apres avoir desinstalle/nettoye le PSM).
+    # Incompatible avec -Resume.
+    [switch] $Reset,
     [switch] $NonInteractive,
 
     # Compte PVWA de l'admin qui realise l'installation. Si omis en interactif,
@@ -62,6 +67,15 @@ $Software = Import-PowerShellDataFile (Join-Path $SourcesRoot 'config\software.p
 $StateDir = Join-Path $SourcesRoot $Settings.Paths.State
 Initialize-PSMLogging -LogDirectory (Join-Path $SourcesRoot $Settings.Paths.Logs)
 Initialize-PSMState   -StateDirectory $StateDir
+
+# --- Reinitialisation eventuelle de l'etat (partir de zero) ----------------
+if ($Reset -and $Resume) {
+    throw "-Reset et -Resume sont incompatibles (repartir de zero vs reprendre)."
+}
+if ($Reset) {
+    Reset-PSMState
+    Unregister-PSMResumeTask   # supprime une eventuelle tache de reprise perimee
+}
 
 # --- Resolution de la zone (parametre, sinon etat en reprise) --------------
 if (-not $Zone -and $Resume) {
