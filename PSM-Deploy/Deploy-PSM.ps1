@@ -159,9 +159,7 @@ try {
 
     # ===================== STAGE CyberArk : PostInstallation =====================
     if (-not (Test-PSMPhaseComplete 'PostInstallation')) {
-        # Comptes de session PSM (PSMConnect/PSMAdminConnect) de la zone injectes
-        # dans une copie de PostInstallationConfig.xml (media intact).
-        $r = Invoke-PSMPostInstall -Settings $Settings -SourcesRoot $SourcesRoot -ZoneConfig $ZoneConfig
+        $r = Invoke-PSMPostInstall -Settings $Settings -SourcesRoot $SourcesRoot
         if (-not $r.Succeeded) { throw "Stage PostInstallation en echec : $($r.ErrorData)" }
         if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'stage PostInstallation'; return }
         if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'PostInstallation' }
@@ -216,7 +214,9 @@ try {
 
     # ===================== STAGE CyberArk : Hardening (+ AppLocker) =====================
     if (-not (Test-PSMPhaseComplete 'Hardening')) {
-        $r = Invoke-PSMHardening -Settings $Settings -SourcesRoot $SourcesRoot
+        # Comptes de session PSM de domaine (PSMConnect/PSMAdminConnect) de la zone
+        # patches dans PSMConfigureAppLocker.xml (in-place) avant le stage Hardening.
+        $r = Invoke-PSMHardening -Settings $Settings -SourcesRoot $SourcesRoot -ZoneConfig $ZoneConfig
         if (-not $r.Succeeded) { throw "Stage Hardening en echec : $($r.ErrorData)" }
         if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'stage Hardening'; return }
         if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'Hardening' }

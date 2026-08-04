@@ -25,11 +25,11 @@
     # PSMConnectUserName / PSMAdminConnectUserName : comptes de session PSM, comptes
     #   de DOMAINE deja crees (format "DOMAINE\utilisateur"). Les MOTS DE PASSE ne
     #   sont PAS ici : ils sont geres dans le Safe PSM cote Vault.
-    #   NOTE : le PostInstallationConfig.xml standard n'expose PAS de champ pour ces
-    #   comptes (step ConfigurePSMUsers sans parametre) ; ils se configurent cote
-    #   Hardening (PSMHardening.ps1). Ces cles sont donc VIDES par defaut : les
-    #   renseigner + definir settings.psd1 PostInstallation.* seulement si votre
-    #   media expose reellement ces champs, sinon l'injection s'arrete en erreur.
+    #   Ces comptes ne sont PAS des parametres de stage : ils sont ecrits dans
+    #   PSMConfigureAppLocker.xml (genere a l'installation), patche EN PLACE au debut
+    #   de la phase Hardening (cf. settings.psd1 Hardening.*). VIDES par defaut =
+    #   injection INACTIVE. Les renseigner ET definir les XPath Hardening.* (a
+    #   confirmer sur le fichier genere) pour activer.
     # =====================================================================
 
     # --- Bac a sable / PRE (PVWA de test) -------------------------------

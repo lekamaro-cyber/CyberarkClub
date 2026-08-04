@@ -178,26 +178,73 @@ param($configFilePath, $silentMode, $displayJson, $spwdObj)
             Should -Be 'baz'
     }
 
-    It 'Injecte les comptes PSMConnect/PSMAdminConnect de la zone en PostInstallation' {
-        $zone = @{
-            PSMConnectUserName      = 'CONTOSO\PSMConnect'
-            PSMAdminConnectUserName = 'CONTOSO\PSMAdminConnect'
-        }
-        $r = Invoke-PSMPostInstall -Settings $script:settings -SourcesRoot $script:src -ZoneConfig $zone
-        $r.Succeeded | Should -BeTrue
-
-        $copy = Join-Path $script:stateDir 'config\PostInstallation\PostInstallationConfig.xml'
-        $doc  = [xml](Get-Content $copy -Raw)
-        $doc.SelectSingleNode("//Parameter[@Name='PSMConnectUserName']").Value      | Should -Be 'CONTOSO\PSMConnect'
-        $doc.SelectSingleNode("//Parameter[@Name='PSMAdminConnectUserName']").Value | Should -Be 'CONTOSO\PSMAdminConnect'
-        # Media inchange.
-        ([xml](Get-Content $script:postXml -Raw)).SelectSingleNode("//Parameter[@Name='PSMConnectUserName']").Value |
-            Should -Be ''
-    }
-
     It 'Sans ZoneConfig, PostInstallation utilise le XML du media tel quel' {
         $stage = Resolve-PSMStageConfig -Settings $script:settings -SourcesRoot $script:src -StageKey 'PostInstallation'
         $stage.ConfigFilePath | Should -Be $script:postXml
+    }
+}
+
+Describe 'Comptes de domaine PSMConnect/PSMAdminConnect (Hardening / AppLocker)' {
+    BeforeAll {
+        Import-Module (Join-Path $root 'modules\PSM.Common.psm1')    -Force
+        Import-Module (Join-Path $root 'modules\PSM.Hardening.psm1') -Force
+        Initialize-PSMLogging -LogDirectory (Join-Path $env:TEMP 'psm-test-logs')
+
+        # PSMConfigureAppLocker.xml "genere a l'installation" (schema simplifie).
+        $script:appLocker = Join-Path $TestDrive 'PSMConfigureAppLocker.xml'
+        function Reset-AppLocker {
+            Set-Content -Path $script:appLocker -Value '<PSMAppLockerConfiguration><PSM_CONNECT>PSMConnect</PSM_CONNECT><PSM_ADMIN_CONNECT>PSMAdminConnect</PSM_ADMIN_CONNECT></PSMAppLockerConfiguration>'
+            Remove-Item "$script:appLocker.orig" -ErrorAction SilentlyContinue
+        }
+
+        $script:hSettings = @{
+            Hardening = @{
+                AppLockerConfigPath  = $script:appLocker
+                PSMConnectXPath      = '//PSM_CONNECT'
+                PSMAdminConnectXPath = '//PSM_ADMIN_CONNECT'
+                AccountAttribute     = ''   # InnerText
+            }
+        }
+    }
+
+    It 'Patche en place PSMConfigureAppLocker.xml avec les comptes de domaine' {
+        Reset-AppLocker
+        $zone = @{ PSMConnectUserName = 'CONTOSO\PSMConnect'; PSMAdminConnectUserName = 'CONTOSO\PSMAdminConnect' }
+        $done = Set-PSMConnectAccounts -Settings $script:hSettings -ZoneConfig $zone -Confirm:$false
+        $done | Should -BeTrue
+
+        $doc = [xml](Get-Content $script:appLocker -Raw)
+        $doc.SelectSingleNode('//PSM_CONNECT').InnerText       | Should -Be 'CONTOSO\PSMConnect'
+        $doc.SelectSingleNode('//PSM_ADMIN_CONNECT').InnerText | Should -Be 'CONTOSO\PSMAdminConnect'
+        # Sauvegarde .orig conservee avec les valeurs d'origine.
+        Test-Path "$script:appLocker.orig" | Should -BeTrue
+        ([xml](Get-Content "$script:appLocker.orig" -Raw)).SelectSingleNode('//PSM_CONNECT').InnerText | Should -Be 'PSMConnect'
+    }
+
+    It 'Est re-jouable (repart de .orig, pas de double application)' {
+        Reset-AppLocker
+        $zone = @{ PSMConnectUserName = 'CONTOSO\PSMConnect' }
+        Set-PSMConnectAccounts -Settings $script:hSettings -ZoneConfig $zone -Confirm:$false | Out-Null
+        # 2e passage avec un autre compte : doit refleter le dernier, pas cumuler.
+        $zone2 = @{ PSMConnectUserName = 'CONTOSO\Autre' }
+        Set-PSMConnectAccounts -Settings $script:hSettings -ZoneConfig $zone2 -Confirm:$false | Out-Null
+        ([xml](Get-Content $script:appLocker -Raw)).SelectSingleNode('//PSM_CONNECT').InnerText | Should -Be 'CONTOSO\Autre'
+    }
+
+    It 'Inactif quand la zone ne fournit aucun compte' {
+        Reset-AppLocker
+        $done = Set-PSMConnectAccounts -Settings $script:hSettings -ZoneConfig @{ } -Confirm:$false
+        $done | Should -BeFalse
+        # Fichier inchange, pas de sauvegarde creee.
+        ([xml](Get-Content $script:appLocker -Raw)).SelectSingleNode('//PSM_CONNECT').InnerText | Should -Be 'PSMConnect'
+        Test-Path "$script:appLocker.orig" | Should -BeFalse
+    }
+
+    It 'Erreur explicite si le XPath est absent mais un compte est fourni' {
+        Reset-AppLocker
+        $bad = @{ Hardening = @{ AppLockerConfigPath = $script:appLocker; PSMConnectXPath = ''; AccountAttribute = '' } }
+        { Set-PSMConnectAccounts -Settings $bad -ZoneConfig @{ PSMConnectUserName = 'CONTOSO\X' } -Confirm:$false } |
+            Should -Throw
     }
 }
 

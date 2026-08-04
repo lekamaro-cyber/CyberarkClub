@@ -136,13 +136,16 @@ La reprise est **interactive** (les prompts `Get-Credential` PVWA fonctionnent) 
   dans `InstallationAutomation\Templates\`) — c'est la data de l'équipe (PVWA, Vault,
   comptes composants, options de hardening/AppLocker…).
 - `zones.psd1` / `settings.psd1` : valeurs réelles (PVWA, méthode d'auth, compte d'install, licence RDS).
-  - **PSMConnect / PSMAdminConnect** (comptes de session, **domaine**) : emplacement
-    prévu **par zone** dans `zones.psd1` (`PSMConnectUserName` / `PSMAdminConnectUserName`,
-    format `DOMAINE\user`). ⚠️ Le `PostInstallationConfig.xml` **standard n'expose pas**
-    de champ pour ces comptes (step `ConfigurePSMUsers` sans paramètre) : ils se
-    configurent côté **Hardening** (`PSMHardening.ps1`). Ces clés sont donc **vides par
-    défaut** (injection inactive) tant que la cible réelle n'est pas confirmée. Les
-    **mots de passe** ne sont jamais ici : gérés dans le **Safe PSM** côté Vault.
+  - **PSMConnect / PSMAdminConnect** (comptes de session, **domaine**) : **par zone**
+    dans `zones.psd1` (`PSMConnectUserName` / `PSMAdminConnectUserName`, format
+    `DOMAINE\user`). Ils ne sont **pas** des paramètres de stage : ils vivent dans
+    **`PSMConfigureAppLocker.xml`**, un fichier **généré à l'installation** (pas dans le
+    média) et lu par le step Hardening `RunApplocker` depuis un chemin **fixe**. On le
+    **patche en place** (sauvegarde `.orig`, rejouable) au début de la phase Hardening
+    via `Set-PSMConnectAccounts`. Emplacement du fichier + XPath : `settings.psd1` →
+    `Hardening.*`. **Vides par défaut = inactif** ; renseigner les comptes de zone **et**
+    les XPath (à confirmer sur le fichier généré) pour activer. Les **mots de passe** ne
+    sont jamais ici : gérés dans le **Safe PSM** côté Vault.
 - `config/software.psd1` : logiciels additionnels éventuels.
 
 ## Tests
