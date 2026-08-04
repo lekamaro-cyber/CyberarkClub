@@ -17,7 +17,7 @@
 - **14.0 pas encore testée** → cible 12.6, code paramétré par version.
 
 ## Comptes
-- **PSMConnect / PSMAdminConnect** : comptes de domaine **déjà créés**. Leur **identité** (`DOMAINE\user`) est désormais définie **par zone** dans `zones.psd1` (`PSMConnectUserName` / `PSMAdminConnectUserName`) et **injectée** dans une copie de `PostInstallationConfig.xml` (média intact) — plus d'édition manuelle du XML. Les **mots de passe** ne sont pas en config : **gérés dans le Safe PSM** côté Vault.
+- **PSMConnect / PSMAdminConnect** : comptes de domaine **déjà créés**. Emplacement prévu **par zone** dans `zones.psd1` (`PSMConnectUserName` / `PSMAdminConnectUserName`, format `DOMAINE\user`). ⚠️ **À confirmer** : le `PostInstallationConfig.xml` fourni n'a **aucun paramètre** pour ces comptes (step `ConfigurePSMUsers` sans param) — la configuration des comptes de session de domaine se fait côté **Hardening** (`PSMHardening.ps1`), pas dans ce XML. Les clés zone sont donc **vides/inactives** en attendant le bon mécanisme. Les **mots de passe** ne sont pas en config : **gérés dans le Safe PSM** côté Vault.
 - Auth PVWA du compte admin/install : **CyberArk**.
 - Nommage des comptes composants : **`PSM-<SERVERNAME>` en MAJUSCULES**.
 - Credential files (.cred) **liés à la machine** (CreateCredFile avec restrictions).
