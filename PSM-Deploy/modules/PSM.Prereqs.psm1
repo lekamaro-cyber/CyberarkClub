@@ -1,11 +1,15 @@
 <#
 .SYNOPSIS
-    Phase "Prerequis OS" : role RD Session Host, licence RDS, .NET, services, registre.
+    Phases "prerequis" : stages CyberArk Readiness + Prerequisites (Execute-Stage.ps1)
+    + configuration locale de la licence RD Session Host.
 
-.NOTES
-    Chaque action passe par Invoke-IdempotentStep (Test -> Set).
-    Renvoie $true si un reboot est requis (installation du role RDS).
-    Valeurs reelles (serveur de licence, mode) lues depuis settings.psd1.
+.DESCRIPTION
+    - Readiness / Prerequisites : pilotes via le framework CyberArk (installation
+      du role RDS, .NET, NLA, RDS Security Layer...). Le reboot eventuel est
+      signale par restartRequired et gere par l'orchestrateur.
+    - Licence RDS : la config du mode + du/des serveur(s) de licence reste de
+      notre cote (site-specific), appliquee APRES l'installation du role RDS.
+    - Test-PSMLicenseServers : controle de connectivite (utilise en pre-vol).
 #>
 
 Set-StrictMode -Version Latest
@@ -14,8 +18,7 @@ $ErrorActionPreference = 'Stop'
 function Get-PSMRegValue {
     <#
         Lecture registre robuste : renvoie la valeur, ou $null si la cle/valeur
-        n'existe pas. Evite l'exception StrictMode sur une propriete absente
-        (contrairement a (Get-ItemProperty ...).<Nom>).
+        n'existe pas (evite l'exception StrictMode sur une propriete absente).
     #>
     [CmdletBinding()]
     param(
@@ -24,10 +27,10 @@ function Get-PSMRegValue {
     )
     try {
         $key = Get-Item -Path $Path -ErrorAction Stop
-        return $key.GetValue($Name, $null)   # $null si la valeur n'existe pas
+        return $key.GetValue($Name, $null)
     }
     catch {
-        return $null                          # la cle n'existe pas
+        return $null
     }
 }
 
@@ -35,7 +38,7 @@ function Test-PSMLicenseServers {
     <#
         Controle de connectivite vers le/les serveur(s) de licence RDS.
         Port 135 = RPC endpoint mapper (utilise par le service de licences RDS).
-        Non bloquant par defaut : journalise OK/WARN et renvoie $true si tous joignables.
+        Non bloquant : journalise OK/WARN et renvoie $true si tous joignables.
     #>
     [CmdletBinding()]
     param(
@@ -68,30 +71,44 @@ function Test-PSMLicenseServers {
     return $allOk
 }
 
-function Invoke-PSMPrereqs {
+function Invoke-PSMReadiness {
+    # Stage CyberArk "Readiness" (CheckOS, CheckSystemRequirements, .NET, domaine...).
     [CmdletBinding(SupportsShouldProcess)]
     param(
-        [Parameter(Mandatory)] $Settings
+        [Parameter(Mandatory)] $Settings,
+        [Parameter(Mandatory)] [string] $SourcesRoot
     )
+    $paths = Get-PSMStagePaths -Settings $Settings -SourcesRoot $SourcesRoot -StageKey 'Readiness'
+    return Invoke-PSMStage -StageName 'Readiness' `
+                           -ExecuteStagePath $paths.ExecuteStage `
+                           -ConfigFilePath   $paths.Config
+}
 
-    $rebootRequired   = $false
-    $script:__reboot  = $false
+function Invoke-PSMPrerequisites {
+    # Stage CyberArk "Prerequisites" (InstallRDS, DisableNLA, RDS Security Layer, .NET...).
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)] $Settings,
+        [Parameter(Mandatory)] [string] $SourcesRoot
+    )
+    $paths = Get-PSMStagePaths -Settings $Settings -SourcesRoot $SourcesRoot -StageKey 'Prerequisites'
+    return Invoke-PSMStage -StageName 'Prerequisites' `
+                           -ExecuteStagePath $paths.ExecuteStage `
+                           -ConfigFilePath   $paths.Config
+}
 
-    # --- Role RD Session Host -------------------------------------------------
-    Invoke-IdempotentStep -Name 'Role RD Session Host' `
-        -Test   { (Get-WindowsFeature -Name RDS-RD-Server).Installed } `
-        -Action {
-            $r = Install-WindowsFeature -Name RDS-RD-Server -IncludeManagementTools
-            if ($r.RestartNeeded -ne 'No') { $script:__reboot = $true }
-        }
-    if ($script:__reboot) { $rebootRequired = $true; $script:__reboot = $false }
+function Invoke-PSMRdsLicensing {
+    <#
+        Configure le mode et le/les serveur(s) de licence RD Session Host
+        (valeur registre 'LicenseServers' = liste separee par des virgules).
+        A executer APRES l'installation du role RDS (stage Prerequisites).
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param([Parameter(Mandatory)] $Settings)
 
-    # --- Mode de licence RDS + serveur de licence -----------------------------
-    # TODO (deploiement) : valider les cles registre selon la version d'OS.
-    $licMode = $Settings.Rds.LicenseMode          # 'PerUser' | 'PerDevice'
-    # Accepte un tableau OU une chaine unique ; on normalise en liste ordonnee.
+    $licMode    = $Settings.Rds.LicenseMode
     $licSrvList = @($Settings.Rds.LicenseServers) | Where-Object { $_ }
-    $licSrvStr  = $licSrvList -join ','            # valeur registre = liste separee par des virgules
+    $licSrvStr  = $licSrvList -join ','
     $rdKey      = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
 
     Invoke-IdempotentStep -Name "Mode licence RDS ($licMode)" `
@@ -108,18 +125,13 @@ function Invoke-PSMPrereqs {
     Invoke-IdempotentStep -Name "Serveur(s) de licence RDS ($licSrvStr)" `
         -Test   {
             $cur = Get-PSMRegValue -Path $rdKey -Name 'LicenseServers'
-            # Comparaison insensible aux espaces autour des virgules ($null -> '').
             ((($cur -as [string]) -replace '\s*,\s*', ',')) -eq $licSrvStr
         } `
         -Action {
             if (-not (Test-Path $rdKey)) { New-Item -Path $rdKey -Force | Out-Null }
             Set-ItemProperty -Path $rdKey -Name 'LicenseServers' -Value $licSrvStr -Type String
         }
-
-    # --- .NET / fonctionnalites requises (TODO: completer selon version PSM) --
-    # Invoke-IdempotentStep -Name '.NET Framework 4.x' -Test {...} -Action {...}
-
-    return $rebootRequired
 }
 
-Export-ModuleMember -Function Invoke-PSMPrereqs, Test-PSMLicenseServers
+Export-ModuleMember -Function Invoke-PSMReadiness, Invoke-PSMPrerequisites, `
+                              Invoke-PSMRdsLicensing, Test-PSMLicenseServers, Get-PSMRegValue

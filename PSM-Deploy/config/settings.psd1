@@ -25,6 +25,8 @@
         MediaRelativePath             = 'media\PSM'              # sous-dossier du media dans les sources
         InstallationAutomationSubPath = 'InstallationAutomation' # dossier du framework CyberArk
         Stages = @{
+            Readiness        = 'Readiness\ReadinessConfig.xml'
+            Prerequisites    = 'Prerequisites\PrerequisitesConfig.xml'
             Installation     = 'Installation\InstallationConfig.xml'
             PostInstallation = 'PostInstallation\PostInstallationConfig.xml'
             Registration     = 'Registration\RegistrationConfig.xml'

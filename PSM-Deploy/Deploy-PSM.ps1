@@ -10,8 +10,8 @@
     Fail-fast : arret a la premiere erreur, reprise possible apres correction.
 
     Phases (les stages CyberArk sont pilotes via InstallationAutomation\Execute-Stage.ps1) :
-      PreVol -> Prereqs(RDS) -> [reboot] -> Logiciels
-             -> Installation -> PostInstallation -> [reboot eventuel a chaque stage]
+      PreVol -> Readiness -> Prerequisites(RDS) -> [reboot] -> RdsLicensing
+             -> Logiciels -> Installation -> PostInstallation -> [reboot eventuel a chaque stage]
              -> Registration(secret via API PVWA) -> Hardening(+AppLocker) -> Validation
 
 .PARAMETER Zone
@@ -106,14 +106,26 @@ try {
         }
     }
 
-    # ===================== PHASE : Prereqs (role RDS + licence) =====================
-    if (-not (Test-PSMPhaseComplete 'Prereqs')) {
-        $rebootRequired = Invoke-PSMPrereqs -Settings $Settings
-        if ($rebootRequired -and -not $WhatIfPreference) {
-            Start-PSMResumeReboot -Reason 'role RDS'
-            return
-        }
-        if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'Prereqs' }
+    # ===================== STAGE CyberArk : Readiness =====================
+    if (-not (Test-PSMPhaseComplete 'Readiness')) {
+        $r = Invoke-PSMReadiness -Settings $Settings -SourcesRoot $SourcesRoot
+        if (-not $r.Succeeded) { throw "Stage Readiness en echec : $($r.ErrorData)" }
+        if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'stage Readiness'; return }
+        if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'Readiness' }
+    }
+
+    # ===================== STAGE CyberArk : Prerequisites (RDS, .NET, NLA...) =====================
+    if (-not (Test-PSMPhaseComplete 'Prerequisites')) {
+        $r = Invoke-PSMPrerequisites -Settings $Settings -SourcesRoot $SourcesRoot
+        if (-not $r.Succeeded) { throw "Stage Prerequisites en echec : $($r.ErrorData)" }
+        if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'stage Prerequisites (RDS)'; return }
+        if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'Prerequisites' }
+    }
+
+    # ===================== PHASE : Licence RDS (locale, apres RDS installe) =====================
+    if (-not (Test-PSMPhaseComplete 'RdsLicensing')) {
+        Invoke-PSMRdsLicensing -Settings $Settings
+        if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'RdsLicensing' }
     }
 
     # ===================== PHASE : Logiciels additionnels =====================

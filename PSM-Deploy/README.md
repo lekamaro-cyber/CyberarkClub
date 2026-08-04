@@ -24,7 +24,7 @@ administrateur.
 | Topologie | PSM **in-domain**, **derrière Load Balancer**, **2 datacenters à flux fermés** |
 | Vault | **Central unique** joignable des 2 DC |
 | Zones | 2 datacenters → mapping `zone ⇄ {PVWA, AuthMethod, compte d'install}` |
-| Install PSM | Scripts d'**automatisation CyberArk** |
+| Install PSM | **Pilotage étape par étape** du framework CyberArk (`InstallationAutomation\Execute-Stage.ps1`) : Readiness → Prerequisites → Installation → PostInstallation → Registration → Hardening |
 | Comptes composants | **PSMApp/PSMGw** enregistrés via la registration automation du média |
 | Comptes connexion | **PSMConnect/PSMAdminConnect = comptes de domaine gérés par CPM** — mots de passe récupérés à l'exécution par le service PSM (Safe PSMConnect), **non fournis à l'install** |
 | Récupération des secrets | **Via l'API REST PVWA** (pas de CCP/AIM) — l'admin qui installe s'authentifie au PVWA et le script récupère le compte d'install Vault |
@@ -67,8 +67,14 @@ PSM-Deploy/
 ## Flux des phases
 
 ```
-PreVol → Prereqs(RDS) → [reboot+reprise] → Software → InstallPSM
-       → Register(session PVWA + secret via API PVWA) → Hardening(+AppLocker) → Validation
+PreVol → Readiness → Prerequisites(RDS) → [reboot+reprise] → RdsLicensing → Software
+       → Installation → PostInstallation → Registration(secret via API PVWA)
+       → Hardening(+AppLocker) → Validation
+
+Readiness / Prerequisites / Installation / PostInstallation / Registration / Hardening
+sont des **stages CyberArk** pilotés via `InstallationAutomation\Execute-Stage.ps1`
+(config par les `*Config.xml` remplis par l'équipe). Le reste (PreVol, licence RDS,
+logiciels, validation) et la récupération du secret PVWA sont côté script.
 ```
 Chaque phase est marquée terminée dans `state/progress.json`. Quand un reboot est
 requis, une **tâche planifiée `AtLogOn`** est créée pour l'**admin installateur** :
@@ -106,12 +112,12 @@ La reprise est **interactive** (les prompts `Get-Credential` PVWA fonctionnent) 
 
 ## À compléter avant déploiement (`TODO` / `STUB`)
 
-- `media/` + `Install.AutomationScript`/`ResponseFile` : brancher les scripts CyberArk.
-- `PSM.Register.psm1` : brancher la registration automation du média + détection d'idempotence.
-- `PSM.Hardening.psm1` : exécution PSMHardening + application AppLocker.
-- `applocker/PSMConfigureAppLocker.xml` : politique réelle (+ binaires additionnels).
+- `media/PSM/` : déposer le média CyberArk (contient `InstallationAutomation\Execute-Stage.ps1`).
+- **`InstallationAutomation\*\*Config.xml`** : remplir les configs de stage (blueprints
+  dans `InstallationAutomation\Templates\`) — c'est la data de l'équipe (PVWA, Vault,
+  comptes composants, options de hardening/AppLocker…).
 - `zones.psd1` / `settings.psd1` : valeurs réelles (PVWA, méthode d'auth, compte d'install, licence RDS).
-- Persistance de la zone pour la reprise post-reboot.
+- `config/software.psd1` : logiciels additionnels éventuels.
 
 ## Tests
 
