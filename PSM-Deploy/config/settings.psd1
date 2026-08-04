@@ -41,17 +41,19 @@
         # (Attribute vide => on ecrit l'InnerText du noeud). Les valeurs DYNAMIQUES
         # (ex. adresse Vault de la zone) restent injectees par le code, pas ici.
         # Si un noeud est introuvable, le script liste les Parameter disponibles.
-        # Exemple PRET A L'EMPLOI pour InstallationConfig.xml (champs reels confirmes) :
-        # decommenter/adapter et deplacer hors du commentaire pour activer.
-        # Injections = @{
-        #     Installation = @{
-        #         "//Parameter[@Name='InstallationDirectory']" = @{ Attribute = 'Value'; Value = 'D:\Program Files (x86)\CyberArk' }
-        #         "//Parameter[@Name='RecordingDirectory']"    = @{ Attribute = 'Value'; Value = 'D:\PSM\Recordings' }
-        #         "//Parameter[@Name='Company']"               = @{ Attribute = 'Value'; Value = 'Ma Societe' }
-        #         "//Parameter[@Name='Name']"                  = @{ Attribute = 'Value'; Value = 'Compte installation' }
-        #     }
-        # }
-        Injections = @{}
+        # Champs reels de InstallationConfig.xml (step RunInstallation) :
+        # InstallationDirectory, RecordingDirectory, Name, Company.
+        # PSM s'installe dans <InstallationDirectory>\PSM (ici -> D:\CyberArk\PSM).
+        # IMPORTANT : si tu changes InstallationDirectory, aligne aussi
+        # Hardening.AppLockerConfigPath plus bas (il pointe sous ce dossier).
+        Injections = @{
+            Installation = @{
+                "//Parameter[@Name='InstallationDirectory']" = @{ Attribute = 'Value'; Value = 'D:\CyberArk' }
+                "//Parameter[@Name='RecordingDirectory']"    = @{ Attribute = 'Value'; Value = 'D:\CyberArk\PSM\Recordings' }
+                # "//Parameter[@Name='Company']"               = @{ Attribute = 'Value'; Value = 'Ma Societe' }
+                # "//Parameter[@Name='Name']"                  = @{ Attribute = 'Value'; Value = 'Compte installation' }
+            }
+        }
     }
 
     # --- Enregistrement : injection de l'adresse Vault depuis zones.psd1 --------
@@ -79,7 +81,7 @@
     # genere apres une premiere Installation (si un noeud est introuvable, le script
     # liste les noeuds candidats).
     Hardening = @{
-        AppLockerConfigPath  = 'C:\Program Files (x86)\CyberArk\PSM\Hardening\PSMConfigureAppLocker.xml'
+        AppLockerConfigPath  = 'D:\CyberArk\PSM\Hardening\PSMConfigureAppLocker.xml'
         PSMConnectXPath      = ''   # TODO : a confirmer sur le PSMConfigureAppLocker.xml genere
         PSMAdminConnectXPath = ''   # TODO : a confirmer sur le PSMConfigureAppLocker.xml genere
         AccountAttribute     = ''   # vide = on ecrit l'InnerText du noeud ; sinon nom d'attribut
