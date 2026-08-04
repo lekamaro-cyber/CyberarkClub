@@ -195,6 +195,15 @@ function Initialize-PSMState {
     }
 }
 
+function Get-PSMStateDir {
+    # Renvoie le dossier d'etat (parent de progress.json), fixe par Initialize-PSMState.
+    # Utilise par le moteur de stages pour ecrire les copies patchees des *Config.xml.
+    if (-not $script:StatePath) {
+        throw "Etat non initialise : appeler Initialize-PSMState avant Get-PSMStateDir."
+    }
+    return Split-Path $script:StatePath -Parent
+}
+
 function Test-PSMPhaseComplete {
     param([Parameter(Mandatory)] [string] $Phase)
     $state = Get-Content $script:StatePath -Raw | ConvertFrom-Json

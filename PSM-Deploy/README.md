@@ -76,6 +76,14 @@ sont des **stages CyberArk** pilotés via `InstallationAutomation\Execute-Stage.
 (config par les `*Config.xml` remplis par l'équipe). Le reste (PreVol, licence RDS,
 logiciels, validation) et la récupération du secret PVWA sont côté script.
 ```
+> 🧩 **Config des stages pilotée par la nôtre (média jamais modifié).** Les valeurs qui
+> dépendent de notre environnement sont **injectées** dans une **copie patchée** du
+> `*Config.xml` sous `state\config\<Stage>\` — le média reste intact, donc **déposer une
+> nouvelle source CyberArk ne demande aucune édition manuelle des XML**. Une seule
+> mécanique (`Resolve-PSMStageConfig` → `Update-PSMStageXml`) sert tous les stages :
+> valeurs **statiques** via `settings.psd1` (`Install.Injections[<Stage>]`) et valeurs
+> **dynamiques** par le code (ex. l'adresse Vault de la zone pour *Registration*). Sans
+> injection déclarée pour un stage, le XML du média est utilisé tel quel.
 Chaque phase est marquée terminée dans `state/progress.json`. Quand un reboot est
 requis, une **tâche planifiée `AtLogOn`** est créée pour l'**admin installateur** :
 dès qu'il **se reconnecte après le redémarrage**, le script **reprend tout seul dans

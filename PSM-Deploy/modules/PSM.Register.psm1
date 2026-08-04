@@ -19,79 +19,39 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-function Update-PSMRegistrationConfig {
-    <#
-        Charge le RegistrationConfig.xml du media, y injecte l'adresse Vault
-        (cluster,DR) issue de la zone, et enregistre une COPIE patchee dans state\.
-        Renvoie le chemin de la copie a passer a Execute-Stage.
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)] $Settings,
-        [Parameter(Mandatory)] [string] $SourceConfigPath,
-        [Parameter(Mandatory)] [string] $VaultAddress,     # "ipCluster,ipDr"
-        [Parameter(Mandatory)] [string] $StateDir
-    )
-    if (-not (Test-Path $SourceConfigPath)) {
-        throw "RegistrationConfig.xml introuvable : $SourceConfigPath (verifier le media)."
-    }
-
-    [xml]$doc = Get-Content -Path $SourceConfigPath -Raw
-
-    $xpath = $Settings.Registration.VaultAddressXPath
-    $attr  = $Settings.Registration.VaultAddressAttribute
-    if (-not $xpath) {
-        throw "settings.psd1 : Registration.VaultAddressXPath non defini."
-    }
-
-    $node = $doc.SelectSingleNode($xpath)
-    if (-not $node) {
-        # Aide au diagnostic : liste les Parameter disponibles pour ajuster le XPath.
-        $names = ($doc.SelectNodes('//Parameter') | ForEach-Object { $_.Name }) -join ', '
-        throw ("Adresse Vault introuvable dans RegistrationConfig.xml (XPath: $xpath). " +
-               "Parametres disponibles : $names. Ajuster settings.psd1 Registration.VaultAddressXPath.")
-    }
-
-    if ($attr) { [void]$node.SetAttribute($attr, $VaultAddress) }
-    else       { $node.InnerText = $VaultAddress }
-
-    $outDir = Join-Path $StateDir 'registration'
-    if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir -Force | Out-Null }
-    $outXml = Join-Path $outDir 'RegistrationConfig.xml'
-    $doc.Save($outXml)
-
-    Write-PSMLog -Level INFO -Message "RegistrationConfig patche (Vault='$VaultAddress') -> $outXml"
-    return $outXml
-}
-
 function Invoke-PSMRegister {
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)] $Settings,
         [Parameter(Mandatory)] [string] $SourcesRoot,
         [pscredential] $InstallCredential,   # mot de passe injecte via -spwdObj
-        [string] $VaultAddress,              # "ipCluster,ipDr" (depuis zones.psd1)
-        [string] $StateDir
+        [string] $VaultAddress               # "ipCluster,ipDr" (depuis zones.psd1)
     )
-    $paths      = Get-PSMStagePaths -Settings $Settings -SourcesRoot $SourcesRoot -StageKey 'Registration'
-    $configPath = $paths.Config
-
-    # Adresse Vault pilotee par la zone -> copie patchee (media intact).
+    # Adresse Vault pilotee par la zone : injection DYNAMIQUE dans une copie patchee
+    # du RegistrationConfig.xml (media intact), via le moteur generique de stages.
+    # L'emplacement du champ dans le XML est configurable (settings.psd1 Registration.*).
+    $extra = $null
     if ($VaultAddress) {
-        if (-not $StateDir) { throw "Invoke-PSMRegister : -StateDir requis quand -VaultAddress est fourni." }
-        $configPath = Update-PSMRegistrationConfig -Settings $Settings `
-                        -SourceConfigPath $paths.Config -VaultAddress $VaultAddress -StateDir $StateDir
+        $xpath = $Settings.Registration.VaultAddressXPath
+        $attr  = $Settings.Registration.VaultAddressAttribute
+        if (-not $xpath) {
+            throw "settings.psd1 : Registration.VaultAddressXPath non defini."
+        }
+        $extra = @{ $xpath = @{ Attribute = $attr; Value = $VaultAddress } }
     }
     else {
         Write-PSMLog -Level WARN -Message "Aucune adresse Vault de zone (VaultAddress) : utilisation du RegistrationConfig.xml du media tel quel."
     }
 
+    $stage = Resolve-PSMStageConfig -Settings $Settings -SourcesRoot $SourcesRoot `
+                -StageKey 'Registration' -ExtraInjections $extra
+
     $securePwd = if ($InstallCredential) { $InstallCredential.Password } else { $null }
 
     return Invoke-PSMStage -StageName 'Registration' `
-                           -ExecuteStagePath $paths.ExecuteStage `
-                           -ConfigFilePath   $configPath `
+                           -ExecuteStagePath $stage.ExecuteStage `
+                           -ConfigFilePath   $stage.ConfigFilePath `
                            -VaultPassword    $securePwd
 }
 
-Export-ModuleMember -Function Invoke-PSMRegister, Update-PSMRegistrationConfig
+Export-ModuleMember -Function Invoke-PSMRegister

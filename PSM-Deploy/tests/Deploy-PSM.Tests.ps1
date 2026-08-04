@@ -60,10 +60,11 @@ Describe 'Config zones' {
 
 Describe 'Module Stages (pilotage Execute-Stage.ps1 de CyberArk)' {
     BeforeAll {
+        Import-Module (Join-Path $root 'modules\PSM.Common.psm1') -Force
         Import-Module (Join-Path $root 'modules\PSM.Stages.psm1') -Force
     }
-    It 'Expose le moteur de stage et le calcul de chemins' {
-        foreach ($fn in 'Invoke-PSMStage','Get-PSMStagePaths') {
+    It 'Expose le moteur de stage, le calcul de chemins et l injection' {
+        foreach ($fn in 'Invoke-PSMStage','Get-PSMStagePaths','Resolve-PSMStageConfig','Update-PSMStageXml') {
             Get-Command $fn -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
         }
     }
@@ -72,6 +73,76 @@ Describe 'Module Stages (pilotage Execute-Stage.ps1 de CyberArk)' {
         $p = Get-PSMStagePaths -Settings $s -SourcesRoot $root -StageKey 'Installation'
         $p.ExecuteStage | Should -Match 'InstallationAutomation'
         $p.Config       | Should -Match 'InstallationConfig\.xml'
+    }
+}
+
+Describe 'Injection XML des stages (config pilotee, media intact)' {
+    BeforeAll {
+        Import-Module (Join-Path $root 'modules\PSM.Common.psm1') -Force
+        Import-Module (Join-Path $root 'modules\PSM.Stages.psm1') -Force
+        Initialize-PSMLogging -LogDirectory (Join-Path $env:TEMP 'psm-test-logs')
+
+        # Media factice : layout media\PSM\InstallationAutomation\<Stage>\...
+        $script:src   = Join-Path $TestDrive 'sources'
+        $script:iaDir = Join-Path $script:src 'media\PSM\InstallationAutomation'
+        $regDir       = Join-Path $script:iaDir 'Registration'
+        $hardDir      = Join-Path $script:iaDir 'Hardening'
+        New-Item -ItemType Directory -Path $regDir, $hardDir -Force | Out-Null
+        Set-Content -Path (Join-Path $script:iaDir 'Execute-Stage.ps1') -Value '# stub'
+        $script:regXml  = Join-Path $regDir  'RegistrationConfig.xml'
+        $script:hardXml = Join-Path $hardDir 'HardeningConfig.xml'
+        Set-Content -Path $script:regXml  -Value '<Configuration><Parameter Name="VaultIP" Value="" /></Configuration>'
+        Set-Content -Path $script:hardXml -Value '<Configuration><Parameter Name="Foo" Value="bar" /></Configuration>'
+
+        Initialize-PSMState -StateDirectory (Join-Path $TestDrive 'state')
+
+        $script:settings = @{
+            Install = @{
+                MediaRelativePath             = 'media\PSM'
+                InstallationAutomationSubPath = 'InstallationAutomation'
+                Stages = @{
+                    Registration = 'Registration\RegistrationConfig.xml'
+                    Hardening    = 'Hardening\HardeningConfig.xml'
+                }
+                Injections = @{}
+            }
+        }
+    }
+
+    It 'Patche une COPIE (adresse Vault) sans toucher au media' {
+        $extra = @{ "//Parameter[@Name='VaultIP']" = @{ Attribute = 'Value'; Value = '10.0.0.1,10.0.0.2' } }
+        $stage = Resolve-PSMStageConfig -Settings $script:settings -SourcesRoot $script:src `
+                    -StageKey 'Registration' -ExtraInjections $extra
+
+        # La copie patchee est sous state\config\Registration\, pas dans le media.
+        $stage.ConfigFilePath | Should -Match 'state.config.Registration'
+        ([xml](Get-Content $stage.ConfigFilePath -Raw)).SelectSingleNode("//Parameter[@Name='VaultIP']").Value |
+            Should -Be '10.0.0.1,10.0.0.2'
+        # Media inchange.
+        ([xml](Get-Content $script:regXml -Raw)).SelectSingleNode("//Parameter[@Name='VaultIP']").Value |
+            Should -Be ''
+    }
+
+    It 'Renvoie le XML du media quand aucune injection n est definie' {
+        $stage = Resolve-PSMStageConfig -Settings $script:settings -SourcesRoot $script:src -StageKey 'Hardening'
+        $stage.ConfigFilePath | Should -Be $script:hardXml
+    }
+
+    It 'Applique les injections STATIQUES de settings.psd1' {
+        $s = @{
+            Install = @{
+                MediaRelativePath             = 'media\PSM'
+                InstallationAutomationSubPath = 'InstallationAutomation'
+                Stages     = @{ Hardening = 'Hardening\HardeningConfig.xml' }
+                Injections = @{
+                    Hardening = @{ "//Parameter[@Name='Foo']" = @{ Attribute = 'Value'; Value = 'baz' } }
+                }
+            }
+        }
+        $stage = Resolve-PSMStageConfig -Settings $s -SourcesRoot $script:src -StageKey 'Hardening'
+        $stage.ConfigFilePath | Should -Match 'state.config.Hardening'
+        ([xml](Get-Content $stage.ConfigFilePath -Raw)).SelectSingleNode("//Parameter[@Name='Foo']").Value |
+            Should -Be 'baz'
     }
 }
 

@@ -36,6 +36,15 @@
 ## Vault / PVWA / enregistrement
 - **Vault central unique** joignable des 2 DC.
 - Enregistrement via la **« registration automation » présente dans les sources** + **XML posés à la main**, avec **confirmation manuelle AVANT** exécution.
+- **Évolution (config pilotée par la nôtre, média jamais modifié)** : les valeurs qui
+  dépendent de notre environnement ne sont plus éditées à la main dans les `*Config.xml`
+  du média. Une **mécanique d'injection unique** (`Resolve-PSMStageConfig` →
+  `Update-PSMStageXml`) écrit ces valeurs dans une **copie patchée** sous
+  `state\config\<Stage>\`, pour **tous les stages** (Readiness → Hardening). Deux sources :
+  valeurs **statiques** dans `settings.psd1` (`Install.Injections[<Stage>]`) et valeurs
+  **dynamiques** par le code — dont l'**adresse Vault de la zone** (`zones.psd1`) injectée
+  pour *Registration*. Résultat : **déposer une nouvelle source CyberArk ne demande aucune
+  édition manuelle des XML** ; sans injection déclarée, le XML du média sert tel quel.
 - **Idempotence** : on se connecte au **PVWA avec le compte de l'admin** (session ouverte pour la récupération des secrets) pour vérifier si le PSM est **déjà enregistré** avant d'agir.
 - **[L2/à récupérer]** contenu/gabarit des XML d'enregistrement + URL PVWA par DC.
 

@@ -32,6 +32,22 @@
             Registration     = 'Registration\RegistrationConfig.xml'
             Hardening        = 'Hardening\HardeningConfig.xml'
         }
+
+        # --- Injections STATIQUES dans les *Config.xml de stage (optionnel) --------
+        # Permet d'adapter la config d'un stage a notre environnement SANS editer les
+        # XML du media : chaque valeur est ecrite dans une COPIE patchee sous
+        # state\config\<Stage>\ (media intact). Cle = nom du stage (cf. Stages),
+        # valeur = table @{ '<xpath>' = @{ Attribute='Value'; Value='...' } }
+        # (Attribute vide => on ecrit l'InnerText du noeud). Les valeurs DYNAMIQUES
+        # (ex. adresse Vault de la zone) restent injectees par le code, pas ici.
+        # Si un noeud est introuvable, le script liste les Parameter disponibles.
+        # Exemple (a decommenter/adapter selon le schema du media) :
+        # Injections = @{
+        #     Installation = @{
+        #         "//Parameter[@Name='InstallationFolder']" = @{ Attribute = 'Value'; Value = 'D:\CyberArk\PSM' }
+        #     }
+        # }
+        Injections = @{}
     }
 
     # --- Enregistrement : injection de l'adresse Vault depuis zones.psd1 --------

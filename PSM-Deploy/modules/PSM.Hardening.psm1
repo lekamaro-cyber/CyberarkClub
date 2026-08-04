@@ -21,10 +21,10 @@ function Invoke-PSMHardening {
         [Parameter(Mandatory)] $Settings,
         [Parameter(Mandatory)] [string] $SourcesRoot
     )
-    $paths = Get-PSMStagePaths -Settings $Settings -SourcesRoot $SourcesRoot -StageKey 'Hardening'
+    $stage = Resolve-PSMStageConfig -Settings $Settings -SourcesRoot $SourcesRoot -StageKey 'Hardening'
     return Invoke-PSMStage -StageName 'Hardening' `
-                           -ExecuteStagePath $paths.ExecuteStage `
-                           -ConfigFilePath   $paths.Config
+                           -ExecuteStagePath $stage.ExecuteStage `
+                           -ConfigFilePath   $stage.ConfigFilePath
 }
 
 Export-ModuleMember -Function Invoke-PSMHardening

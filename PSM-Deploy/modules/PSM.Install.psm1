@@ -30,10 +30,10 @@ function Invoke-PSMInstall {
         [Parameter(Mandatory)] $Settings,
         [Parameter(Mandatory)] [string] $SourcesRoot
     )
-    $paths = Get-PSMStagePaths -Settings $Settings -SourcesRoot $SourcesRoot -StageKey 'Installation'
+    $stage = Resolve-PSMStageConfig -Settings $Settings -SourcesRoot $SourcesRoot -StageKey 'Installation'
     return Invoke-PSMStage -StageName 'Installation' `
-                           -ExecuteStagePath $paths.ExecuteStage `
-                           -ConfigFilePath   $paths.Config
+                           -ExecuteStagePath $stage.ExecuteStage `
+                           -ConfigFilePath   $stage.ConfigFilePath
 }
 
 function Invoke-PSMPostInstall {
@@ -42,10 +42,10 @@ function Invoke-PSMPostInstall {
         [Parameter(Mandatory)] $Settings,
         [Parameter(Mandatory)] [string] $SourcesRoot
     )
-    $paths = Get-PSMStagePaths -Settings $Settings -SourcesRoot $SourcesRoot -StageKey 'PostInstallation'
+    $stage = Resolve-PSMStageConfig -Settings $Settings -SourcesRoot $SourcesRoot -StageKey 'PostInstallation'
     return Invoke-PSMStage -StageName 'PostInstallation' `
-                           -ExecuteStagePath $paths.ExecuteStage `
-                           -ConfigFilePath   $paths.Config
+                           -ExecuteStagePath $stage.ExecuteStage `
+                           -ConfigFilePath   $stage.ConfigFilePath
 }
 
 Export-ModuleMember -Function Invoke-PSMInstall, Invoke-PSMPostInstall, Test-PSMInstalled

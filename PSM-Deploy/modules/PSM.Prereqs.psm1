@@ -78,10 +78,10 @@ function Invoke-PSMReadiness {
         [Parameter(Mandatory)] $Settings,
         [Parameter(Mandatory)] [string] $SourcesRoot
     )
-    $paths = Get-PSMStagePaths -Settings $Settings -SourcesRoot $SourcesRoot -StageKey 'Readiness'
+    $stage = Resolve-PSMStageConfig -Settings $Settings -SourcesRoot $SourcesRoot -StageKey 'Readiness'
     return Invoke-PSMStage -StageName 'Readiness' `
-                           -ExecuteStagePath $paths.ExecuteStage `
-                           -ConfigFilePath   $paths.Config
+                           -ExecuteStagePath $stage.ExecuteStage `
+                           -ConfigFilePath   $stage.ConfigFilePath
 }
 
 function Invoke-PSMPrerequisites {
@@ -91,10 +91,10 @@ function Invoke-PSMPrerequisites {
         [Parameter(Mandatory)] $Settings,
         [Parameter(Mandatory)] [string] $SourcesRoot
     )
-    $paths = Get-PSMStagePaths -Settings $Settings -SourcesRoot $SourcesRoot -StageKey 'Prerequisites'
+    $stage = Resolve-PSMStageConfig -Settings $Settings -SourcesRoot $SourcesRoot -StageKey 'Prerequisites'
     return Invoke-PSMStage -StageName 'Prerequisites' `
-                           -ExecuteStagePath $paths.ExecuteStage `
-                           -ConfigFilePath   $paths.Config
+                           -ExecuteStagePath $stage.ExecuteStage `
+                           -ConfigFilePath   $stage.ConfigFilePath
 }
 
 function Invoke-PSMRdsLicensing {

@@ -187,7 +187,7 @@ try {
                 #    (on ne modifie pas le media). Mot de passe injecte via -spwdObj.
                 $r = Invoke-PSMRegister -Settings $Settings -SourcesRoot $SourcesRoot `
                         -InstallCredential $installCred `
-                        -VaultAddress $ZoneConfig.VaultAddress -StateDir $StateDir
+                        -VaultAddress $ZoneConfig.VaultAddress
             }
             finally {
                 Disconnect-PvwaSession -Session $session
