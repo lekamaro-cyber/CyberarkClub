@@ -30,7 +30,17 @@ function Invoke-PSMInstall {
         [Parameter(Mandatory)] $Settings,
         [Parameter(Mandatory)] [string] $SourcesRoot
     )
-    $stage = Resolve-PSMStageConfig -Settings $Settings -SourcesRoot $SourcesRoot -StageKey 'Installation'
+    # Dossier d'install / enregistrements derives de la SOURCE UNIQUE Install.InstallDir
+    # et injectes dans une copie de InstallationConfig.xml (media intact). Ces deux champs
+    # sont "possedes" par InstallDir/RecordingDir : passes en ExtraInjections, ils priment
+    # sur un eventuel doublon dans Install.Injections.Installation (a ne pas resaisir la).
+    $paths = Get-PSMInstallPaths -Settings $Settings
+    $extra = @{
+        "//Parameter[@Name='InstallationDirectory']" = @{ Attribute = 'Value'; Value = $paths.InstallDir }
+        "//Parameter[@Name='RecordingDirectory']"    = @{ Attribute = 'Value'; Value = $paths.RecordingDir }
+    }
+    $stage = Resolve-PSMStageConfig -Settings $Settings -SourcesRoot $SourcesRoot `
+                -StageKey 'Installation' -ExtraInjections $extra
     return Invoke-PSMStage -StageName 'Installation' `
                            -ExecuteStagePath $stage.ExecuteStage `
                            -ConfigFilePath   $stage.ConfigFilePath

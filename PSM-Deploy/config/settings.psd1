@@ -33,27 +33,26 @@
             Hardening        = 'Hardening\HardeningConfig.xml'
         }
 
-        # --- Injections STATIQUES dans les *Config.xml de stage (optionnel) --------
-        # Permet d'adapter la config d'un stage a notre environnement SANS editer les
-        # XML du media : chaque valeur est ecrite dans une COPIE patchee sous
-        # state\config\<Stage>\ (media intact). Cle = nom du stage (cf. Stages),
-        # valeur = table @{ '<xpath>' = @{ Attribute='Value'; Value='...' } }
-        # (Attribute vide => on ecrit l'InnerText du noeud). Les valeurs DYNAMIQUES
-        # (ex. adresse Vault de la zone) restent injectees par le code, pas ici.
+        # ================== DOSSIER D'INSTALLATION : source UNIQUE ==================
+        # >>> UN SEUL endroit a changer pour deplacer toute l'install. <<<
+        # A partir de cette valeur, le code DERIVE automatiquement :
+        #   - InstallationDirectory injecte dans InstallationConfig.xml
+        #   - le dossier PSM (<InstallDir>\PSM)
+        #   - le dossier d'enregistrements (RecordingDir ci-dessous, sinon
+        #     <InstallDir>\PSM\Recordings)
+        #   - le chemin PSMConfigureAppLocker.xml (Hardening) => rien a resaisir.
+        # Defaut CyberArk : 'C:\Program Files (x86)\CyberArk'.
+        InstallDir   = 'D:\CyberArk'
+        RecordingDir = ''            # vide -> <InstallDir>\PSM\Recordings (sinon chemin absolu)
+
+        # --- Injections STATIQUES supplementaires dans les *Config.xml (optionnel) --
+        # InstallationDirectory / RecordingDirectory sont DEJA derives de InstallDir /
+        # RecordingDir ci-dessus : inutile de les remettre ici. N'ajouter ici que
+        # d'autres champs a forcer (ceux-ci PRIMENT). Forme :
+        #   @{ <StageKey> = @{ '<xpath>' = @{ Attribute='Value'; Value='...' } } }
+        # Ex. Installation = @{ "//Parameter[@Name='Company']" = @{ Attribute='Value'; Value='Ma Societe' } }
         # Si un noeud est introuvable, le script liste les Parameter disponibles.
-        # Champs reels de InstallationConfig.xml (step RunInstallation) :
-        # InstallationDirectory, RecordingDirectory, Name, Company.
-        # PSM s'installe dans <InstallationDirectory>\PSM (ici -> D:\CyberArk\PSM).
-        # IMPORTANT : si tu changes InstallationDirectory, aligne aussi
-        # Hardening.AppLockerConfigPath plus bas (il pointe sous ce dossier).
-        Injections = @{
-            Installation = @{
-                "//Parameter[@Name='InstallationDirectory']" = @{ Attribute = 'Value'; Value = 'D:\CyberArk' }
-                "//Parameter[@Name='RecordingDirectory']"    = @{ Attribute = 'Value'; Value = 'D:\CyberArk\PSM\Recordings' }
-                # "//Parameter[@Name='Company']"               = @{ Attribute = 'Value'; Value = 'Ma Societe' }
-                # "//Parameter[@Name='Name']"                  = @{ Attribute = 'Value'; Value = 'Compte installation' }
-            }
-        }
+        Injections = @{}
     }
 
     # --- Enregistrement : injection de l'adresse Vault depuis zones.psd1 --------
@@ -81,7 +80,7 @@
     # genere apres une premiere Installation (si un noeud est introuvable, le script
     # liste les noeuds candidats).
     Hardening = @{
-        AppLockerConfigPath  = 'D:\CyberArk\PSM\Hardening\PSMConfigureAppLocker.xml'
+        AppLockerConfigPath  = ''   # vide -> derive de Install.InstallDir (<InstallDir>\PSM\Hardening\PSMConfigureAppLocker.xml)
         PSMConnectXPath      = ''   # TODO : a confirmer sur le PSMConfigureAppLocker.xml genere
         PSMAdminConnectXPath = ''   # TODO : a confirmer sur le PSMConfigureAppLocker.xml genere
         AccountAttribute     = ''   # vide = on ecrit l'InnerText du noeud ; sinon nom d'attribut

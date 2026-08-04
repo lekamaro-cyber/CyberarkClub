@@ -215,6 +215,35 @@ function Get-PSMConfigValue {
     return $null
 }
 
+function Get-PSMInstallPaths {
+    <#
+        Derive les chemins d'installation depuis la SOURCE UNIQUE Install.InstallDir
+        (settings.psd1). Evite de repeter le dossier d'install a plusieurs endroits :
+          - InstallDir           : dossier d'installation (injecte dans InstallationConfig.xml)
+          - PsmDir               : <InstallDir>\PSM
+          - RecordingDir         : Install.RecordingDir si defini, sinon <PsmDir>\Recordings
+          - AppLockerConfigPath  : <PsmDir>\Hardening\PSMConfigureAppLocker.xml
+        Un seul changement de InstallDir suffit a tout aligner.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] $Settings)
+
+    $install    = Get-PSMConfigValue -Config $Settings -Key 'Install'
+    $installDir = Get-PSMConfigValue -Config $install  -Key 'InstallDir'
+    if (-not $installDir) { throw "settings.psd1 : Install.InstallDir non defini (source unique du dossier d'installation)." }
+
+    $psmDir = Join-Path $installDir 'PSM'
+    $rec    = Get-PSMConfigValue -Config $install -Key 'RecordingDir'
+    if (-not $rec) { $rec = Join-Path $psmDir 'Recordings' }
+
+    return [pscustomobject]@{
+        InstallDir          = $installDir
+        PsmDir              = $psmDir
+        RecordingDir        = $rec
+        AppLockerConfigPath = Join-Path $psmDir 'Hardening\PSMConfigureAppLocker.xml'
+    }
+}
+
 function Get-PSMStateDir {
     # Renvoie le dossier d'etat (parent de progress.json), fixe par Initialize-PSMState.
     # Utilise par le moteur de stages pour ecrire les copies patchees des *Config.xml.

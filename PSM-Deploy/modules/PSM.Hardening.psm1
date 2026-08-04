@@ -40,8 +40,9 @@ function Set-PSMConnectAccounts {
     if (-not $psmConnect -and -not $psmAdmin) { return $false }   # rien a injecter
 
     if (-not $h) { throw "settings.psd1 : bloc 'Hardening' absent (comptes de zone fournis)." }
+    # Chemin explicite si fourni, sinon DERIVE de la source unique Install.InstallDir.
     $path = Get-PSMConfigValue -Config $h -Key 'AppLockerConfigPath'
-    if (-not $path) { throw "settings.psd1 : Hardening.AppLockerConfigPath non defini." }
+    if (-not $path) { $path = (Get-PSMInstallPaths -Settings $Settings).AppLockerConfigPath }
 
     # Couples (XPath, valeur) a ecrire.
     $pairs = @()

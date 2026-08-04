@@ -107,7 +107,8 @@ Describe 'Injection XML des stages (config pilotee, media intact)' {
         $regDir       = Join-Path $script:iaDir 'Registration'
         $hardDir      = Join-Path $script:iaDir 'Hardening'
         $postDir      = Join-Path $script:iaDir 'PostInstallation'
-        New-Item -ItemType Directory -Path $regDir, $hardDir, $postDir -Force | Out-Null
+        $instDir      = Join-Path $script:iaDir 'Installation'
+        New-Item -ItemType Directory -Path $regDir, $hardDir, $postDir, $instDir -Force | Out-Null
         # Stub Execute-Stage.ps1 : renvoie un JSON de succes (isSucceeded=0).
         Set-Content -Path (Join-Path $script:iaDir 'Execute-Stage.ps1') -Value @'
 param($configFilePath, $silentMode, $displayJson, $spwdObj)
@@ -116,9 +117,11 @@ param($configFilePath, $silentMode, $displayJson, $spwdObj)
         $script:regXml  = Join-Path $regDir  'RegistrationConfig.xml'
         $script:hardXml = Join-Path $hardDir 'HardeningConfig.xml'
         $script:postXml = Join-Path $postDir 'PostInstallationConfig.xml'
+        $script:instXml = Join-Path $instDir 'InstallationConfig.xml'
         Set-Content -Path $script:regXml  -Value '<Configuration><Parameter Name="VaultIP" Value="" /></Configuration>'
         Set-Content -Path $script:hardXml -Value '<Configuration><Parameter Name="Foo" Value="bar" /></Configuration>'
         Set-Content -Path $script:postXml -Value '<Configuration><Parameter Name="PSMConnectUserName" Value="" /><Parameter Name="PSMAdminConnectUserName" Value="" /></Configuration>'
+        Set-Content -Path $script:instXml -Value '<Configuration><Parameter Name="InstallationDirectory" Value="C:\Program Files (x86)\CyberArk" /><Parameter Name="RecordingDirectory" Value="C:\rec" /></Configuration>'
 
         $script:stateDir = Join-Path $TestDrive 'state'
         Initialize-PSMState -StateDirectory $script:stateDir
@@ -127,19 +130,30 @@ param($configFilePath, $silentMode, $displayJson, $spwdObj)
             Install = @{
                 MediaRelativePath             = 'media\PSM'
                 InstallationAutomationSubPath = 'InstallationAutomation'
+                InstallDir                    = 'D:\CyberArk'
+                RecordingDir                  = ''
                 Stages = @{
+                    Installation     = 'Installation\InstallationConfig.xml'
                     Registration     = 'Registration\RegistrationConfig.xml'
                     Hardening        = 'Hardening\HardeningConfig.xml'
                     PostInstallation = 'PostInstallation\PostInstallationConfig.xml'
                 }
                 Injections = @{}
             }
-            PostInstallation = @{
-                PSMConnectXPath      = "//Parameter[@Name='PSMConnectUserName']"
-                PSMAdminConnectXPath = "//Parameter[@Name='PSMAdminConnectUserName']"
-                UserNameAttribute    = 'Value'
-            }
         }
+    }
+
+    It 'Injecte le dossier d install derive de Install.InstallDir (source unique)' {
+        $r = Invoke-PSMInstall -Settings $script:settings -SourcesRoot $script:src
+        $r.Succeeded | Should -BeTrue
+
+        $copy = Join-Path $script:stateDir 'config\Installation\InstallationConfig.xml'
+        $doc  = [xml](Get-Content $copy -Raw)
+        $doc.SelectSingleNode("//Parameter[@Name='InstallationDirectory']").Value | Should -Be 'D:\CyberArk'
+        $doc.SelectSingleNode("//Parameter[@Name='RecordingDirectory']").Value    | Should -Be 'D:\CyberArk\PSM\Recordings'
+        # Media inchange.
+        ([xml](Get-Content $script:instXml -Raw)).SelectSingleNode("//Parameter[@Name='InstallationDirectory']").Value |
+            Should -Be 'C:\Program Files (x86)\CyberArk'
     }
 
     It 'Patche une COPIE (adresse Vault) sans toucher au media' {
@@ -245,6 +259,27 @@ Describe 'Comptes de domaine PSMConnect/PSMAdminConnect (Hardening / AppLocker)'
         $bad = @{ Hardening = @{ AppLockerConfigPath = $script:appLocker; PSMConnectXPath = ''; AccountAttribute = '' } }
         { Set-PSMConnectAccounts -Settings $bad -ZoneConfig @{ PSMConnectUserName = 'CONTOSO\X' } -Confirm:$false } |
             Should -Throw
+    }
+}
+
+Describe 'Get-PSMInstallPaths (source unique du dossier d install)' {
+    BeforeAll {
+        Import-Module (Join-Path $root 'modules\PSM.Common.psm1') -Force
+    }
+    It 'Derive PSM, enregistrements et AppLocker depuis InstallDir' {
+        $s = @{ Install = @{ InstallDir = 'D:\CyberArk'; RecordingDir = '' } }
+        $p = Get-PSMInstallPaths -Settings $s
+        $p.InstallDir          | Should -Be 'D:\CyberArk'
+        $p.PsmDir              | Should -Be 'D:\CyberArk\PSM'
+        $p.RecordingDir        | Should -Be 'D:\CyberArk\PSM\Recordings'
+        $p.AppLockerConfigPath | Should -Be 'D:\CyberArk\PSM\Hardening\PSMConfigureAppLocker.xml'
+    }
+    It 'RecordingDir explicite prime sur la valeur derivee' {
+        $s = @{ Install = @{ InstallDir = 'D:\CyberArk'; RecordingDir = 'E:\Records' } }
+        (Get-PSMInstallPaths -Settings $s).RecordingDir | Should -Be 'E:\Records'
+    }
+    It 'Erreur explicite si InstallDir manque' {
+        { Get-PSMInstallPaths -Settings @{ Install = @{ InstallDir = '' } } } | Should -Throw
     }
 }
 

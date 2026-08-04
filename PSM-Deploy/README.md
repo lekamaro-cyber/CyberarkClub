@@ -136,6 +136,11 @@ La reprise est **interactive** (les prompts `Get-Credential` PVWA fonctionnent) 
   dans `InstallationAutomation\Templates\`) — c'est la data de l'équipe (PVWA, Vault,
   comptes composants, options de hardening/AppLocker…).
 - `zones.psd1` / `settings.psd1` : valeurs réelles (PVWA, méthode d'auth, compte d'install, licence RDS).
+  - **Dossier d'installation** : **une seule** valeur `settings.psd1` → `Install.InstallDir`
+    (ex. `D:\CyberArk`). Le code en **dérive** tout : `InstallationDirectory` injecté dans
+    `InstallationConfig.xml`, le dossier `PSM` (`<InstallDir>\PSM`), les enregistrements
+    (`Install.RecordingDir`, sinon `<InstallDir>\PSM\Recordings`) et le chemin
+    `PSMConfigureAppLocker.xml` du Hardening. **Rien à resaisir ailleurs.**
   - **PSMConnect / PSMAdminConnect** (comptes de session, **domaine**) : **par zone**
     dans `zones.psd1` (`PSMConnectUserName` / `PSMAdminConnectUserName`, format
     `DOMAINE\user`). Ils ne sont **pas** des paramètres de stage : ils vivent dans
