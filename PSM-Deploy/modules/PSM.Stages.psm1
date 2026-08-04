@@ -89,7 +89,18 @@ function Invoke-PSMStage {
     $iaDir = Split-Path $ExecuteStagePath -Parent
     Push-Location $iaDir
     try {
+        # IMPORTANT : les scripts CyberArk ne sont PAS ecrits pour StrictMode.
+        # Nos modules l'activent (Latest) et le script enfant en heriterait, ce qui
+        # provoque des erreurs (NullReference / proprietes absentes). On le desactive
+        # pour l'appel enfant (portee locale a cette fonction).
+        Set-StrictMode -Off
         $raw = & $ExecuteStagePath @params
+    }
+    catch {
+        $cyberLog = Get-ChildItem "$env:windir\Temp\PSM$StageName-*.log" -ErrorAction SilentlyContinue |
+                    Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        $hint = if ($cyberLog) { " Log CyberArk : $($cyberLog.FullName)" } else { '' }
+        throw "Stage '$StageName' : Execute-Stage.ps1 a leve une exception : $($_.Exception.Message).$hint"
     }
     finally {
         Pop-Location
