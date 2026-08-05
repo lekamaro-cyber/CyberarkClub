@@ -84,8 +84,11 @@ logiciels, validation) et la récupération du secret PVWA sont côté script.
 > valeurs **statiques** via `settings.psd1` (`Install.Injections[<Stage>]`) et valeurs
 > **dynamiques** par le code (ex. l'adresse Vault de la zone pour *Registration*). Sans
 > injection déclarée pour un stage, le XML du média est utilisé tel quel.
-Chaque phase est marquée terminée dans `state/progress.json`. Quand un reboot est
-requis, une **tâche planifiée `AtLogOn`** est créée pour l'**admin installateur** :
+Chaque phase est marquée terminée dans `state/progress.json`. La **tâche planifiée
+`AtLogOn`** de reprise est **armée dès le début du run** (filet de sécurité : certains
+installeurs CyberArk redémarrent la machine **sans rendre la main** — constaté au stage
+Installation ; sans tâche pré-armée, rien ne reprendrait après reconnexion). Quand un
+reboot est requis, cette tâche est (ré)armée pour l'**admin installateur** :
 dès qu'il **se reconnecte après le redémarrage**, le script **reprend tout seul dans
 sa session** (`-Resume`, zone relue depuis l'état) à la première phase non terminée.
 La reprise est **interactive** (les prompts `Get-Credential` PVWA fonctionnent) et

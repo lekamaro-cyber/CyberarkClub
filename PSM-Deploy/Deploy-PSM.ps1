@@ -121,6 +121,17 @@ try {
         }
     }
 
+    # Filet de securite : la tache de reprise (AtLogOn) est armee DES MAINTENANT,
+    # pas seulement quand l'orchestrateur decide lui-meme d'un reboot. Certains
+    # installeurs CyberArk redemarrent la machine SANS rendre la main (constate au
+    # stage Installation) : sans cette tache pre-armee, plus rien ne reprend apres
+    # reconnexion. Supprimee en fin de deploiement (Unregister-PSMResumeTask).
+    if (-not $WhatIfPreference) {
+        $resumeUser = Get-PSMStateValue -Name 'InstallUser'
+        if (-not $resumeUser) { $resumeUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name }
+        Register-PSMResumeTask -ScriptPath $PSCommandPath -Zone $Zone -User $resumeUser
+    }
+
     # ===================== STAGE CyberArk : Readiness =====================
     if (-not (Test-PSMPhaseComplete 'Readiness')) {
         $r = Invoke-PSMReadiness -Settings $Settings -SourcesRoot $SourcesRoot
@@ -243,6 +254,9 @@ try {
 }
 catch {
     Write-PSMLog -Level ERROR -Message "Arret (fail-fast) : $($_.Exception.Message)"
+    Write-PSMLog -Level WARN  -Message ("La tache 'PSM-Deploy-Resume' reste armee : apres correction, le deploiement " +
+        "reprendra a la reconnexion (ou relancer .\Deploy-PSM.ps1 -Zone $Zone). " +
+        "Pour l'annuler : Unregister-ScheduledTask PSM-Deploy-Resume.")
     Write-PSMSummary
     exit 1
 }
