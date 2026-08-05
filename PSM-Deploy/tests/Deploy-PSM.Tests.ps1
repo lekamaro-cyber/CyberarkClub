@@ -198,67 +198,140 @@ param($configFilePath, $silentMode, $displayJson, $spwdObj)
     }
 }
 
-Describe 'Comptes de domaine PSMConnect/PSMAdminConnect (Hardening / AppLocker)' {
+Describe 'Comptes de domaine PSMConnect/PSMAdminConnect (variables scripts Hardening)' {
     BeforeAll {
         Import-Module (Join-Path $root 'modules\PSM.Common.psm1')    -Force
         Import-Module (Join-Path $root 'modules\PSM.Hardening.psm1') -Force
         Initialize-PSMLogging -LogDirectory (Join-Path $env:TEMP 'psm-test-logs')
 
-        # PSMConfigureAppLocker.xml "genere a l'installation" (schema simplifie).
-        $script:appLocker = Join-Path $TestDrive 'PSMConfigureAppLocker.xml'
-        function Reset-AppLocker {
-            Set-Content -Path $script:appLocker -Value '<PSMAppLockerConfiguration><PSM_CONNECT>PSMConnect</PSM_CONNECT><PSM_ADMIN_CONNECT>PSMAdminConnect</PSM_ADMIN_CONNECT></PSMAppLockerConfiguration>'
-            Remove-Item "$script:appLocker.orig" -ErrorAction SilentlyContinue
+        # Scripts de hardening "generes a l'installation" (extraits simplifies).
+        $script:hardDir = Join-Path $TestDrive 'Hardening'
+        New-Item -ItemType Directory -Path $script:hardDir -Force | Out-Null
+        function Reset-HardeningScripts {
+            Set-Content -Path (Join-Path $script:hardDir 'PSMHardening.ps1') -Value @'
+# extrait
+$PSM_CONNECT_USER       = "PSMConnect"
+$PSM_ADMIN_CONNECT_USER = "PSMAdminConnect"
+$SUPPORT_WEB_APPLICATIONS = $true
+'@
+            Set-Content -Path (Join-Path $script:hardDir 'PSMConfigureAppLocker.ps1') -Value @'
+# extrait
+$PSM_CONNECT       = 'PSMConnect'
+$PSM_ADMIN_CONNECT = 'PSMAdminConnect'
+'@
+            Remove-Item (Join-Path $script:hardDir '*.orig') -ErrorAction SilentlyContinue
+        }
+        function Get-HardVar([string]$File, [string]$Var) {
+            $m = [regex]::Match((Get-Content (Join-Path $script:hardDir $File) -Raw),
+                                '(?m)^\s*\$' + $Var + '\s*=\s*(["''])(.*?)\1')
+            return $m.Groups[2].Value
         }
 
         $script:hSettings = @{
             Hardening = @{
-                AppLockerConfigPath  = $script:appLocker
-                PSMConnectXPath      = '//PSM_CONNECT'
-                PSMAdminConnectXPath = '//PSM_ADMIN_CONNECT'
-                AccountAttribute     = ''   # InnerText
+                HardeningDir = $script:hardDir
+                ScriptAccountVariables = @{
+                    'PSMHardening.ps1'          = @{ Connect = 'PSM_CONNECT_USER'; AdminConnect = 'PSM_ADMIN_CONNECT_USER' }
+                    'PSMConfigureAppLocker.ps1' = @{ Connect = 'PSM_CONNECT';      AdminConnect = 'PSM_ADMIN_CONNECT' }
+                }
             }
         }
     }
 
-    It 'Patche en place PSMConfigureAppLocker.xml avec les comptes de domaine' {
-        Reset-AppLocker
+    It 'Patche les variables des DEUX scripts avec les comptes de domaine' {
+        Reset-HardeningScripts
         $zone = @{ PSMConnectUserName = 'CONTOSO\PSMConnect'; PSMAdminConnectUserName = 'CONTOSO\PSMAdminConnect' }
         $done = Set-PSMConnectAccounts -Settings $script:hSettings -ZoneConfig $zone -Confirm:$false
         $done | Should -BeTrue
 
-        $doc = [xml](Get-Content $script:appLocker -Raw)
-        $doc.SelectSingleNode('//PSM_CONNECT').InnerText       | Should -Be 'CONTOSO\PSMConnect'
-        $doc.SelectSingleNode('//PSM_ADMIN_CONNECT').InnerText | Should -Be 'CONTOSO\PSMAdminConnect'
-        # Sauvegarde .orig conservee avec les valeurs d'origine.
-        Test-Path "$script:appLocker.orig" | Should -BeTrue
-        ([xml](Get-Content "$script:appLocker.orig" -Raw)).SelectSingleNode('//PSM_CONNECT').InnerText | Should -Be 'PSMConnect'
+        Get-HardVar 'PSMHardening.ps1'          'PSM_CONNECT_USER'       | Should -Be 'CONTOSO\PSMConnect'
+        Get-HardVar 'PSMHardening.ps1'          'PSM_ADMIN_CONNECT_USER' | Should -Be 'CONTOSO\PSMAdminConnect'
+        Get-HardVar 'PSMConfigureAppLocker.ps1' 'PSM_CONNECT'            | Should -Be 'CONTOSO\PSMConnect'
+        Get-HardVar 'PSMConfigureAppLocker.ps1' 'PSM_ADMIN_CONNECT'      | Should -Be 'CONTOSO\PSMAdminConnect'
+        # Les autres variables ne sont pas touchees ; sauvegarde .orig intacte.
+        (Get-Content (Join-Path $script:hardDir 'PSMHardening.ps1') -Raw) | Should -Match 'SUPPORT_WEB_APPLICATIONS'
+        Test-Path (Join-Path $script:hardDir 'PSMHardening.ps1.orig') | Should -BeTrue
+        Get-Content (Join-Path $script:hardDir 'PSMHardening.ps1.orig') -Raw | Should -Match '"PSMConnect"'
     }
 
     It 'Est re-jouable (repart de .orig, pas de double application)' {
-        Reset-AppLocker
-        $zone = @{ PSMConnectUserName = 'CONTOSO\PSMConnect' }
-        Set-PSMConnectAccounts -Settings $script:hSettings -ZoneConfig $zone -Confirm:$false | Out-Null
+        Reset-HardeningScripts
+        Set-PSMConnectAccounts -Settings $script:hSettings -ZoneConfig @{ PSMConnectUserName = 'CONTOSO\PSMConnect' } -Confirm:$false | Out-Null
         # 2e passage avec un autre compte : doit refleter le dernier, pas cumuler.
-        $zone2 = @{ PSMConnectUserName = 'CONTOSO\Autre' }
-        Set-PSMConnectAccounts -Settings $script:hSettings -ZoneConfig $zone2 -Confirm:$false | Out-Null
-        ([xml](Get-Content $script:appLocker -Raw)).SelectSingleNode('//PSM_CONNECT').InnerText | Should -Be 'CONTOSO\Autre'
+        Set-PSMConnectAccounts -Settings $script:hSettings -ZoneConfig @{ PSMConnectUserName = 'CONTOSO\Autre' } -Confirm:$false | Out-Null
+        Get-HardVar 'PSMHardening.ps1' 'PSM_CONNECT_USER' | Should -Be 'CONTOSO\Autre'
     }
 
     It 'Inactif quand la zone ne fournit aucun compte' {
-        Reset-AppLocker
+        Reset-HardeningScripts
         $done = Set-PSMConnectAccounts -Settings $script:hSettings -ZoneConfig @{ } -Confirm:$false
         $done | Should -BeFalse
-        # Fichier inchange, pas de sauvegarde creee.
-        ([xml](Get-Content $script:appLocker -Raw)).SelectSingleNode('//PSM_CONNECT').InnerText | Should -Be 'PSMConnect'
-        Test-Path "$script:appLocker.orig" | Should -BeFalse
+        Get-HardVar 'PSMHardening.ps1' 'PSM_CONNECT_USER' | Should -Be 'PSMConnect'
+        Test-Path (Join-Path $script:hardDir 'PSMHardening.ps1.orig') | Should -BeFalse
     }
 
-    It 'Erreur explicite si le XPath est absent mais un compte est fourni' {
-        Reset-AppLocker
-        $bad = @{ Hardening = @{ AppLockerConfigPath = $script:appLocker; PSMConnectXPath = ''; AccountAttribute = '' } }
+    It 'Erreur explicite (avec variables candidates) si la variable est introuvable' {
+        Reset-HardeningScripts
+        $bad = @{
+            Hardening = @{
+                HardeningDir = $script:hardDir
+                ScriptAccountVariables = @{
+                    'PSMHardening.ps1' = @{ Connect = 'VARIABLE_INEXISTANTE' }
+                }
+            }
+        }
         { Set-PSMConnectAccounts -Settings $bad -ZoneConfig @{ PSMConnectUserName = 'CONTOSO\X' } -Confirm:$false } |
-            Should -Throw
+            Should -Throw '*candidates*'
+    }
+}
+
+Describe 'Set-PSMAutomationConsts (Consts.ps1 du framework CyberArk)' {
+    BeforeAll {
+        Import-Module (Join-Path $root 'modules\PSM.Common.psm1') -Force
+        Import-Module (Join-Path $root 'modules\PSM.Stages.psm1') -Force
+        Initialize-PSMLogging -LogDirectory (Join-Path $env:TEMP 'psm-test-logs')
+
+        $script:cSrc   = Join-Path $TestDrive 'sources-consts'
+        $script:cIa    = Join-Path $script:cSrc 'media\PSM\InstallationAutomation'
+        New-Item -ItemType Directory -Path $script:cIa -Force | Out-Null
+        $script:consts = Join-Path $script:cIa 'Consts.ps1'
+        function Reset-Consts {
+            Set-Content -Path $script:consts -Value @'
+Set-Variable PSM_CONNECT -value "PSMConnect"
+Set-Variable PSM_ADMIN_CONNECT -value "PSMAdminConnect"
+Set-Variable AUTRE_CONSTANTE -value "inchangee"
+'@
+            Remove-Item "$script:consts.orig" -ErrorAction SilentlyContinue
+        }
+        $script:cSettings = @{
+            Install = @{ MediaRelativePath = 'media\PSM'; InstallationAutomationSubPath = 'InstallationAutomation' }
+        }
+    }
+
+    It 'Patche PSM_CONNECT / PSM_ADMIN_CONNECT avec les comptes de la zone' {
+        Reset-Consts
+        $zone = @{ PSMConnectUserName = 'CONTOSO\PSMConnect'; PSMAdminConnectUserName = 'CONTOSO\PSMAdminConnect' }
+        $done = Set-PSMAutomationConsts -Settings $script:cSettings -SourcesRoot $script:cSrc -ZoneConfig $zone -Confirm:$false
+        $done | Should -BeTrue
+        $c = Get-Content $script:consts -Raw
+        $c | Should -Match ([regex]::Escape('Set-Variable PSM_CONNECT -value "CONTOSO\PSMConnect"'))
+        $c | Should -Match ([regex]::Escape('Set-Variable PSM_ADMIN_CONNECT -value "CONTOSO\PSMAdminConnect"'))
+        $c | Should -Match 'AUTRE_CONSTANTE -value "inchangee"'
+        Get-Content "$script:consts.orig" -Raw | Should -Match 'PSM_CONNECT -value "PSMConnect"'
+    }
+
+    It 'Est re-jouable (repart de .orig)' {
+        Reset-Consts
+        Set-PSMAutomationConsts -Settings $script:cSettings -SourcesRoot $script:cSrc -ZoneConfig @{ PSMConnectUserName = 'CONTOSO\A' } -Confirm:$false | Out-Null
+        Set-PSMAutomationConsts -Settings $script:cSettings -SourcesRoot $script:cSrc -ZoneConfig @{ PSMConnectUserName = 'CONTOSO\B' } -Confirm:$false | Out-Null
+        Get-Content $script:consts -Raw | Should -Match ([regex]::Escape('"CONTOSO\B"'))
+    }
+
+    It 'Inactif quand la zone ne fournit aucun compte' {
+        Reset-Consts
+        Set-PSMAutomationConsts -Settings $script:cSettings -SourcesRoot $script:cSrc -ZoneConfig @{ } -Confirm:$false |
+            Should -BeFalse
+        Test-Path "$script:consts.orig" | Should -BeFalse
     }
 }
 
@@ -266,13 +339,13 @@ Describe 'Get-PSMInstallPaths (source unique du dossier d install)' {
     BeforeAll {
         Import-Module (Join-Path $root 'modules\PSM.Common.psm1') -Force
     }
-    It 'Derive PSM, enregistrements et AppLocker depuis InstallDir' {
+    It 'Derive PSM, enregistrements et Hardening depuis InstallDir' {
         $s = @{ Install = @{ InstallDir = 'D:\CyberArk'; RecordingDir = '' } }
         $p = Get-PSMInstallPaths -Settings $s
-        $p.InstallDir          | Should -Be 'D:\CyberArk'
-        $p.PsmDir              | Should -Be 'D:\CyberArk\PSM'
-        $p.RecordingDir        | Should -Be 'D:\CyberArk\PSM\Recordings'
-        $p.AppLockerConfigPath | Should -Be 'D:\CyberArk\PSM\Hardening\PSMConfigureAppLocker.xml'
+        $p.InstallDir   | Should -Be 'D:\CyberArk'
+        $p.PsmDir       | Should -Be 'D:\CyberArk\PSM'
+        $p.RecordingDir | Should -Be 'D:\CyberArk\PSM\Recordings'
+        $p.HardeningDir | Should -Be 'D:\CyberArk\PSM\Hardening'
     }
     It 'RecordingDir explicite prime sur la valeur derivee' {
         $s = @{ Install = @{ InstallDir = 'D:\CyberArk'; RecordingDir = 'E:\Records' } }

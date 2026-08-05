@@ -49,7 +49,8 @@ function Invoke-PSMInstall {
 function Invoke-PSMPostInstall {
     # NB : les comptes de session PSMConnect/PSMAdminConnect ne se configurent PAS
     # ici (PostInstallationConfig.xml n'a aucun parametre pour eux) mais cote
-    # Hardening (Set-PSMConnectAccounts -> PSMConfigureAppLocker.xml).
+    # Hardening (Set-PSMConnectAccounts -> variables de PSMHardening.ps1 /
+    # PSMConfigureAppLocker.ps1).
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)] $Settings,

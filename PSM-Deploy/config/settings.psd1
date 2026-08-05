@@ -66,24 +66,24 @@
     }
 
     # --- Hardening : comptes de session PSM de DOMAINE (PSMConnect/PSMAdminConnect) --
-    # Ces comptes NE sont PAS des parametres de stage (ni PostInstallation, ni
-    # HardeningConfig.xml). Ils sont references dans PSMConfigureAppLocker.xml, un
-    # fichier GENERE A L'INSTALLATION dans le dossier installe (PAS le media), que le
-    # step RunApplocker lit depuis un emplacement FIXE ("Remember to edit
-    # PSMConfigureApplocker.XML before running the script"). On le patche donc EN PLACE
-    # (avec sauvegarde .orig, re-jouable) au debut de la phase Hardening, avec les
-    # comptes de la zone (zones.psd1 PSMConnectUserName / PSMAdminConnectUserName).
+    # Ces comptes NE sont PAS des parametres de stage : ils sont declares comme
+    # VARIABLES en tete des scripts de hardening CyberArk, GENERES A L'INSTALLATION
+    # dans <InstallDir>\PSM\Hardening (PAS dans le media) :
+    #   - PSMHardening.ps1          : $PSM_CONNECT_USER / $PSM_ADMIN_CONNECT_USER
+    #   - PSMConfigureAppLocker.ps1 : $PSM_CONNECT      / $PSM_ADMIN_CONNECT
+    # (constate sur un PSM en service ; si le nom differe sur votre version, le
+    # script s'arrete en listant les variables candidates du fichier).
+    # Le patch se fait EN PLACE (sauvegarde .orig, re-jouable) au debut de la phase
+    # Hardening, avec les comptes de la zone (zones.psd1 PSMConnectUserName /
+    # PSMAdminConnectUserName). INACTIF si les comptes de zone sont vides.
     # Les mots de passe restent geres dans le Safe PSM cote Vault.
-    #
-    # INACTIF par defaut : ne fait rien tant que les comptes de zone ET les XPath
-    # ci-dessous ne sont pas renseignes. Confirmer les XPath sur le fichier REEL
-    # genere apres une premiere Installation (si un noeud est introuvable, le script
-    # liste les noeuds candidats).
     Hardening = @{
-        AppLockerConfigPath  = ''   # vide -> derive de Install.InstallDir (<InstallDir>\PSM\Hardening\PSMConfigureAppLocker.xml)
-        PSMConnectXPath      = ''   # TODO : a confirmer sur le PSMConfigureAppLocker.xml genere
-        PSMAdminConnectXPath = ''   # TODO : a confirmer sur le PSMConfigureAppLocker.xml genere
-        AccountAttribute     = ''   # vide = on ecrit l'InnerText du noeud ; sinon nom d'attribut
+        HardeningDir = ''   # vide -> derive de Install.InstallDir (<InstallDir>\PSM\Hardening)
+        # fichier -> nom des variables a patcher (Connect / AdminConnect)
+        ScriptAccountVariables = @{
+            'PSMHardening.ps1'          = @{ Connect = 'PSM_CONNECT_USER'; AdminConnect = 'PSM_ADMIN_CONNECT_USER' }
+            'PSMConfigureAppLocker.ps1' = @{ Connect = 'PSM_CONNECT';      AdminConnect = 'PSM_ADMIN_CONNECT' }
+        }
     }
 
     # --- Dossiers de travail (relatifs a la racine des sources) ----------

@@ -143,14 +143,19 @@ La reprise est **interactive** (les prompts `Get-Credential` PVWA fonctionnent) 
     `PSMConfigureAppLocker.xml` du Hardening. **Rien à resaisir ailleurs.**
   - **PSMConnect / PSMAdminConnect** (comptes de session, **domaine**) : **par zone**
     dans `zones.psd1` (`PSMConnectUserName` / `PSMAdminConnectUserName`, format
-    `DOMAINE\user`). Ils ne sont **pas** des paramètres de stage : ils vivent dans
-    **`PSMConfigureAppLocker.xml`**, un fichier **généré à l'installation** (pas dans le
-    média) et lu par le step Hardening `RunApplocker` depuis un chemin **fixe**. On le
-    **patche en place** (sauvegarde `.orig`, rejouable) au début de la phase Hardening
-    via `Set-PSMConnectAccounts`. Emplacement du fichier + XPath : `settings.psd1` →
-    `Hardening.*`. **Vides par défaut = inactif** ; renseigner les comptes de zone **et**
-    les XPath (à confirmer sur le fichier généré) pour activer. Les **mots de passe** ne
-    sont jamais ici : gérés dans le **Safe PSM** côté Vault.
+    `DOMAINE\user`). Ils ne sont **pas** des paramètres de stage — ils sont **patchés
+    en place** (sauvegarde `.orig`, rejouable) à **deux niveaux** :
+    1. **`InstallationAutomation\Consts.ps1`** (média) — constantes `PSM_CONNECT` /
+       `PSM_ADMIN_CONNECT` consommées par les steps d'automatisation
+       (`Set-PSMAutomationConsts`, appelé avant PostInstallation et Hardening) ;
+    2. **`PSMHardening.ps1` / `PSMConfigureAppLocker.ps1`** (générés à l'installation
+       sous `<InstallDir>\PSM\Hardening`) — variables `$PSM_CONNECT_USER` /
+       `$PSM_ADMIN_CONNECT_USER` et `$PSM_CONNECT` / `$PSM_ADMIN_CONNECT`
+       (`Set-PSMConnectAccounts`, appelé au début de la phase Hardening ; mapping
+       configurable dans `settings.psd1` → `Hardening.ScriptAccountVariables`).
+    **Comptes de zone vides = inactif.** Si une variable est introuvable (version de
+    média différente), le script s'arrête en listant les variables candidates. Les
+    **mots de passe** ne sont jamais ici : gérés dans le **Safe PSM** côté Vault.
 - `config/software.psd1` : logiciels additionnels éventuels.
 
 ## Tests

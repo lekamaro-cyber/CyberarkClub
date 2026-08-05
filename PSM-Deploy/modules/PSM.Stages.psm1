@@ -95,6 +95,69 @@ function Update-PSMStageXml {
     return $outXml
 }
 
+function Set-PSMAutomationConsts {
+    <#
+        Propage les comptes de DOMAINE PSMConnect / PSMAdminConnect de la zone dans
+        InstallationAutomation\Consts.ps1 du media :
+            Set-Variable PSM_CONNECT       -value "PSMConnect"
+            Set-Variable PSM_ADMIN_CONNECT -value "PSMAdminConnect"
+        Ces constantes sont consommees par les steps d'automatisation eux-memes
+        (ConfigureOutOfDomainPSMServer, EnableUsersToPrintPSMSessions...).
+
+        Seule entorse au principe "media intact" : Consts.ps1 est charge par le
+        framework depuis SON dossier (pas de -configFilePath pour le rediriger vers
+        une copie). Patch EN PLACE avec sauvegarde '.orig' faite une seule fois ;
+        on repart TOUJOURS de l'original -> re-jouable, et une NOUVELLE source
+        deposee est re-patchee automatiquement (toujours zero edition manuelle).
+
+        INACTIF si la zone ne fournit aucun compte : renvoie $false sans rien faire.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)] $Settings,
+        [Parameter(Mandatory)] [string] $SourcesRoot,
+        $ZoneConfig
+    )
+    if (-not $ZoneConfig) { return $false }
+    $psmConnect = Get-PSMConfigValue -Config $ZoneConfig -Key 'PSMConnectUserName'
+    $psmAdmin   = Get-PSMConfigValue -Config $ZoneConfig -Key 'PSMAdminConnectUserName'
+    if (-not $psmConnect -and -not $psmAdmin) { return $false }
+
+    $mediaPsm = Join-Path $SourcesRoot $Settings.Install.MediaRelativePath
+    $path     = Join-Path (Join-Path $mediaPsm $Settings.Install.InstallationAutomationSubPath) 'Consts.ps1'
+
+    if (-not $PSCmdlet.ShouldProcess($path, 'Patcher Consts.ps1 (comptes PSM de domaine)')) {
+        Write-PSMLog -Level INFO -Message "WhatIf : Consts.ps1 serait patche (comptes de domaine)."
+        return $false
+    }
+    if (-not (Test-Path $path)) {
+        throw "Consts.ps1 introuvable : $path (verifier le media dans media\PSM)."
+    }
+
+    # Sauvegarde de l'original une seule fois ; on repart TOUJOURS de l'original.
+    $backup = "$path.orig"
+    if (-not (Test-Path $backup)) { Copy-Item -Path $path -Destination $backup -Force }
+    $content = Get-Content -Path $backup -Raw
+
+    $todo = @()
+    if ($psmConnect) { $todo += ,@('PSM_CONNECT',       $psmConnect) }
+    if ($psmAdmin)   { $todo += ,@('PSM_ADMIN_CONNECT', $psmAdmin) }
+    foreach ($t in $todo) {
+        $varName = $t[0]; $value = [string]$t[1]
+        $rx = [regex]('(?im)^(\s*Set-Variable\s+' + [regex]::Escape($varName) + '\s+-value\s+)(["''])(.*?)\2')
+        if (-not $rx.IsMatch($content)) {
+            $cands = ([regex]::Matches($content, '(?im)^\s*Set-Variable\s+(\w+)') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique) -join ', '
+            throw "Consts.ps1 : 'Set-Variable $varName' introuvable. Variables candidates : $cands."
+        }
+        $content = $rx.Replace($content, ('${1}${2}' + $value.Replace('$', '$$') + '${2}'), 1)
+        Write-PSMLog -Level INFO -Message "Consts.ps1 : $varName <- '$value'"
+    }
+
+    Set-Content -Path $path -Value $content -NoNewline
+    Write-PSMLog -Level INFO -Message "Consts.ps1 patche (comptes de domaine) -> $path"
+    return $true
+}
+
 function Resolve-PSMStageConfig {
     <#
         Point d'entree unique pour obtenir les chemins d'un stage CyberArk PRETS a
@@ -251,4 +314,4 @@ function Invoke-PSMStage {
     }
 }
 
-Export-ModuleMember -Function Get-PSMStagePaths, Resolve-PSMStageConfig, Invoke-PSMStage, Update-PSMStageXml
+Export-ModuleMember -Function Get-PSMStagePaths, Resolve-PSMStageConfig, Invoke-PSMStage, Update-PSMStageXml, Set-PSMAutomationConsts

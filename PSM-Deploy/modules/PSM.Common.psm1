@@ -219,10 +219,10 @@ function Get-PSMInstallPaths {
     <#
         Derive les chemins d'installation depuis la SOURCE UNIQUE Install.InstallDir
         (settings.psd1). Evite de repeter le dossier d'install a plusieurs endroits :
-          - InstallDir           : dossier d'installation (injecte dans InstallationConfig.xml)
-          - PsmDir               : <InstallDir>\PSM
-          - RecordingDir         : Install.RecordingDir si defini, sinon <PsmDir>\Recordings
-          - AppLockerConfigPath  : <PsmDir>\Hardening\PSMConfigureAppLocker.xml
+          - InstallDir   : dossier d'installation (injecte dans InstallationConfig.xml)
+          - PsmDir       : <InstallDir>\PSM
+          - RecordingDir : Install.RecordingDir si defini, sinon <PsmDir>\Recordings
+          - HardeningDir : <PsmDir>\Hardening (scripts PSMHardening.ps1 & co)
         Un seul changement de InstallDir suffit a tout aligner.
     #>
     [CmdletBinding()]
@@ -237,10 +237,10 @@ function Get-PSMInstallPaths {
     if (-not $rec) { $rec = Join-Path $psmDir 'Recordings' }
 
     return [pscustomobject]@{
-        InstallDir          = $installDir
-        PsmDir              = $psmDir
-        RecordingDir        = $rec
-        AppLockerConfigPath = Join-Path $psmDir 'Hardening\PSMConfigureAppLocker.xml'
+        InstallDir   = $installDir
+        PsmDir       = $psmDir
+        RecordingDir = $rec
+        HardeningDir = Join-Path $psmDir 'Hardening'
     }
 }
 
