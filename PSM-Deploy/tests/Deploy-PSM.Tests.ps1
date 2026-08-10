@@ -385,4 +385,10 @@ Describe 'Module PVWA (recuperation des secrets via API REST)' {
         Get-Command 'Get-CcpCredential' -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
         Test-Path (Join-Path $root 'modules\PSM.Ccp.psm1') | Should -BeFalse
     }
+    It 'Set-PvwaTlsBypass fonctionne sous PowerShell 5.1 (delegue TLS)' {
+        # Regression : "Cannot convert ... PSMethod to RemoteCertificateValidationCallback"
+        { Set-PvwaTlsBypass } | Should -Not -Throw
+        [System.Net.ServicePointManager]::ServerCertificateValidationCallback | Should -Not -BeNullOrEmpty
+        [PSMTlsBypass]::Disable()   # nettoyage : revalide les certificats dans la session de test
+    }
 }

@@ -27,17 +27,19 @@ function Set-PvwaTlsBypass {
     #>
     [CmdletBinding()]
     param()
-    if (-not ([System.Management.Automation.PSTypeName]'PSMCertBypass').Type) {
+    # PowerShell 5.1 ne sait pas convertir une methode statique (PSMethod) en
+    # delegue RemoteCertificateValidationCallback ("Cannot convert ... PSMethod").
+    # L'affectation du delegue est donc faite DANS le C# lui-meme.
+    if (-not ([System.Management.Automation.PSTypeName]'PSMTlsBypass').Type) {
         Add-Type -TypeDefinition @"
 using System.Net;
-using System.Net.Security;
-using System.Security.Cryptography.X509Certificates;
-public static class PSMCertBypass {
-    public static bool Ignore(object s, X509Certificate c, X509Chain ch, SslPolicyErrors e) { return true; }
+public static class PSMTlsBypass {
+    public static void Enable()  { ServicePointManager.ServerCertificateValidationCallback = delegate { return true; }; }
+    public static void Disable() { ServicePointManager.ServerCertificateValidationCallback = null; }
 }
 "@
     }
-    [System.Net.ServicePointManager]::ServerCertificateValidationCallback = [PSMCertBypass]::Ignore
+    [PSMTlsBypass]::Enable()
     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
     Write-Verbose "PVWA : validation du certificat TLS desactivee (mode lab)."
 }
