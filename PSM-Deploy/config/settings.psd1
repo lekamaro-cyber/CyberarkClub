@@ -89,6 +89,13 @@
     # PSMAdminConnectUserName). INACTIF si les comptes de zone sont vides.
     # Les mots de passe restent geres dans le Safe PSM cote Vault.
     Hardening = @{
+        # Echec du stage Hardening TOLERE (WARN au lieu d'un arret fail-fast) : le
+        # deploiement se termine meme si des steps de durcissement echouent (cas
+        # rencontre : EDR bloquant les modifications d'ACL systeme, meme takeown).
+        # Les steps en echec restent A REPRENDRE : corriger la cause (exclusion EDR),
+        # retirer 'Hardening' de state\progress.json et relancer. Remettre a $false
+        # une fois l'environnement corrige pour retrouver le comportement strict.
+        NonBlocking  = $true
         HardeningDir = ''   # vide -> derive de Install.InstallDir (<InstallDir>\PSM\Hardening)
         # fichier -> nom des variables a patcher (Connect / AdminConnect)
         ScriptAccountVariables = @{

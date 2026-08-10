@@ -244,7 +244,21 @@ try {
         # scripts PSMHardening.ps1 / PSMConfigureAppLocker.ps1 (via Invoke-PSMHardening).
         Set-PSMAutomationConsts -Settings $Settings -SourcesRoot $SourcesRoot -ZoneConfig $ZoneConfig | Out-Null
         $r = Invoke-PSMHardening -Settings $Settings -SourcesRoot $SourcesRoot -ZoneConfig $ZoneConfig
-        if (-not $r.Succeeded) { throw "Stage Hardening en echec : $($r.ErrorData)" }
+        if (-not $r.Succeeded) {
+            # Hardening.NonBlocking : l'echec du durcissement ne bloque pas le
+            # deploiement (ex. EDR qui bloque les modifications d'ACL systeme).
+            # Les steps en echec restent A REPRENDRE une fois la cause corrigee.
+            $hCfg = Get-PSMConfigValue -Config $Settings -Key 'Hardening'
+            $tolerated = $hCfg -and [bool](Get-PSMConfigValue -Config $hCfg -Key 'NonBlocking')
+            if ($tolerated) {
+                Write-PSMLog -Level WARN -Message ("Stage Hardening en ECHEC TOLERE (Hardening.NonBlocking) : $($r.ErrorData) " +
+                    "-> deploiement poursuivi. A REPRENDRE : corriger la cause (ex. exclusion EDR), retirer 'Hardening' " +
+                    "de state\progress.json puis relancer, ou rejouer les steps en echec via Execute-Stage.")
+            }
+            else {
+                throw "Stage Hardening en echec : $($r.ErrorData)"
+            }
+        }
         if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'stage Hardening'; return }
         if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'Hardening' }
     }

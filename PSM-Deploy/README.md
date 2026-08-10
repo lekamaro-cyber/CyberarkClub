@@ -163,6 +163,11 @@ La reprise est **interactive** (les prompts `Get-Credential` PVWA fonctionnent) 
     `ConfigurePSMUsers` (utilisateurs **locaux** uniquement) sont **désactivés** via
     `Install.Injections` (actif par défaut dans `settings.psd1`) — porter l'équivalent
     (screensaver, propriétés de session) par **GPO/AD** sur les comptes de la zone.
+  - **`Hardening.NonBlocking`** (`settings.psd1`, actif par défaut) : un échec du stage
+    Hardening est **toléré** (WARN, déploiement poursuivi) au lieu d'arrêter — cas
+    rencontré : EDR bloquant les modifications d'ACL système (même `takeown`). Les steps
+    en échec restent **à reprendre** (exclusion EDR, puis retirer `Hardening` de
+    `state\progress.json` et relancer). Remettre à `$false` pour le comportement strict.
 - `config/software.psd1` : logiciels additionnels éventuels.
 
 ## Tests
