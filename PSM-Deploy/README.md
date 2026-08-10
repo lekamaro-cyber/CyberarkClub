@@ -159,6 +159,10 @@ La reprise est **interactive** (les prompts `Get-Credential` PVWA fonctionnent) 
     **Comptes de zone vides = inactif.** Si une variable est introuvable (version de
     média différente), le script s'arrête en listant les variables candidates. Les
     **mots de passe** ne sont jamais ici : gérés dans le **Safe PSM** côté Vault.
+    ⚠️ En comptes de **domaine**, les steps PostInstallation `DisableScreenSaver` et
+    `ConfigurePSMUsers` (utilisateurs **locaux** uniquement) sont **désactivés** via
+    `Install.Injections` (actif par défaut dans `settings.psd1`) — porter l'équivalent
+    (screensaver, propriétés de session) par **GPO/AD** sur les comptes de la zone.
 - `config/software.psd1` : logiciels additionnels éventuels.
 
 ## Tests

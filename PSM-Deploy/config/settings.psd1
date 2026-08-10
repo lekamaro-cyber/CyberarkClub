@@ -51,8 +51,19 @@
         # d'autres champs a forcer (ceux-ci PRIMENT). Forme :
         #   @{ <StageKey> = @{ '<xpath>' = @{ Attribute='Value'; Value='...' } } }
         # Ex. Installation = @{ "//Parameter[@Name='Company']" = @{ Attribute='Value'; Value='Ma Societe' } }
-        # Si un noeud est introuvable, le script liste les Parameter disponibles.
-        Injections = @{}
+        # ATTENTION : XPath sensible a la casse ('Step'/'Parameter', pas 'step').
+        # Si un noeud est introuvable, le script liste les Steps/Parameters disponibles.
+        Injections = @{
+            # Comptes de session PSM en DOMAINE (zones.psd1) : ces 2 steps ne
+            # configurent que des utilisateurs LOCAUX (screensaver, proprietes de
+            # session) et echouent avec des comptes de domaine -> desactives.
+            # CONTREPARTIE : l'equivalent doit etre porte par l'AD/GPO pour les
+            # comptes de la zone (comme sur les PSM existants).
+            PostInstallation = @{
+                "//Step[@Name='DisableScreenSaver']" = @{ Attribute = 'Enable'; Value = 'No' }
+                "//Step[@Name='ConfigurePSMUsers']"  = @{ Attribute = 'Enable'; Value = 'No' }
+            }
+        }
     }
 
     # --- Enregistrement : injection de l'adresse Vault depuis zones.psd1 --------

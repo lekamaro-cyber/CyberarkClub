@@ -77,10 +77,12 @@ function Update-PSMStageXml {
         $value = [string]$spec.Value
         $node  = $doc.SelectSingleNode($xpath)
         if (-not $node) {
-            # Aide au diagnostic : liste les Parameter disponibles pour ajuster le XPath.
-            $names = ($doc.SelectNodes('//Parameter') | ForEach-Object { $_.Name }) -join ', '
-            throw ("Config '$StageName' : noeud introuvable (XPath: $xpath). " +
-                   "Parametres disponibles : $names. Ajuster settings.psd1.")
+            # Aide au diagnostic : liste Steps et Parameters pour ajuster le XPath
+            # (rappel : XPath sensible a la casse -> 'Step'/'Parameter').
+            $steps  = ($doc.SelectNodes('//Step')      | ForEach-Object { $_.Name }) -join ', '
+            $params = ($doc.SelectNodes('//Parameter') | ForEach-Object { $_.Name }) -join ', '
+            throw ("Config '$StageName' : noeud introuvable (XPath: $xpath - attention a la casse). " +
+                   "Steps disponibles : $steps. Parametres disponibles : $params. Ajuster settings.psd1.")
         }
         if ($spec.Attribute) { [void]$node.SetAttribute($spec.Attribute, $value) }
         else                 { $node.InnerText = $value }
