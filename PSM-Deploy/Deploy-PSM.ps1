@@ -112,6 +112,18 @@ try {
         Confirm-PSMZone -ZoneConfig $ZoneConfig -NonInteractive:$NonInteractive
         # Controle de connectivite des serveurs de licence RDS (non bloquant : WARN).
         Test-PSMLicenseServers -Servers $Settings.Rds.LicenseServers | Out-Null
+        # Comptes de session PSM de la zone : doivent etre resolubles dans le domaine
+        # MAINTENANT, sinon le Hardening echouera bien plus tard ("identity references
+        # could not be translated"). Piege classique : sAMAccountName limite a 20
+        # caracteres, tronque et different du Name/CN affiche dans la console AD.
+        foreach ($acctKey in 'PSMConnectUserName', 'PSMAdminConnectUserName') {
+            $acct = Get-PSMConfigValue -Config $ZoneConfig -Key $acctKey
+            if ($acct -and -not (Test-PSMDomainAccount -Account $acct)) {
+                throw ("PreVol : compte de zone '$acct' ($acctKey) irresoluble dans le domaine. " +
+                       "Verifier le sAMAccountName REEL du compte dans l'AD (limite 20 caracteres, " +
+                       "souvent tronque par rapport au Name/CN) et corriger zones.psd1.")
+            }
+        }
         # TODO (deploiement) : verifs connectivite Vault/PVWA, OS supporte, media present.
         if ($PSCmdlet.ShouldProcess('PreVol', 'Valider les prerequis de vol')) {
             # Persiste la zone + l'admin installateur pour la reprise apres reboot.

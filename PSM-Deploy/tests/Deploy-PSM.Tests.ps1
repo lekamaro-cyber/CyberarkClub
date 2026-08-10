@@ -356,6 +356,18 @@ Describe 'Get-PSMInstallPaths (source unique du dossier d install)' {
     }
 }
 
+Describe 'Test-PSMDomainAccount (resolution SID des comptes de zone)' {
+    BeforeAll {
+        Import-Module (Join-Path $root 'modules\PSM.Common.psm1') -Force
+    }
+    It 'Resout un compte connu' {
+        Test-PSMDomainAccount -Account 'NT AUTHORITY\SYSTEM' | Should -BeTrue
+    }
+    It 'Refuse un compte inexistant (sans lever d exception)' {
+        Test-PSMDomainAccount -Account 'DOMAINEBIDON\CompteInexistant42' | Should -BeFalse
+    }
+}
+
 Describe 'Get-PSMConfigValue (lecture sure de cles facultatives)' {
     BeforeAll {
         Import-Module (Join-Path $root 'modules\PSM.Common.psm1') -Force

@@ -244,6 +244,22 @@ function Get-PSMInstallPaths {
     }
 }
 
+function Test-PSMDomainAccount {
+    <#
+        Verifie qu'un compte "DOMAINE\utilisateur" est resoluble en SID par Windows.
+        Attrape en amont (PreVol) les comptes irresolubles qui feraient echouer le
+        Hardening bien plus tard ("identity references could not be translated") -
+        cas typique : sAMAccountName tronque a 20 caracteres, different du Name/CN
+        affiche dans la console AD.
+    #>
+    param([Parameter(Mandatory)] [string] $Account)
+    try {
+        [void]([System.Security.Principal.NTAccount]$Account).Translate([System.Security.Principal.SecurityIdentifier])
+        return $true
+    }
+    catch { return $false }
+}
+
 function Get-PSMStateDir {
     # Renvoie le dossier d'etat (parent de progress.json), fixe par Initialize-PSMState.
     # Utilise par le moteur de stages pour ecrire les copies patchees des *Config.xml.
