@@ -159,6 +159,18 @@ try {
     # ===================== CyberArk STAGE: Prerequisites (RDS, .NET, NLA...) =====================
     if (-not (Test-PSMPhaseComplete 'Prerequisites')) {
         $r = Invoke-PSMPrerequisites -Settings $Settings -SourcesRoot $SourcesRoot
+        if (-not $r.Succeeded) {
+            # Known first-run quirk of the CyberArk InstallRDS step: it installs the
+            # RDS role then immediately configures it, but the freshly installed
+            # 'RDManagement' PowerShell module is not loadable yet ("The module
+            # 'RDManagement' could not be loaded"). A second attempt succeeds
+            # (CyberArk's recovery resumes at the failed step only), so retry the
+            # stage ONCE automatically after letting the module staging settle.
+            Write-PSMLog -Level WARN -Message ("Prerequisites stage failed ($($r.ErrorData)) - " +
+                'automatic retry in 30s (known first-run RDS module quirk, recovery resumes at the failed step)...')
+            Start-Sleep -Seconds 30
+            $r = Invoke-PSMPrerequisites -Settings $Settings -SourcesRoot $SourcesRoot
+        }
         if (-not $r.Succeeded) { throw "Prerequisites stage failed: $($r.ErrorData)" }
         if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'Prerequisites stage (RDS)'; return }
         if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'Prerequisites' }

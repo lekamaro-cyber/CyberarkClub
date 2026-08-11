@@ -124,6 +124,12 @@ The resume is **interactive** (the PVWA `Get-Credential` prompts work) and
 > 🔒 **Mandatory zone confirmation** before acting (except with `-NonInteractive`):
 > a wrong zone = wrong Vault/PVWA/account. Deliberate blunder-proofing.
 
+> ℹ️ **Known first-run quirk (handled automatically)**: the CyberArk `InstallRDS`
+> step (Prerequisites stage) can fail right after installing the RDS role
+> ("*The module 'RDManagement' could not be loaded*") because the freshly
+> installed module is not loadable yet. The orchestrator **retries the stage once**
+> after 30s — CyberArk's recovery resumes at the failed step only. No manual action.
+
 ## Security
 
 - Secrets as `SecureString`, **masked** in all logs; no secret in version control.
