@@ -213,18 +213,17 @@ try {
             Write-PSMLog -Level INFO -Message "WhatIf: the Registration stage would run (Vault password retrieved via the PVWA API)."
         }
         else {
-            # 1) PVWA authentication of the admin performing the installation.
-            $pvwaCred = $PvwaCredential
-            if (-not $pvwaCred) {
-                if ($NonInteractive) {
-                    throw "PVWA: credential required in NonInteractive mode (-PvwaCredential parameter)."
-                }
-                $pvwaCred = Get-Credential -Message "Admin PVWA account ($($ZoneConfig.PvwaAuthMethod)) - zone $($ZoneConfig.Name)"
-            }
-
-            $session = Connect-PvwaSession -PvwaUrl $ZoneConfig.PvwaUrl -Credential $pvwaCred `
-                            -AuthMethod $ZoneConfig.PvwaAuthMethod `
-                            -SkipCertificateCheck:$ZoneConfig.SkipCertificateCheck
+            # 1) PVWA authentication of the admin performing the installation, WITH
+            #    credential validation: a wrong account/password triggers a WARN and
+            #    a fresh prompt (capped attempts, lockout-aware) instead of failing
+            #    the whole deployment. Infrastructure errors still fail fast.
+            $logon = Connect-PvwaSessionWithRetry -PvwaUrl $ZoneConfig.PvwaUrl `
+                        -AuthMethod $ZoneConfig.PvwaAuthMethod -ZoneName $ZoneConfig.Name `
+                        -Credential $PvwaCredential `
+                        -SkipCertificateCheck:$ZoneConfig.SkipCertificateCheck `
+                        -NonInteractive:$NonInteractive
+            $session  = $logon.Session
+            $pvwaCred = $logon.Credential
             try {
                 # The CyberArk registration itself is tracked SEPARATELY from the phase:
                 # re-running Execute-Stage Registration would create ANOTHER server ID

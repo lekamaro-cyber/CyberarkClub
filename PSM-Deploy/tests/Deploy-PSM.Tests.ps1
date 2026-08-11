@@ -407,8 +407,8 @@ Describe 'PVWA module (secret retrieval through the REST API)' {
         Import-Module (Join-Path $root 'modules\PSM.Pvwa.psm1')   -Force
     }
     It 'Exposes the expected functions' {
-        foreach ($fn in 'Connect-PvwaSession','Disconnect-PvwaSession','Get-PvwaAccountPassword','Find-PvwaAccount',
-                        'Find-PvwaUser','Rename-PvwaUser') {
+        foreach ($fn in 'Connect-PvwaSession','Connect-PvwaSessionWithRetry','Disconnect-PvwaSession',
+                        'Get-PvwaAccountPassword','Find-PvwaAccount','Find-PvwaUser','Rename-PvwaUser') {
             Get-Command $fn -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
         }
     }

@@ -86,6 +86,56 @@ function Connect-PvwaSession {
     }
 }
 
+function Connect-PvwaSessionWithRetry {
+    <#
+        Interactive PVWA logon with credential validation: prompts (unless a
+        credential is supplied), tests the logon, and on an AUTHENTICATION
+        failure re-prompts with a clear warning instead of failing the whole
+        deployment. Infrastructure errors (unreachable PVWA, TLS, DNS...) are
+        NOT retried: re-entering credentials would not help.
+        Attempts are capped to avoid locking the account out.
+        Returns [pscustomobject]@{ Session; Credential }.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $PvwaUrl,
+        [Parameter(Mandatory)] [string] $AuthMethod,
+        [string] $ZoneName = '',
+        [pscredential] $Credential,          # pre-supplied (-PvwaCredential): tried first
+        [switch] $SkipCertificateCheck,
+        [switch] $NonInteractive,
+        [int] $MaxAttempts = 3
+    )
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        $cred = $Credential
+        if (-not $cred) {
+            if ($NonInteractive) {
+                throw 'PVWA: credential required in NonInteractive mode (-PvwaCredential parameter).'
+            }
+            $cred = Get-Credential -Message "PVWA admin account ($AuthMethod) - zone $ZoneName [attempt $attempt/$MaxAttempts]"
+            if (-not $cred) { throw 'PVWA logon canceled by the operator.' }
+        }
+        try {
+            $session = Connect-PvwaSession -PvwaUrl $PvwaUrl -Credential $cred `
+                            -AuthMethod $AuthMethod -SkipCertificateCheck:$SkipCertificateCheck
+            Write-PSMLog -Level OK -Message "PVWA logon OK ($($cred.UserName))."
+            return [pscustomobject]@{ Session = $session; Credential = $cred }
+        }
+        catch {
+            $msg = $_.Exception.Message
+            # Only re-prompt on an AUTHENTICATION failure (401/403/PASWS codes);
+            # anything else (network, TLS, DNS...) is a real error -> fail fast.
+            $isAuthFailure = $msg -match '\(401\)|\(403\)|Authentication|password|PASWS'
+            if (-not $isAuthFailure) { throw }
+            if ($NonInteractive -or ($Credential -and $attempt -ge $MaxAttempts)) { throw }
+            Write-PSMLog -Level WARN -Message ("PVWA logon REFUSED for '$($cred.UserName)': wrong account or password " +
+                "- please re-enter the credentials. ($msg)")
+            $Credential = $null   # force a fresh prompt on the next attempt
+        }
+    }
+    throw "PVWA logon failed after $MaxAttempts attempts (check the account - mind a possible lockout)."
+}
+
 function Disconnect-PvwaSession {
     [CmdletBinding()]
     param([Parameter(Mandatory)] $Session)
@@ -226,5 +276,6 @@ function Get-PvwaAccountPassword {
     }
 }
 
-Export-ModuleMember -Function Set-PvwaTlsBypass, Connect-PvwaSession, Disconnect-PvwaSession, `
-                              Find-PvwaAccount, Get-PvwaAccountPassword, Find-PvwaUser, Rename-PvwaUser
+Export-ModuleMember -Function Set-PvwaTlsBypass, Connect-PvwaSession, Connect-PvwaSessionWithRetry, `
+                              Disconnect-PvwaSession, Find-PvwaAccount, Get-PvwaAccountPassword, `
+                              Find-PvwaUser, Rename-PvwaUser
