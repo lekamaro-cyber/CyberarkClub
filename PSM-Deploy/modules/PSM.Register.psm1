@@ -129,6 +129,15 @@ function Rename-PSMComponentAccounts {
 
     foreach ($t in $targets) {
         if ($t.OldName -cne $t.NewName) {
+            # 0) Le nom cible ne doit pas deja exister cote Vault (reste d'une
+            #    installation precedente du MEME serveur : effacer la machine ne
+            #    supprime pas les users Vault).
+            $existing = @(Find-PvwaUser -Session $Session -Search $t.NewName | Where-Object { $_.username -eq $t.NewName })
+            if ($existing.Count -gt 0) {
+                throw ("Rename-PSMComponentAccounts : le user '$($t.NewName)' existe DEJA cote Vault " +
+                       "(reste d'une installation precedente de ce serveur). Le supprimer (PVWA/PrivateArk), " +
+                       "ainsi que les anciens PSMApp_/PSMGw_ orphelins, puis relancer.")
+            }
             # 1) Cote Vault (API PVWA).
             Rename-PvwaUser -Session $Session -UserName $t.OldName -NewUserName $t.NewName | Out-Null
             Write-PSMLog -Level INFO -Message "Vault : user '$($t.OldName)' renomme en '$($t.NewName)'."
