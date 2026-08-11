@@ -386,6 +386,16 @@ Describe 'Test-PSMDomainAccount (SID resolution of the zone accounts)' {
     }
 }
 
+Describe 'Test-PSMLocalAdminMember (local Administrators membership)' {
+    BeforeAll {
+        Import-Module (Join-Path $root 'modules\PSM.Common.psm1') -Force
+    }
+    It 'Never throws and returns $true/$false/$null' {
+        { $script:res = Test-PSMLocalAdminMember -Account 'FAKEDOMAIN\NonexistentAccount42' } | Should -Not -Throw
+        @($true, $false, $null) | Should -Contain $script:res
+    }
+}
+
 Describe 'Get-PSMConfigValue (safe read of optional keys)' {
     BeforeAll {
         Import-Module (Join-Path $root 'modules\PSM.Common.psm1') -Force

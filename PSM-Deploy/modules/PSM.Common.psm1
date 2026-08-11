@@ -300,6 +300,35 @@ function Test-PSMDomainAccount {
     catch { return $false }
 }
 
+function Test-PSMLocalAdminMember {
+    <#
+        Checks whether a "DOMAIN\user" account is a member of the machine's local
+        Administrators group, DIRECTLY OR TRANSITIVELY (e.g. through a per-server
+        AD ACL group placed in the local group). Comparison by SID.
+        Returns $true / $false, or $null when the membership could not be
+        evaluated (domain unreachable, unresolvable foreign SIDs...).
+
+        Used at PreFlight to confirm the AD provisioning done ahead of time:
+          - PSMAdminConnect MUST be a local Administrator (live session
+            monitoring/shadowing requires it);
+          - PSMConnect must NOT be one (user sessions run under it).
+    #>
+    param([Parameter(Mandatory)] [string] $Account)
+    try {
+        $sid = ([System.Security.Principal.NTAccount]$Account).Translate([System.Security.Principal.SecurityIdentifier]).Value
+        Add-Type -AssemblyName System.DirectoryServices.AccountManagement
+        $ctx = [System.DirectoryServices.AccountManagement.PrincipalContext]::new(
+                   [System.DirectoryServices.AccountManagement.ContextType]::Machine)
+        $grp = [System.DirectoryServices.AccountManagement.GroupPrincipal]::FindByIdentity($ctx, 'Administrators')
+        if (-not $grp) { return $null }
+        foreach ($m in $grp.GetMembers($true)) {   # $true = recursive (expands domain groups)
+            if ($m.Sid.Value -eq $sid) { return $true }
+        }
+        return $false
+    }
+    catch { return $null }
+}
+
 function Get-PSMStateDir {
     # Returns the state folder (parent of progress.json), set by Initialize-PSMState.
     # Used by the stage engine to write the patched copies of the *Config.xml files.

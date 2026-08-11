@@ -128,6 +128,34 @@ try {
                        "often truncated compared to the Name/CN) and fix zones.psd1.")
             }
         }
+        # Local Administrators membership, provisioned ahead of time in AD (per-server
+        # ACL group placed in the machine's local Administrators group):
+        #   - PSMAdminConnect MUST be a local admin (PVWA live session monitoring /
+        #     shadowing requires it);
+        #   - PSMConnect must NOT be one (user sessions run under it - the hardening
+        #     assumes a restricted account).
+        # WARN only (AD fix to be done by the team), the deployment continues.
+        $adminAcct = Get-PSMConfigValue -Config $ZoneConfig -Key 'PSMAdminConnectUserName'
+        if ($adminAcct) {
+            $m = Test-PSMLocalAdminMember -Account $adminAcct
+            if ($m -eq $false) {
+                Write-PSMLog -Level WARN -Message ("PreFlight: '$adminAcct' is NOT a member of the local Administrators group " +
+                    "- PVWA live session monitoring (shadowing) will fail. Add it to the per-server AD ACL group " +
+                    "(e.g. ...-Administrators-$env:COMPUTERNAME) ahead of time.")
+            }
+            elseif ($null -eq $m) {
+                Write-PSMLog -Level WARN -Message "PreFlight: could not verify the local Administrators membership of '$adminAcct'."
+            }
+            else { Write-PSMLog -Level OK -Message "PreFlight: '$adminAcct' is a local Administrator (required for session monitoring)." }
+        }
+        $connAcct = Get-PSMConfigValue -Config $ZoneConfig -Key 'PSMConnectUserName'
+        if ($connAcct) {
+            if ((Test-PSMLocalAdminMember -Account $connAcct) -eq $true) {
+                Write-PSMLog -Level WARN -Message ("PreFlight: SECURITY - '$connAcct' IS a member of the local Administrators group. " +
+                    "User sessions run under this account: it must NOT be an administrator. " +
+                    "Remove it from the per-server AD ACL group.")
+            }
+        }
         # TODO (deployment): Vault/PVWA connectivity checks, supported OS, media present.
         if ($PSCmdlet.ShouldProcess('PreFlight', 'Validate the pre-flight requirements')) {
             # Persist the zone + the installing admin for the resume after reboot.

@@ -169,6 +169,12 @@ The resume is **interactive** (the PVWA `Get-Credential` prompts work) and
     `ConfigurePSMUsers` (**local** users only) are **disabled** via
     `Install.Injections` (enabled by default in `settings.psd1`) — carry the equivalent
     (screensaver, session properties) via **GPO/AD** on the zone's accounts.
+    ⚠️ **Local Administrators**: `PSMAdminConnect` **must** be a local Administrator on
+    the PSM (PVWA live session monitoring/shadowing requires it); `PSMConnect` must
+    **NOT** be one (user sessions run under it). Provision this **ahead of time** via
+    the per-server AD ACL group placed in the machine's local Administrators group —
+    **PreFlight verifies both** (recursive membership by SID) and WARNs explicitly on
+    a missing or inverted assignment.
   - **Component account naming** (`settings.psd1` → `Registration.RenameComponents`,
     enabled by default): `RegisterComponent.exe` generates random names
     (`PSMApp_<hex>`/`PSMGw_<hex>`) **with no naming option** for PSM. After
