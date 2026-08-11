@@ -1,24 +1,24 @@
 <#
 .SYNOPSIS
-    DEMO autonome du moteur de deploiement PSM (sans media CyberArk, sans droits
-    admin, sans reseau). Montre : idempotence Test->Set, mode plan (-WhatIf),
-    confirmation de zone, masquage des secrets, recap final.
+    Standalone DEMO of the PSM deployment engine (no CyberArk media, no admin
+    rights, no network). Shows: Test->Set idempotency, plan mode (-WhatIf),
+    zone confirmation, secret masking, final summary.
 
 .DESCRIPTION
-    Utilise le VRAI moteur (modules/PSM.Common.psm1) mais avec des phases SIMULEES.
-    Un fichier "monde" (.demo-state/world.json) represente l'etat de la machine et
-    persiste entre deux executions -> l'idempotence est reelle, pas mise en scene :
-      - 1er passage  : tout en CHANGED
-      - 2e passage   : tout en OK (rien n'est refait)
-      - avec -WhatIf : rien n'est modifie, on voit ce qui SERAIT fait
-      - avec -Reset  : on repart d'une machine "vierge"
+    Uses the REAL engine (modules/PSM.Common.psm1) but with SIMULATED phases.
+    A "world" file (.demo-state/world.json) represents the machine state and
+    persists between two runs -> the idempotency is real, not staged:
+      - 1st run     : everything CHANGED
+      - 2nd run     : everything OK (nothing is redone)
+      - with -WhatIf: nothing is modified, you see what WOULD be done
+      - with -Reset : you start over from a "pristine" machine
 
 .EXAMPLE
-    .\Demo-PSM.ps1 -Reset -NonInteractive            # 1er passage : CHANGED partout
+    .\Demo-PSM.ps1 -Reset -NonInteractive            # 1st run: CHANGED everywhere
 .EXAMPLE
-    .\Demo-PSM.ps1 -NonInteractive                   # 2e passage : OK partout (idempotent)
+    .\Demo-PSM.ps1 -NonInteractive                   # 2nd run: OK everywhere (idempotent)
 .EXAMPLE
-    .\Demo-PSM.ps1 -Reset -NonInteractive -WhatIf    # mode plan : aucune modification
+    .\Demo-PSM.ps1 -Reset -NonInteractive -WhatIf    # plan mode: no modification
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -40,13 +40,13 @@ $worldFile = Join-Path $demoState 'world.json'
 
 if ($Reset) {
     Remove-Item $demoState, $demoLogs -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Host "(demo) Etat reinitialise : machine 'vierge'." -ForegroundColor DarkGray
+    Write-Host "(demo) State reset: 'pristine' machine." -ForegroundColor DarkGray
 }
 
 Initialize-PSMLogging -LogDirectory $demoLogs
 Initialize-PSMState   -StateDirectory $demoState
 
-# --- "Monde" simule : etat de la machine, persistant entre executions --------
+# --- Simulated "world": machine state, persistent between runs ---------------
 if (-not (Test-Path $worldFile)) {
     New-Item -ItemType Directory -Path $demoState -Force | Out-Null
     [ordered]@{
@@ -58,41 +58,41 @@ function Get-World { Get-Content $worldFile -Raw | ConvertFrom-Json }
 function Set-WorldFlag { param([string] $Key) $w = Get-World; $w.$Key = $true; $w | ConvertTo-Json | Set-Content -Path $worldFile }
 
 Write-Host ''
-Write-Host '########  DEMO — Moteur de deploiement PSM (simulation)  ########' -ForegroundColor White
+Write-Host '########  DEMO - PSM deployment engine (simulation)  ########' -ForegroundColor White
 
-# --- Demonstration du masquage des secrets -----------------------------------
+# --- Secret masking demonstration --------------------------------------------
 $fakeSecret = 'S3cr3t-DemoPassword!'
 Register-PSMSecret -Secret $fakeSecret
-Write-PSMLog -Level INFO -Message "Secret recupere via API PVWA (demo) = $fakeSecret  <= doit apparaitre MASQUE dans les logs"
+Write-PSMLog -Level INFO -Message "Secret retrieved via PVWA API (demo) = $fakeSecret  <= must show up MASKED in the logs"
 
-# --- Confirmation de zone (anti-bourde) --------------------------------------
+# --- Zone confirmation (blunder guard) ---------------------------------------
 $zoneCfg = [pscustomobject]@{
     Name = $Zone; PvwaUrl = 'https://pvwa.demo.local'; PvwaAuthMethod = 'LDAP'
 }
 Confirm-PSMZone -ZoneConfig $zoneCfg -NonInteractive:$NonInteractive
 
-# --- Phases SIMULEES, idempotentes (meme moteur que le vrai script) ----------
-Invoke-IdempotentStep -Name 'Licence RDS (simulee)' `
+# --- SIMULATED, idempotent phases (same engine as the real script) -----------
+Invoke-IdempotentStep -Name 'RDS license (simulated)' `
     -Test { (Get-World).rdsLicense } -Action { Set-WorldFlag 'rdsLicense' } -Confirm:$false
 
-Invoke-IdempotentStep -Name 'Logiciels additionnels (simules)' `
+Invoke-IdempotentStep -Name 'Additional software (simulated)' `
     -Test { (Get-World).software } -Action { Start-Sleep -Milliseconds 150; Set-WorldFlag 'software' } -Confirm:$false
 
-Invoke-IdempotentStep -Name 'Installation PSM (simulee)' `
+Invoke-IdempotentStep -Name 'PSM installation (simulated)' `
     -Test { (Get-World).psmInstalled } -Action { Start-Sleep -Milliseconds 150; Set-WorldFlag 'psmInstalled' } -Confirm:$false
 
-# Illustration du point de reboot (aucun redemarrage reel en demo)
+# Reboot point illustration (no real restart in the demo)
 if (-not (Get-World).psmInstalled) {
-    Write-PSMLog -Level WARN -Message "(demo) Ici le vrai script programmerait la reprise et REBOOTERAIT."
+    Write-PSMLog -Level WARN -Message "(demo) Here the real script would schedule the resume and REBOOT."
 }
 
-Invoke-IdempotentStep -Name 'Enregistrement Vault (simule)' `
+Invoke-IdempotentStep -Name 'Vault registration (simulated)' `
     -Test { (Get-World).registered } -Action { Set-WorldFlag 'registered' } -Confirm:$false
 
-Invoke-IdempotentStep -Name 'Hardening + AppLocker (simules)' `
+Invoke-IdempotentStep -Name 'Hardening + AppLocker (simulated)' `
     -Test { (Get-World).hardened } -Action { Set-WorldFlag 'hardened' } -Confirm:$false
 
 Write-PSMSummary
 Write-Host ''
-Write-Host "(demo) Relance SANS -Reset pour voir l'idempotence (tout en OK)." -ForegroundColor DarkGray
-Write-Host "(demo) Logs generes dans : $demoLogs" -ForegroundColor DarkGray
+Write-Host "(demo) Relaunch WITHOUT -Reset to see the idempotency (everything OK)." -ForegroundColor DarkGray
+Write-Host "(demo) Logs generated in: $demoLogs" -ForegroundColor DarkGray

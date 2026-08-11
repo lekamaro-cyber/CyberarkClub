@@ -1,24 +1,24 @@
 <#
 .SYNOPSIS
-    Phases "Installation" et "PostInstallation" du PSM : pilotage des stages
-    CyberArk (Execute-Stage.ps1) via le moteur PSM.Stages.
+    PSM "Installation" and "PostInstallation" phases: driving the CyberArk
+    stages (Execute-Stage.ps1) through the PSM.Stages engine.
 
 .DESCRIPTION
-    On n'installe pas nous-memes : on lance les stages du framework CyberArk
-    (Installation = setup silencieux via PSMInstallationTemplate.iss ;
-    PostInstallation = configuration PSMConnect/PSMAdminConnect, etc.).
-    L'idempotence est assuree a deux niveaux : notre suivi de phases (progress.json)
-    et le PreCheck de chaque step CyberArk (les steps deja faits se sautent).
+    We do not install anything ourselves: we run the CyberArk framework stages
+    (Installation = silent setup via PSMInstallationTemplate.iss;
+    PostInstallation = PSMConnect/PSMAdminConnect configuration, etc.).
+    Idempotency is ensured at two levels: our phase tracking (progress.json)
+    and each CyberArk step's PreCheck (already-done steps are skipped).
 
-    Chaque fonction renvoie l'objet resultat de Invoke-PSMStage
-    ({ Succeeded, RestartRequired, LogPath, ... }) ; l'orchestrateur gere le reboot.
+    Each function returns the Invoke-PSMStage result object
+    ({ Succeeded, RestartRequired, LogPath, ... }); the orchestrator handles the reboot.
 #>
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 function Test-PSMInstalled {
-    # Detection : presence du service PSM (utilisee par la phase de validation).
+    # Detection: presence of the PSM service (used by the validation phase).
     param([string] $ExpectedVersion)
     $svc = Get-Service -Name 'CyberArk Privileged Session Manager' -ErrorAction SilentlyContinue
     return [bool]$svc
@@ -30,10 +30,11 @@ function Invoke-PSMInstall {
         [Parameter(Mandatory)] $Settings,
         [Parameter(Mandatory)] [string] $SourcesRoot
     )
-    # Dossier d'install / enregistrements derives de la SOURCE UNIQUE Install.InstallDir
-    # et injectes dans une copie de InstallationConfig.xml (media intact). Ces deux champs
-    # sont "possedes" par InstallDir/RecordingDir : passes en ExtraInjections, ils priment
-    # sur un eventuel doublon dans Install.Injections.Installation (a ne pas resaisir la).
+    # Install / recordings folders derived from the SINGLE SOURCE Install.InstallDir
+    # and injected into a copy of InstallationConfig.xml (media intact). These two
+    # fields are "owned" by InstallDir/RecordingDir: passed as ExtraInjections, they
+    # win over a possible duplicate in Install.Injections.Installation (do not
+    # re-enter them there).
     $paths = Get-PSMInstallPaths -Settings $Settings
     $extra = @{
         "//Parameter[@Name='InstallationDirectory']" = @{ Attribute = 'Value'; Value = $paths.InstallDir }
@@ -47,9 +48,9 @@ function Invoke-PSMInstall {
 }
 
 function Invoke-PSMPostInstall {
-    # NB : les comptes de session PSMConnect/PSMAdminConnect ne se configurent PAS
-    # ici (PostInstallationConfig.xml n'a aucun parametre pour eux) mais cote
-    # Hardening (Set-PSMConnectAccounts -> variables de PSMHardening.ps1 /
+    # NB: the PSMConnect/PSMAdminConnect session accounts are NOT configured here
+    # (PostInstallationConfig.xml has no parameter for them) but on the Hardening
+    # side (Set-PSMConnectAccounts -> variables of PSMHardening.ps1 /
     # PSMConfigureAppLocker.ps1).
     [CmdletBinding(SupportsShouldProcess)]
     param(

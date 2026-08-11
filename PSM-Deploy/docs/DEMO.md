@@ -1,64 +1,64 @@
-# Faire une démo (sans média ni valeurs réelles)
+# Running a demo (without media or real values)
 
-Tu n'as encore rien mis dans le dossier (pas de média CyberArk, pas de valeurs) :
-c'est **normal**, et tu peux quand même démontrer **ce qui a de la valeur** — le
-moteur idempotent et les garde-fous — grâce au **mode démo** (`demo/Demo-PSM.ps1`).
+You haven't put anything in the folder yet (no CyberArk media, no values):
+that's **normal**, and you can still demonstrate **what has value** — the
+idempotent engine and the guardrails — thanks to the **demo mode** (`demo/Demo-PSM.ps1`).
 
-> ✅ Aucun prérequis lourd : **pas besoin** de média CyberArk, **ni** de droits
-> admin, **ni** de réseau. Juste **Windows PowerShell 5.1** (présent sur tout
-> Windows) sur n'importe quelle machine (ton poste, une VM…).
+> ✅ No heavy prerequisites: **no need** for the CyberArk media, **nor** admin
+> rights, **nor** network access. Just **Windows PowerShell 5.1** (present on every
+> Windows) on any machine (your workstation, a VM…).
 
-## Ce que la démo prouve
-- **Idempotence réelle** : 1er passage = tout `CHANGED`, 2e passage = tout `OK`
-  (le moteur relit un état persistant, il ne rejoue rien).
-- **Mode « plan » (`-WhatIf`)** : montre ce qui *serait* fait, **sans rien modifier**.
-- **Confirmation de zone** : l'anti-bourde avant d'agir.
-- **Masquage des secrets** : un mot de passe loggé apparaît `********`.
-- **Récapitulatif final** façon Ansible (OK / CHANGED / FAILED).
-- **Point de reboot** : là où le vrai script redémarrerait et reprendrait.
+## What the demo proves
+- **Real idempotence**: 1st run = everything `CHANGED`, 2nd run = everything `OK`
+  (the engine re-reads a persistent state, it replays nothing).
+- **"Plan" mode (`-WhatIf`)**: shows what *would* be done, **without changing anything**.
+- **Zone confirmation**: the blunder-proofing before acting.
+- **Secret masking**: a logged password appears as `********`.
+- **Final summary** Ansible-style (OK / CHANGED / FAILED).
+- **Reboot point**: where the real script would restart and resume.
 
-## Déroulé conseillé pour le meeting (3 minutes)
+## Suggested walkthrough for the meeting (3 minutes)
 
-Ouvre PowerShell dans le dossier `PSM-Deploy` puis :
+Open PowerShell in the `PSM-Deploy` folder, then:
 
-### 1) Mode « plan » — on ne touche à rien
+### 1) "Plan" mode — nothing is touched
 ```powershell
 .\demo\Demo-PSM.ps1 -Reset -NonInteractive -WhatIf
 ```
-➡️ Tout ressort en `WHATIF` : « voici ce que je ferais ». Aucune modification.
+➡️ Everything comes out as `WHATIF`: "here is what I would do". No modification.
 
-### 2) Premier vrai passage — installation simulée
+### 2) First real run — simulated installation
 ```powershell
 .\demo\Demo-PSM.ps1 -Reset -NonInteractive
 ```
-➡️ Tout ressort en `CHANGED`. Note le message de **reboot** simulé.
+➡️ Everything comes out as `CHANGED`. Note the simulated **reboot** message.
 
-### 3) Deuxième passage — LA démonstration d'idempotence
+### 3) Second run — THE idempotence demonstration
 ```powershell
 .\demo\Demo-PSM.ps1 -NonInteractive
 ```
-➡️ Tout ressort en `OK` : **rien n'est refait**. C'est le cœur du sujet.
+➡️ Everything comes out as `OK`: **nothing is redone**. This is the heart of the matter.
 
-### 4) (option) Confirmation de zone interactive
+### 4) (optional) Interactive zone confirmation
 ```powershell
-.\demo\Demo-PSM.ps1 -Reset        # sans -NonInteractive : il demande de taper OUI
+.\demo\Demo-PSM.ps1 -Reset        # without -NonInteractive: it asks you to type YES
 ```
-➡️ Montre le garde-fou « mauvaise zone = mauvais Vault ».
+➡️ Shows the "wrong zone = wrong Vault" guardrail.
 
-## Montrer aussi les tests automatisés (facultatif)
-Si Pester est présent :
+## Also show the automated tests (optional)
+If Pester is available:
 ```powershell
 Invoke-Pester -Path .\tests\Deploy-PSM.Tests.ps1
 ```
-➡️ Vérifie le **contrat d'idempotence** (2e passage = OK) et la structure.
+➡️ Verifies the **idempotence contract** (2nd run = OK) and the structure.
 
-## Le message à passer au L2
-> « Le vrai script (`Deploy-PSM.ps1`) marche **exactement pareil** : mêmes phases,
-> même récap, même sécurité. La seule différence, c'est qu'au lieu d'étapes
-> *simulées*, il lancera **tes** commandes CyberArk et **tes** fichiers. La démo
-> montre la **mécanique** ; le meeting sert à récupérer le **contenu réel**
-> (commandes, XML, valeurs par DC). »
+## The message to give the L2
+> "The real script (`Deploy-PSM.ps1`) works **exactly the same way**: same phases,
+> same summary, same security. The only difference is that instead of *simulated*
+> steps, it will run **your** CyberArk commands and **your** files. The demo
+> shows the **mechanics**; the meeting is for gathering the **real content**
+> (commands, XML, per-DC values)."
 
-## Nettoyage
-Les artefacts de démo sont dans `demo/.demo-state` et `demo/.demo-logs`
-(ignorés par git). Pour repartir de zéro : `-Reset`, ou supprime ces dossiers.
+## Cleanup
+The demo artifacts live in `demo/.demo-state` and `demo/.demo-logs`
+(ignored by git). To start from scratch: `-Reset`, or delete those folders.

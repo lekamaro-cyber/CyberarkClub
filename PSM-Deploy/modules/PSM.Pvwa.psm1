@@ -1,20 +1,21 @@
 <#
 .SYNOPSIS
-    Recuperation de secrets et operations Vault via l'API REST du PVWA.
+    Secret retrieval and Vault operations through the PVWA REST API.
 
 .DESCRIPTION
-    Remplace l'approche CCP/AIM : l'admin qui realise l'installation s'authentifie
-    lui-meme sur le PVWA (il a acces a tous les comptes CyberArk), et le script
-    recupere a la volee les mots de passe dont il a besoin via l'API REST.
+    Replaces the CCP/AIM approach: the admin performing the installation
+    authenticates themselves to the PVWA (they have access to all CyberArk
+    accounts), and the script retrieves the passwords it needs on the fly
+    through the REST API.
 
-    API REST stable de PSM/PVWA 12.6 -> 14.0 :
-      POST {Pvwa}/PasswordVault/API/Auth/{method}/Logon        -> jeton de session
+    Stable PSM/PVWA REST API from 12.6 -> 14.0:
+      POST {Pvwa}/PasswordVault/API/Auth/{method}/Logon        -> session token
       GET  {Pvwa}/PasswordVault/API/Accounts?search=..&filter=safeName eq ..
       POST {Pvwa}/PasswordVault/API/Accounts/{id}/Password/Retrieve
       POST {Pvwa}/PasswordVault/API/Auth/Logoff
 
-    Aucun secret n'est ecrit sur disque ; les mots de passe recuperes sont
-    enregistres aupres de Register-PSMSecret pour etre masques dans les logs.
+    No secret is written to disk; retrieved passwords are registered with
+    Register-PSMSecret so they get masked in the logs.
 #>
 
 Set-StrictMode -Version Latest
@@ -22,14 +23,14 @@ $ErrorActionPreference = 'Stop'
 
 function Set-PvwaTlsBypass {
     <#
-        LAB UNIQUEMENT : accepte les certificats auto-signes du PVWA de test.
-        A NE PAS activer en production (mettre SkipCertificateCheck = $false).
+        LAB ONLY: accepts the test PVWA's self-signed certificates.
+        Do NOT enable in production (set SkipCertificateCheck = $false).
     #>
     [CmdletBinding()]
     param()
-    # PowerShell 5.1 ne sait pas convertir une methode statique (PSMethod) en
-    # delegue RemoteCertificateValidationCallback ("Cannot convert ... PSMethod").
-    # L'affectation du delegue est donc faite DANS le C# lui-meme.
+    # PowerShell 5.1 cannot convert a static method (PSMethod) into a
+    # RemoteCertificateValidationCallback delegate ("Cannot convert ... PSMethod").
+    # The delegate assignment is therefore done INSIDE the C# itself.
     if (-not ([System.Management.Automation.PSTypeName]'PSMTlsBypass').Type) {
         Add-Type -TypeDefinition @"
 using System.Net;
@@ -41,13 +42,13 @@ public static class PSMTlsBypass {
     }
     [PSMTlsBypass]::Enable()
     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
-    Write-Verbose "PVWA : validation du certificat TLS desactivee (mode lab)."
+    Write-Verbose "PVWA: TLS certificate validation disabled (lab mode)."
 }
 
 function Connect-PvwaSession {
     <#
-        Authentifie l'admin sur le PVWA et renvoie un objet session
-        (URL de base + jeton + en-tetes prets a l'emploi).
+        Authenticates the admin to the PVWA and returns a session object
+        (base URL + token + ready-to-use headers).
     #>
     [CmdletBinding()]
     param(
@@ -74,7 +75,7 @@ function Connect-PvwaSession {
                     -ContentType 'application/json' -TimeoutSec $TimeoutSec -ErrorAction Stop
     }
     catch {
-        throw "Echec de connexion PVWA ($AuthMethod) sur $base : $($_.Exception.Message)"
+        throw "PVWA logon failed ($AuthMethod) on $base : $($_.Exception.Message)"
     }
 
     $clean = ($token | Out-String).Trim().Trim('"')
@@ -94,13 +95,13 @@ function Disconnect-PvwaSession {
     }
     catch {
         if (Get-Command Write-PSMLog -ErrorAction SilentlyContinue) {
-            Write-PSMLog -Level WARN -Message "Logoff PVWA non critique : $($_.Exception.Message)"
+            Write-PSMLog -Level WARN -Message "Non-critical PVWA logoff issue: $($_.Exception.Message)"
         }
     }
 }
 
 function Find-PvwaUser {
-    <# Recherche des USERS du Vault (API v2). Renvoie les objets { id, username, ... }. #>
+    <# Searches the Vault USERS (v2 API). Returns { id, username, ... } objects. #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] $Session,
@@ -115,9 +116,9 @@ function Find-PvwaUser {
 
 function Rename-PvwaUser {
     <#
-        Renomme un user du Vault via l'API PVWA (PUT /API/Users/{id}) :
-        recupere l'objet complet, remplace 'username', renvoie l'objet mis a jour.
-        Utilise pour aligner les comptes composants PSM sur la convention de nommage.
+        Renames a Vault user through the PVWA API (PUT /API/Users/{id}):
+        fetches the full object, replaces 'username', returns the updated object.
+        Used to align the PSM component accounts with the naming convention.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -128,11 +129,11 @@ function Rename-PvwaUser {
     )
     $match = @(Find-PvwaUser -Session $Session -Search $UserName | Where-Object { $_.username -eq $UserName })
     if ($match.Count -ne 1) {
-        throw "Rename-PvwaUser : user '$UserName' introuvable ou ambigu ($($match.Count) resultat(s)) cote Vault."
+        throw "Rename-PvwaUser: user '$UserName' not found or ambiguous ($($match.Count) result(s)) on the Vault side."
     }
     $id = $match[0].id
 
-    if (-not $PSCmdlet.ShouldProcess($UserName, "Renommer en '$NewUserName' (PVWA API)")) { return $null }
+    if (-not $PSCmdlet.ShouldProcess($UserName, "Rename to '$NewUserName' (PVWA API)")) { return $null }
 
     $userUri = "$($Session.PvwaUrl)/PasswordVault/API/Users/$id"
     $user    = Invoke-RestMethod -Uri $userUri -Method Get -Headers $Session.Headers -TimeoutSec $TimeoutSec -ErrorAction Stop
@@ -143,13 +144,13 @@ function Rename-PvwaUser {
                 -TimeoutSec $TimeoutSec -ErrorAction Stop
     }
     catch {
-        throw ("Echec du renommage PVWA de '$UserName' en '$NewUserName' : $($_.Exception.Message). " +
-               'Alternative : renommer le user dans PVWA (Administration > Users) puis relancer.')
+        throw ("PVWA rename of '$UserName' to '$NewUserName' failed: $($_.Exception.Message). " +
+               'Alternative: rename the user in PVWA (Administration > Users) then relaunch.')
     }
 }
 
 function Find-PvwaAccount {
-    <# Recherche des comptes (filtre par Safe + recherche texte user/objet/adresse). #>
+    <# Account search (filter by Safe + text search on user/object/address). #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] $Session,
@@ -175,9 +176,9 @@ function Find-PvwaAccount {
 
 function Get-PvwaAccountPassword {
     <#
-        Recupere le mot de passe d'un compte du Vault via l'API PVWA (session admin).
-        Localise le compte soit par AccountId, soit par Safe/UserName/Search.
-        Renvoie un objet { AccountId, UserName, Credential }.
+        Retrieves an account password from the Vault through the PVWA API (admin session).
+        Locates the account either by AccountId, or by Safe/UserName/Search.
+        Returns an object { AccountId, UserName, Credential }.
     #>
     [CmdletBinding()]
     param(
@@ -193,11 +194,11 @@ function Get-PvwaAccountPassword {
     if (-not $AccountId) {
         $found = Find-PvwaAccount -Session $Session -Safe $Safe -UserName $UserName -Search $Search
         if (@($found).Count -eq 0) {
-            throw "Compte introuvable dans le PVWA (Safe='$Safe' User='$UserName' Search='$Search')."
+            throw "Account not found in the PVWA (Safe='$Safe' User='$UserName' Search='$Search')."
         }
         if (@($found).Count -gt 1) {
             $ids = ($found | Select-Object -First 5 -ExpandProperty id) -join ', '
-            throw "Plusieurs comptes correspondent ($(@($found).Count)). Precisez Safe/UserName. Ids: $ids"
+            throw "Multiple matching accounts ($(@($found).Count)). Narrow down Safe/UserName. Ids: $ids"
         }
         $AccountId = $found[0].id
         if (-not $UserName) { $UserName = $found[0].userName }
@@ -210,7 +211,7 @@ function Get-PvwaAccountPassword {
                 -Body $body -ContentType 'application/json' -TimeoutSec $TimeoutSec -ErrorAction Stop
     }
     catch {
-        throw "Echec recuperation du mot de passe (AccountId '$AccountId') via PVWA : $($_.Exception.Message)"
+        throw "Password retrieval failed (AccountId '$AccountId') via PVWA: $($_.Exception.Message)"
     }
 
     $plain = ($pw | Out-String).Trim().Trim('"')

@@ -1,43 +1,43 @@
 <#
-    Tests Pester du squelette de deploiement PSM.
-    But : verifier la coherence structurelle et le contrat d'idempotence
-    (un 2e passage d'une etape deja conforme = aucun changement).
+    Pester tests for the PSM deployment skeleton.
+    Goal: check the structural consistency and the idempotency contract
+    (a 2nd run of an already-compliant step = no change).
 
-    Lancer :  Invoke-Pester -Path .\tests\Deploy-PSM.Tests.ps1
+    Run:  Invoke-Pester -Path .\tests\Deploy-PSM.Tests.ps1
 #>
 
 $root = Split-Path $PSScriptRoot -Parent
 
-Describe 'Structure du dossier sources' {
-    It 'Contient l orchestrateur' {
+Describe 'Sources folder structure' {
+    It 'Contains the orchestrator' {
         Test-Path (Join-Path $root 'Deploy-PSM.ps1') | Should -BeTrue
     }
-    It 'Contient les fichiers de config attendus' {
+    It 'Contains the expected config files' {
         foreach ($f in 'settings.psd1', 'zones.psd1', 'software.psd1') {
             Test-Path (Join-Path $root "config\$f") | Should -BeTrue
         }
     }
-    It 'Charge les modules sans erreur' {
+    It 'Loads the modules without error' {
         { Get-ChildItem (Join-Path $root 'modules') -Filter '*.psm1' |
             ForEach-Object { Import-Module $_.FullName -Force } } | Should -Not -Throw
     }
 }
 
-Describe 'Contrat d idempotence (Invoke-IdempotentStep)' {
+Describe 'Idempotency contract (Invoke-IdempotentStep)' {
     BeforeAll {
         Import-Module (Join-Path $root 'modules\PSM.Common.psm1') -Force
         Initialize-PSMLogging -LogDirectory (Join-Path $env:TEMP 'psm-test-logs')
     }
-    It 'Renvoie OK quand l etat cible est deja atteint' {
-        $r = Invoke-IdempotentStep -Name 'deja-conforme' -Test { $true } -Action { throw 'ne doit pas etre appele' }
+    It 'Returns OK when the target state is already met' {
+        $r = Invoke-IdempotentStep -Name 'already-compliant' -Test { $true } -Action { throw 'must not be called' }
         $r | Should -Be 'OK'
     }
-    It 'Renvoie CHANGED quand l action est appliquee' {
+    It 'Returns CHANGED when the action is applied' {
         $script:flag = $false
-        $r = Invoke-IdempotentStep -Name 'a-appliquer' -Test { $script:flag } -Action { $script:flag = $true } -Confirm:$false
+        $r = Invoke-IdempotentStep -Name 'to-apply' -Test { $script:flag } -Action { $script:flag = $true } -Confirm:$false
         $r | Should -Be 'CHANGED'
     }
-    It 'Est idempotent au 2e passage (CHANGED puis OK)' {
+    It 'Is idempotent on the 2nd run (CHANGED then OK)' {
         $script:flag = $false
         $test   = { $script:flag }
         $action = { $script:flag = $true }
@@ -46,26 +46,26 @@ Describe 'Contrat d idempotence (Invoke-IdempotentStep)' {
     }
 }
 
-Describe 'Reinitialisation de l etat (-Reset / partir de zero)' {
+Describe 'State reset (-Reset / start from scratch)' {
     BeforeAll {
         Import-Module (Join-Path $root 'modules\PSM.Common.psm1') -Force
         Initialize-PSMLogging -LogDirectory (Join-Path $env:TEMP 'psm-test-logs')
         Initialize-PSMState   -StateDirectory (Join-Path $TestDrive 'state-reset')
     }
-    It 'Vide les phases terminees' {
-        Set-PSMPhaseComplete 'PreVol'
+    It 'Clears the completed phases' {
+        Set-PSMPhaseComplete 'PreFlight'
         Set-PSMPhaseComplete 'Installation'
         Test-PSMPhaseComplete 'Installation' | Should -BeTrue
 
         Reset-PSMState -Confirm:$false
 
-        Test-PSMPhaseComplete 'PreVol'       | Should -BeFalse
+        Test-PSMPhaseComplete 'PreFlight'    | Should -BeFalse
         Test-PSMPhaseComplete 'Installation' | Should -BeFalse
     }
 }
 
-Describe 'Config zones' {
-    It 'Definit au moins 2 zones avec les cles PVWA requises' {
+Describe 'Zones config' {
+    It 'Defines at least 2 zones with the required PVWA keys' {
         $z = Import-PowerShellDataFile (Join-Path $root 'config\zones.psd1')
         $z.Keys.Count | Should -BeGreaterOrEqual 2
         foreach ($k in $z.Keys) {
@@ -76,17 +76,17 @@ Describe 'Config zones' {
     }
 }
 
-Describe 'Module Stages (pilotage Execute-Stage.ps1 de CyberArk)' {
+Describe 'Stages module (driving CyberArk Execute-Stage.ps1)' {
     BeforeAll {
         Import-Module (Join-Path $root 'modules\PSM.Common.psm1') -Force
         Import-Module (Join-Path $root 'modules\PSM.Stages.psm1') -Force
     }
-    It 'Expose le moteur de stage, le calcul de chemins et l injection' {
+    It 'Exposes the stage engine, path resolution and injection' {
         foreach ($fn in 'Invoke-PSMStage','Get-PSMStagePaths','Resolve-PSMStageConfig','Update-PSMStageXml') {
             Get-Command $fn -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
         }
     }
-    It 'Calcule les chemins de stage depuis settings.psd1' {
+    It 'Computes the stage paths from settings.psd1' {
         $s = Import-PowerShellDataFile (Join-Path $root 'config\settings.psd1')
         $p = Get-PSMStagePaths -Settings $s -SourcesRoot $root -StageKey 'Installation'
         $p.ExecuteStage | Should -Match 'InstallationAutomation'
@@ -94,14 +94,14 @@ Describe 'Module Stages (pilotage Execute-Stage.ps1 de CyberArk)' {
     }
 }
 
-Describe 'Injection XML des stages (config pilotee, media intact)' {
+Describe 'Stage XML injection (config-driven, media intact)' {
     BeforeAll {
         Import-Module (Join-Path $root 'modules\PSM.Common.psm1')  -Force
         Import-Module (Join-Path $root 'modules\PSM.Stages.psm1')  -Force
         Import-Module (Join-Path $root 'modules\PSM.Install.psm1') -Force
         Initialize-PSMLogging -LogDirectory (Join-Path $env:TEMP 'psm-test-logs')
 
-        # Media factice : layout media\PSM\InstallationAutomation\<Stage>\...
+        # Fake media: media\PSM\InstallationAutomation\<Stage>\... layout
         $script:src   = Join-Path $TestDrive 'sources'
         $script:iaDir = Join-Path $script:src 'media\PSM\InstallationAutomation'
         $regDir       = Join-Path $script:iaDir 'Registration'
@@ -109,7 +109,7 @@ Describe 'Injection XML des stages (config pilotee, media intact)' {
         $postDir      = Join-Path $script:iaDir 'PostInstallation'
         $instDir      = Join-Path $script:iaDir 'Installation'
         New-Item -ItemType Directory -Path $regDir, $hardDir, $postDir, $instDir -Force | Out-Null
-        # Stub Execute-Stage.ps1 : renvoie un JSON de succes (isSucceeded=0).
+        # Execute-Stage.ps1 stub: returns a success JSON (isSucceeded=0).
         Set-Content -Path (Join-Path $script:iaDir 'Execute-Stage.ps1') -Value @'
 param($configFilePath, $silentMode, $displayJson, $spwdObj)
 '{"isSucceeded":0,"restartRequired":false,"logPath":null,"errorData":null}'
@@ -143,7 +143,7 @@ param($configFilePath, $silentMode, $displayJson, $spwdObj)
         }
     }
 
-    It 'Injecte le dossier d install derive de Install.InstallDir (source unique)' {
+    It 'Injects the install folder derived from Install.InstallDir (single source)' {
         $r = Invoke-PSMInstall -Settings $script:settings -SourcesRoot $script:src
         $r.Succeeded | Should -BeTrue
 
@@ -151,31 +151,31 @@ param($configFilePath, $silentMode, $displayJson, $spwdObj)
         $doc  = [xml](Get-Content $copy -Raw)
         $doc.SelectSingleNode("//Parameter[@Name='InstallationDirectory']").Value | Should -Be 'D:\CyberArk'
         $doc.SelectSingleNode("//Parameter[@Name='RecordingDirectory']").Value    | Should -Be 'D:\CyberArk\PSM\Recordings'
-        # Media inchange.
+        # Media unchanged.
         ([xml](Get-Content $script:instXml -Raw)).SelectSingleNode("//Parameter[@Name='InstallationDirectory']").Value |
             Should -Be 'C:\Program Files (x86)\CyberArk'
     }
 
-    It 'Patche une COPIE (adresse Vault) sans toucher au media' {
+    It 'Patches a COPY (Vault address) without touching the media' {
         $extra = @{ "//Parameter[@Name='VaultIP']" = @{ Attribute = 'Value'; Value = '10.0.0.1,10.0.0.2' } }
         $stage = Resolve-PSMStageConfig -Settings $script:settings -SourcesRoot $script:src `
                     -StageKey 'Registration' -ExtraInjections $extra
 
-        # La copie patchee est sous state\config\Registration\, pas dans le media.
+        # The patched copy lives under state\config\Registration\, not in the media.
         $stage.ConfigFilePath | Should -Match 'state.config.Registration'
         ([xml](Get-Content $stage.ConfigFilePath -Raw)).SelectSingleNode("//Parameter[@Name='VaultIP']").Value |
             Should -Be '10.0.0.1,10.0.0.2'
-        # Media inchange.
+        # Media unchanged.
         ([xml](Get-Content $script:regXml -Raw)).SelectSingleNode("//Parameter[@Name='VaultIP']").Value |
             Should -Be ''
     }
 
-    It 'Renvoie le XML du media quand aucune injection n est definie' {
+    It 'Returns the media XML when no injection is defined' {
         $stage = Resolve-PSMStageConfig -Settings $script:settings -SourcesRoot $script:src -StageKey 'Hardening'
         $stage.ConfigFilePath | Should -Be $script:hardXml
     }
 
-    It 'Applique les injections STATIQUES de settings.psd1' {
+    It 'Applies the STATIC injections from settings.psd1' {
         $s = @{
             Install = @{
                 MediaRelativePath             = 'media\PSM'
@@ -192,30 +192,30 @@ param($configFilePath, $silentMode, $displayJson, $spwdObj)
             Should -Be 'baz'
     }
 
-    It 'Sans ZoneConfig, PostInstallation utilise le XML du media tel quel' {
+    It 'Without ZoneConfig, PostInstallation uses the media XML as-is' {
         $stage = Resolve-PSMStageConfig -Settings $script:settings -SourcesRoot $script:src -StageKey 'PostInstallation'
         $stage.ConfigFilePath | Should -Be $script:postXml
     }
 }
 
-Describe 'Comptes de domaine PSMConnect/PSMAdminConnect (variables scripts Hardening)' {
+Describe 'PSMConnect/PSMAdminConnect domain accounts (Hardening script variables)' {
     BeforeAll {
         Import-Module (Join-Path $root 'modules\PSM.Common.psm1')    -Force
         Import-Module (Join-Path $root 'modules\PSM.Hardening.psm1') -Force
         Initialize-PSMLogging -LogDirectory (Join-Path $env:TEMP 'psm-test-logs')
 
-        # Scripts de hardening "generes a l'installation" (extraits simplifies).
+        # "Generated at install time" hardening scripts (simplified excerpts).
         $script:hardDir = Join-Path $TestDrive 'Hardening'
         New-Item -ItemType Directory -Path $script:hardDir -Force | Out-Null
         function Reset-HardeningScripts {
             Set-Content -Path (Join-Path $script:hardDir 'PSMHardening.ps1') -Value @'
-# extrait
+# excerpt
 $PSM_CONNECT_USER       = "PSMConnect"
 $PSM_ADMIN_CONNECT_USER = "PSMAdminConnect"
 $SUPPORT_WEB_APPLICATIONS = $true
 '@
             Set-Content -Path (Join-Path $script:hardDir 'PSMConfigureAppLocker.ps1') -Value @'
-# extrait
+# excerpt
 $PSM_CONNECT       = 'PSMConnect'
 $PSM_ADMIN_CONNECT = 'PSMAdminConnect'
 '@
@@ -238,7 +238,7 @@ $PSM_ADMIN_CONNECT = 'PSMAdminConnect'
         }
     }
 
-    It 'Patche les variables des DEUX scripts avec les comptes de domaine' {
+    It 'Patches BOTH scripts'' variables with the domain accounts' {
         Reset-HardeningScripts
         $zone = @{ PSMConnectUserName = 'CONTOSO\PSMConnect'; PSMAdminConnectUserName = 'CONTOSO\PSMAdminConnect' }
         $done = Set-PSMConnectAccounts -Settings $script:hSettings -ZoneConfig $zone -Confirm:$false
@@ -248,21 +248,21 @@ $PSM_ADMIN_CONNECT = 'PSMAdminConnect'
         Get-HardVar 'PSMHardening.ps1'          'PSM_ADMIN_CONNECT_USER' | Should -Be 'CONTOSO\PSMAdminConnect'
         Get-HardVar 'PSMConfigureAppLocker.ps1' 'PSM_CONNECT'            | Should -Be 'CONTOSO\PSMConnect'
         Get-HardVar 'PSMConfigureAppLocker.ps1' 'PSM_ADMIN_CONNECT'      | Should -Be 'CONTOSO\PSMAdminConnect'
-        # Les autres variables ne sont pas touchees ; sauvegarde .orig intacte.
+        # Other variables untouched; .orig backup intact.
         (Get-Content (Join-Path $script:hardDir 'PSMHardening.ps1') -Raw) | Should -Match 'SUPPORT_WEB_APPLICATIONS'
         Test-Path (Join-Path $script:hardDir 'PSMHardening.ps1.orig') | Should -BeTrue
         Get-Content (Join-Path $script:hardDir 'PSMHardening.ps1.orig') -Raw | Should -Match '"PSMConnect"'
     }
 
-    It 'Est re-jouable (repart de .orig, pas de double application)' {
+    It 'Is replayable (starts over from .orig, no double application)' {
         Reset-HardeningScripts
         Set-PSMConnectAccounts -Settings $script:hSettings -ZoneConfig @{ PSMConnectUserName = 'CONTOSO\PSMConnect' } -Confirm:$false | Out-Null
-        # 2e passage avec un autre compte : doit refleter le dernier, pas cumuler.
-        Set-PSMConnectAccounts -Settings $script:hSettings -ZoneConfig @{ PSMConnectUserName = 'CONTOSO\Autre' } -Confirm:$false | Out-Null
-        Get-HardVar 'PSMHardening.ps1' 'PSM_CONNECT_USER' | Should -Be 'CONTOSO\Autre'
+        # 2nd run with another account: must reflect the latest, not stack.
+        Set-PSMConnectAccounts -Settings $script:hSettings -ZoneConfig @{ PSMConnectUserName = 'CONTOSO\Other' } -Confirm:$false | Out-Null
+        Get-HardVar 'PSMHardening.ps1' 'PSM_CONNECT_USER' | Should -Be 'CONTOSO\Other'
     }
 
-    It 'Inactif quand la zone ne fournit aucun compte' {
+    It 'Inactive when the zone provides no account' {
         Reset-HardeningScripts
         $done = Set-PSMConnectAccounts -Settings $script:hSettings -ZoneConfig @{ } -Confirm:$false
         $done | Should -BeFalse
@@ -270,22 +270,22 @@ $PSM_ADMIN_CONNECT = 'PSMAdminConnect'
         Test-Path (Join-Path $script:hardDir 'PSMHardening.ps1.orig') | Should -BeFalse
     }
 
-    It 'Erreur explicite (avec variables candidates) si la variable est introuvable' {
+    It 'Explicit error (with candidate variables) when the variable is not found' {
         Reset-HardeningScripts
         $bad = @{
             Hardening = @{
                 HardeningDir = $script:hardDir
                 ScriptAccountVariables = @{
-                    'PSMHardening.ps1' = @{ Connect = 'VARIABLE_INEXISTANTE' }
+                    'PSMHardening.ps1' = @{ Connect = 'NONEXISTENT_VARIABLE' }
                 }
             }
         }
         { Set-PSMConnectAccounts -Settings $bad -ZoneConfig @{ PSMConnectUserName = 'CONTOSO\X' } -Confirm:$false } |
-            Should -Throw '*candidates*'
+            Should -Throw '*Candidate variables*'
     }
 }
 
-Describe 'Set-PSMAutomationConsts (Consts.ps1 du framework CyberArk)' {
+Describe 'Set-PSMAutomationConsts (CyberArk framework Consts.ps1)' {
     BeforeAll {
         Import-Module (Join-Path $root 'modules\PSM.Common.psm1') -Force
         Import-Module (Join-Path $root 'modules\PSM.Stages.psm1') -Force
@@ -299,7 +299,7 @@ Describe 'Set-PSMAutomationConsts (Consts.ps1 du framework CyberArk)' {
             Set-Content -Path $script:consts -Value @'
 Set-Variable PSM_CONNECT -value "PSMConnect"
 Set-Variable PSM_ADMIN_CONNECT -value "PSMAdminConnect"
-Set-Variable AUTRE_CONSTANTE -value "inchangee"
+Set-Variable OTHER_CONSTANT -value "unchanged"
 '@
             Remove-Item "$script:consts.orig" -ErrorAction SilentlyContinue
         }
@@ -308,7 +308,7 @@ Set-Variable AUTRE_CONSTANTE -value "inchangee"
         }
     }
 
-    It 'Patche PSM_CONNECT / PSM_ADMIN_CONNECT avec les comptes de la zone' {
+    It 'Patches PSM_CONNECT / PSM_ADMIN_CONNECT with the zone accounts' {
         Reset-Consts
         $zone = @{ PSMConnectUserName = 'CONTOSO\PSMConnect'; PSMAdminConnectUserName = 'CONTOSO\PSMAdminConnect' }
         $done = Set-PSMAutomationConsts -Settings $script:cSettings -SourcesRoot $script:cSrc -ZoneConfig $zone -Confirm:$false
@@ -316,18 +316,18 @@ Set-Variable AUTRE_CONSTANTE -value "inchangee"
         $c = Get-Content $script:consts -Raw
         $c | Should -Match ([regex]::Escape('Set-Variable PSM_CONNECT -value "CONTOSO\PSMConnect"'))
         $c | Should -Match ([regex]::Escape('Set-Variable PSM_ADMIN_CONNECT -value "CONTOSO\PSMAdminConnect"'))
-        $c | Should -Match 'AUTRE_CONSTANTE -value "inchangee"'
+        $c | Should -Match 'OTHER_CONSTANT -value "unchanged"'
         Get-Content "$script:consts.orig" -Raw | Should -Match 'PSM_CONNECT -value "PSMConnect"'
     }
 
-    It 'Est re-jouable (repart de .orig)' {
+    It 'Is replayable (starts over from .orig)' {
         Reset-Consts
         Set-PSMAutomationConsts -Settings $script:cSettings -SourcesRoot $script:cSrc -ZoneConfig @{ PSMConnectUserName = 'CONTOSO\A' } -Confirm:$false | Out-Null
         Set-PSMAutomationConsts -Settings $script:cSettings -SourcesRoot $script:cSrc -ZoneConfig @{ PSMConnectUserName = 'CONTOSO\B' } -Confirm:$false | Out-Null
         Get-Content $script:consts -Raw | Should -Match ([regex]::Escape('"CONTOSO\B"'))
     }
 
-    It 'Inactif quand la zone ne fournit aucun compte' {
+    It 'Inactive when the zone provides no account' {
         Reset-Consts
         Set-PSMAutomationConsts -Settings $script:cSettings -SourcesRoot $script:cSrc -ZoneConfig @{ } -Confirm:$false |
             Should -BeFalse
@@ -335,11 +335,11 @@ Set-Variable AUTRE_CONSTANTE -value "inchangee"
     }
 }
 
-Describe 'Get-PSMInstallPaths (source unique du dossier d install)' {
+Describe 'Get-PSMInstallPaths (single source of the install folder)' {
     BeforeAll {
         Import-Module (Join-Path $root 'modules\PSM.Common.psm1') -Force
     }
-    It 'Derive PSM, enregistrements et Hardening depuis InstallDir' {
+    It 'Derives PSM, recordings and Hardening from InstallDir' {
         $s = @{ Install = @{ InstallDir = 'D:\CyberArk'; RecordingDir = '' } }
         $p = Get-PSMInstallPaths -Settings $s
         $p.InstallDir   | Should -Be 'D:\CyberArk'
@@ -347,25 +347,25 @@ Describe 'Get-PSMInstallPaths (source unique du dossier d install)' {
         $p.RecordingDir | Should -Be 'D:\CyberArk\PSM\Recordings'
         $p.HardeningDir | Should -Be 'D:\CyberArk\PSM\Hardening'
     }
-    It 'RecordingDir explicite prime sur la valeur derivee' {
+    It 'An explicit RecordingDir wins over the derived value' {
         $s = @{ Install = @{ InstallDir = 'D:\CyberArk'; RecordingDir = 'E:\Records' } }
         (Get-PSMInstallPaths -Settings $s).RecordingDir | Should -Be 'E:\Records'
     }
-    It 'Erreur explicite si InstallDir manque' {
+    It 'Explicit error when InstallDir is missing' {
         { Get-PSMInstallPaths -Settings @{ Install = @{ InstallDir = '' } } } | Should -Throw
     }
 }
 
-Describe 'Test-PSMSettingsDrift (derive de config vs version du script)' {
+Describe 'Test-PSMSettingsDrift (config drift vs script version)' {
     BeforeAll {
         Import-Module (Join-Path $root 'modules\PSM.Common.psm1') -Force
         Initialize-PSMLogging -LogDirectory (Join-Path $env:TEMP 'psm-test-logs')
     }
-    It 'La config de reference du depot est complete (aucune cle manquante)' {
+    It 'The repository reference config is complete (no missing key)' {
         $s = Import-PowerShellDataFile (Join-Path $root 'config\settings.psd1')
         Test-PSMSettingsDrift -Settings $s | Should -BeNullOrEmpty
     }
-    It 'Detecte les cles manquantes sur une config partielle' {
+    It 'Detects the missing keys on a partial config' {
         $partial = @{ PsmVersion = '12.6'; Rds = @{ LicenseMode = 'PerUser' } }
         $missing = Test-PSMSettingsDrift -Settings $partial
         $missing | Should -Contain 'Registration.RenameComponents'
@@ -374,52 +374,52 @@ Describe 'Test-PSMSettingsDrift (derive de config vs version du script)' {
     }
 }
 
-Describe 'Test-PSMDomainAccount (resolution SID des comptes de zone)' {
+Describe 'Test-PSMDomainAccount (SID resolution of the zone accounts)' {
     BeforeAll {
         Import-Module (Join-Path $root 'modules\PSM.Common.psm1') -Force
     }
-    It 'Resout un compte connu' {
+    It 'Resolves a known account' {
         Test-PSMDomainAccount -Account 'NT AUTHORITY\SYSTEM' | Should -BeTrue
     }
-    It 'Refuse un compte inexistant (sans lever d exception)' {
-        Test-PSMDomainAccount -Account 'DOMAINEBIDON\CompteInexistant42' | Should -BeFalse
+    It 'Rejects a nonexistent account (without throwing)' {
+        Test-PSMDomainAccount -Account 'FAKEDOMAIN\NonexistentAccount42' | Should -BeFalse
     }
 }
 
-Describe 'Get-PSMConfigValue (lecture sure de cles facultatives)' {
+Describe 'Get-PSMConfigValue (safe read of optional keys)' {
     BeforeAll {
         Import-Module (Join-Path $root 'modules\PSM.Common.psm1') -Force
     }
-    It 'Renvoie la valeur quand la cle existe (hashtable)' {
+    It 'Returns the value when the key exists (hashtable)' {
         Get-PSMConfigValue -Config @{ A = 'x' } -Key 'A' | Should -Be 'x'
     }
-    It 'Renvoie null quand la cle est absente (sans erreur sous StrictMode)' {
+    It 'Returns null when the key is absent (no StrictMode error)' {
         Get-PSMConfigValue -Config @{ A = 'x' } -Key 'Absent' | Should -BeNullOrEmpty
     }
-    It 'Renvoie null quand la config est null' {
+    It 'Returns null when the config is null' {
         Get-PSMConfigValue -Config $null -Key 'A' | Should -BeNullOrEmpty
     }
 }
 
-Describe 'Module PVWA (recuperation des secrets via API REST)' {
+Describe 'PVWA module (secret retrieval through the REST API)' {
     BeforeAll {
         Import-Module (Join-Path $root 'modules\PSM.Common.psm1') -Force
         Import-Module (Join-Path $root 'modules\PSM.Pvwa.psm1')   -Force
     }
-    It 'Expose les fonctions attendues' {
+    It 'Exposes the expected functions' {
         foreach ($fn in 'Connect-PvwaSession','Disconnect-PvwaSession','Get-PvwaAccountPassword','Find-PvwaAccount',
                         'Find-PvwaUser','Rename-PvwaUser') {
             Get-Command $fn -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
         }
     }
-    It 'N a plus de dependance au CCP/AIM' {
+    It 'No longer depends on CCP/AIM' {
         Get-Command 'Get-CcpCredential' -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
         Test-Path (Join-Path $root 'modules\PSM.Ccp.psm1') | Should -BeFalse
     }
-    It 'Set-PvwaTlsBypass fonctionne sous PowerShell 5.1 (delegue TLS)' {
-        # Regression : "Cannot convert ... PSMethod to RemoteCertificateValidationCallback"
+    It 'Set-PvwaTlsBypass works on PowerShell 5.1 (TLS delegate)' {
+        # Regression: "Cannot convert ... PSMethod to RemoteCertificateValidationCallback"
         { Set-PvwaTlsBypass } | Should -Not -Throw
         [System.Net.ServicePointManager]::ServerCertificateValidationCallback | Should -Not -BeNullOrEmpty
-        [PSMTlsBypass]::Disable()   # nettoyage : revalide les certificats dans la session de test
+        [PSMTlsBypass]::Disable()   # cleanup: re-validate certificates in the test session
     }
 }

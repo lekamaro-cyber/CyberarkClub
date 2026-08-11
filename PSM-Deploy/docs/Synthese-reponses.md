@@ -1,92 +1,92 @@
-# Synthèse des réponses — Découverte + entretien L2
+# Answer summary — Discovery + L2 interview
 
-> Réponses captées lors des rounds interactifs. Sert de base pour compléter le
-> script (`PSM-Deploy/`). Les points **[L2/à récupérer]** restent à confirmer ou
-> à obtenir (fichiers, valeurs) auprès du L2.
+> Answers captured during the interactive rounds. Serves as the basis for completing
+> the script (`PSM-Deploy/`). The **[L2/to obtain]** points remain to be confirmed or
+> obtained (files, values) from the L2.
 
-## OS, RDS & domaine
-- **Windows Server 2022** pour les nouveaux serveurs.
-- **Rôle RD Session Host installé par le script d'automatisation CyberArk** (on ne le duplique pas).
-- **Licences RDS réglées en local** sur le PSM (mode + serveur de licence).
-- PSM **joint au domaine AVANT** l'installation.
+## OS, RDS & domain
+- **Windows Server 2022** for the new servers.
+- **RD Session Host role installed by the CyberArk automation script** (we do not duplicate it).
+- **RDS licensing set locally** on the PSM (mode + license server).
+- PSM **joined to the domain BEFORE** the installation.
 
-## Installation PSM
-- Install via une **commande lancée manuellement avec arguments CLI** (pas de fichier de réponse).
-  - **[L2/à récupérer]** commande exacte + arguments CLI.
-- **3+ reboots / variable** → machine à états + reprise automatique indispensables.
-- **14.0 pas encore testée** → cible 12.6, code paramétré par version.
+## PSM installation
+- Install via a **command launched manually with CLI arguments** (no answer file).
+  - **[L2/to obtain]** exact command + CLI arguments.
+- **3+ reboots / variable** → state machine + automatic resume indispensable.
+- **14.0 not tested yet** → target 12.6, code parameterized by version.
 
-## Comptes
-- **PSMConnect / PSMAdminConnect** : comptes de domaine **déjà créés**. Définis **par zone** dans `zones.psd1` (`PSMConnectUserName` / `PSMAdminConnectUserName`, format `DOMAINE\user`). Constat (média 12.6.11 + PSM en service) : **aucun `*Config.xml` de stage** ne porte ces comptes — ils vivent à **deux niveaux**, patchés **en place** (sauvegarde `.orig`, rejouable) : (1) **`InstallationAutomation\Consts.ps1`** du média (`Set-Variable PSM_CONNECT / PSM_ADMIN_CONNECT`), consommé par les steps d'automatisation → `Set-PSMAutomationConsts` avant PostInstallation/Hardening ; (2) les **variables** de `PSMHardening.ps1` (`$PSM_CONNECT_USER` / `$PSM_ADMIN_CONNECT_USER`) et `PSMConfigureAppLocker.ps1` (`$PSM_CONNECT` / `$PSM_ADMIN_CONNECT`), **générés à l'installation** sous `<InstallDir>\PSM\Hardening` → `Set-PSMConnectAccounts` au début de la phase Hardening. **Inactif** si les comptes de zone sont vides ; variable introuvable = arrêt avec liste des candidates. Les **mots de passe** ne sont pas en config : **gérés dans le Safe PSM** côté Vault.
-- Auth PVWA du compte admin/install : **CyberArk**.
-- Nommage des comptes composants : **`PSM-<SERVERNAME>` en MAJUSCULES**. Constat : `RegisterComponent.exe` (outil d'enregistrement) genere des noms aleatoires (`PSMApp_<hex>`) **sans option de nommage** pour PSM — la prod a ete renommee a la main (user via PVWA + cred file + basic_psm.ini). Cette procedure est desormais **automatisee** post-Registration (`Rename-PSMComponentAccounts`, cf. `settings.psd1 Registration.RenameComponents`) : app = `PSM-<HOST>`, gateway = `PSMA<HOST>`.
-- Credential files (.cred) **liés à la machine** (CreateCredFile avec restrictions).
+## Accounts
+- **PSMConnect / PSMAdminConnect**: domain accounts **already created**. Defined **per zone** in `zones.psd1` (`PSMConnectUserName` / `PSMAdminConnectUserName`, format `DOMAIN\user`). Finding (media 12.6.11 + PSM in service): **no stage `*Config.xml`** carries these accounts — they live at **two levels**, patched **in place** (`.orig` backup, replayable): (1) the media's **`InstallationAutomation\Consts.ps1`** (`Set-Variable PSM_CONNECT / PSM_ADMIN_CONNECT`), consumed by the automation steps → `Set-PSMAutomationConsts` before PostInstallation/Hardening; (2) the **variables** of `PSMHardening.ps1` (`$PSM_CONNECT_USER` / `$PSM_ADMIN_CONNECT_USER`) and `PSMConfigureAppLocker.ps1` (`$PSM_CONNECT` / `$PSM_ADMIN_CONNECT`), **generated at install time** under `<InstallDir>\PSM\Hardening` → `Set-PSMConnectAccounts` at the start of the Hardening phase. **Inactive** if the zone accounts are empty; variable not found = stop with the list of candidates. The **passwords** are not in config: **managed in the PSM Safe** on the Vault side.
+- PVWA auth of the admin/install account: **CyberArk**.
+- Component account naming: **`PSM-<SERVERNAME>` in UPPERCASE**. Finding: `RegisterComponent.exe` (the registration tool) generates random names (`PSMApp_<hex>`) **with no naming option** for PSM — production was renamed by hand (user via PVWA + cred file + basic_psm.ini). This procedure is now **automated** post-Registration (`Rename-PSMComponentAccounts`, see `settings.psd1 Registration.RenameComponents`): app = `PSM-<HOST>`, gateway = `PSMA<HOST>`.
+- Credential files (.cred) **bound to the machine** (CreateCredFile with restrictions).
 
-## Récupération des secrets — **DÉCISION RÉVISÉE : via l'API PVWA (pas de CCP/AIM)**
-- L'**admin qui réalise l'installation s'authentifie lui-même sur le PVWA** (il a accès à
-  tous les comptes CyberArk). Le script récupère le mot de passe du **compte d'install/admin
-  Vault** à la volée via l'**API REST PVWA** (`Get-PvwaAccountPassword`).
-- **Plus de CCP/AIM** : ni AppID, ni certificat applicatif à provisionner.
-- Auth PVWA supportée : **CyberArk / LDAP / Windows / RADIUS** (par zone). En lab,
-  `SkipCertificateCheck = $true` pour tolérer le certificat auto-signé.
-- **[L2/à récupérer]** Safe + nom du compte d'install à récupérer par DC (ou : l'admin
-  connecté fait office de compte d'install → `InstallAccount*` laissés vides).
-- ~~Un CCP par datacenter derrière VIP + certificat client~~ *(approche abandonnée)*.
+## Secret retrieval — **REVISED DECISION: via the PVWA API (no CCP/AIM)**
+- **The admin performing the installation authenticates themselves to the PVWA** (they have
+  access to all CyberArk accounts). The script retrieves the password of the **Vault
+  install/admin account** on the fly via the **PVWA REST API** (`Get-PvwaAccountPassword`).
+- **No more CCP/AIM**: no AppID, no application certificate to provision.
+- Supported PVWA auth: **CyberArk / LDAP / Windows / RADIUS** (per zone). In the lab,
+  `SkipCertificateCheck = $true` to tolerate the self-signed certificate.
+- **[L2/to obtain]** Safe + name of the install account to retrieve per DC (or: the logged-in
+  admin acts as the install account → `InstallAccount*` left empty).
+- ~~One CCP per datacenter behind a VIP + client certificate~~ *(approach abandoned)*.
 
-## Vault / PVWA / enregistrement
-- **Vault central unique** joignable des 2 DC.
-- Enregistrement via la **« registration automation » présente dans les sources** + **XML posés à la main**, avec **confirmation manuelle AVANT** exécution.
-- **Évolution (config pilotée par la nôtre, média jamais modifié)** : les valeurs qui
-  dépendent de notre environnement ne sont plus éditées à la main dans les `*Config.xml`
-  du média. Une **mécanique d'injection unique** (`Resolve-PSMStageConfig` →
-  `Update-PSMStageXml`) écrit ces valeurs dans une **copie patchée** sous
-  `state\config\<Stage>\`, pour **tous les stages** (Readiness → Hardening). Deux sources :
-  valeurs **statiques** dans `settings.psd1` (`Install.Injections[<Stage>]`) et valeurs
-  **dynamiques** par le code — dont l'**adresse Vault de la zone** (`zones.psd1`) injectée
-  pour *Registration*. Résultat : **déposer une nouvelle source CyberArk ne demande aucune
-  édition manuelle des XML** ; sans injection déclarée, le XML du média sert tel quel.
-- **Idempotence** : on se connecte au **PVWA avec le compte de l'admin** (session ouverte pour la récupération des secrets) pour vérifier si le PSM est **déjà enregistré** avant d'agir.
-- **[L2/à récupérer]** contenu/gabarit des XML d'enregistrement + URL PVWA par DC.
+## Vault / PVWA / registration
+- **Single central Vault** reachable from both DCs.
+- Registration via the **"registration automation" present in the sources** + **XML files placed by hand**, with **manual confirmation BEFORE** execution.
+- **Evolution (config driven by ours, media never modified)**: the values that
+  depend on our environment are no longer edited by hand in the media's `*Config.xml`
+  files. A **single injection mechanism** (`Resolve-PSMStageConfig` →
+  `Update-PSMStageXml`) writes these values into a **patched copy** under
+  `state\config\<Stage>\`, for **all stages** (Readiness → Hardening). Two sources:
+  **static** values in `settings.psd1` (`Install.Injections[<Stage>]`) and
+  **dynamic** values from the code — including the **zone's Vault address** (`zones.psd1`)
+  injected for *Registration*. Result: **dropping in a new CyberArk source requires no
+  manual editing of the XML files**; without a declared injection, the media's XML is used as-is.
+- **Idempotence**: we connect to the **PVWA with the admin's account** (session opened for secret retrieval) to check whether the PSM is **already registered** before acting.
+- **[L2/to obtain]** content/template of the registration XML files + PVWA URL per DC.
 
-## Logiciels additionnels
-- Pilotés par **un XML à remplir** + **un dossier source** ; l'équipe y met **les .exe et les lignes de commande**.
-  - → j'aligne le mécanisme sur un **fichier XML** (au lieu du `.psd1`).
-- **[L2/à récupérer]** liste des applis, versions, .exe, lignes de commande silencieuses, tests de détection.
+## Additional software
+- Driven by **an XML to fill in** + **a source folder**; the team puts **the .exe files and the command lines** there.
+  - → I align the mechanism on an **XML file** (instead of the `.psd1`).
+- **[L2/to obtain]** list of apps, versions, .exe files, silent command lines, detection tests.
 
 ## Hardening & AppLocker
-- **PSMHardening personnalisé** (notamment pour PSMConnect / PSMAdminConnect).
-  - **[L2/à récupérer]** version personnalisée du PSMHardening.
-- **AppLocker : XML personnalisé maison**.
-  - **[L2/à récupérer]** XML AppLocker de référence (à versionner dans `applocker/`).
-- Exclusions **AV/EDR** : **déjà gérées par les admins OS** → hors périmètre.
+- **Customized PSMHardening** (notably for PSMConnect / PSMAdminConnect).
+  - **[L2/to obtain]** customized version of PSMHardening.
+- **AppLocker: customized in-house XML**.
+  - **[L2/to obtain]** reference AppLocker XML (to version in `applocker/`).
+- **AV/EDR** exclusions: **already handled by the OS admins** → out of scope.
 
 ## Load Balancer
-- Mise en/hors pool **gérée en avance de phase** → **hors périmètre** du script.
+- Adding to / removing from the pool **handled ahead of time** → **out of scope** for the script.
 
-## Validation & exploitation
-- Validation post-install : **services PSM démarrés** (pas de test de connexion automatisé).
-- **Aucune étape non rejouable** → tout est rejouable (idempotence saine).
-- Journalisation : **logs locaux structurés suffisent** (pas de copie centrale).
+## Validation & operations
+- Post-install validation: **PSM services started** (no automated connection test).
+- **No non-replayable step** → everything is replayable (healthy idempotence).
+- Logging: **structured local logs are sufficient** (no central copy).
 
 ---
 
-## Impacts sur le squelette (ajustements à appliquer)
+## Impacts on the skeleton (adjustments to apply)
 
-1. **Prereqs** : ne plus installer le rôle RDS (fait par CyberArk) ; conserver uniquement la config **licences RDS locales**.
-2. **Software** : remplacer `config/software.psd1` par un **`config/software.xml`** (schéma : app = nom + exe relatif + arguments + codes retour + test de détection) + dossier source d'installeurs.
-3. **Secrets** : `zones.psd1` = **PVWA par DC** + méthode d'auth + compte d'install (récupéré via API PVWA). *(CCP abandonné.)*
-4. **Register** : appeler la **registration automation** des sources avec les **XML**, précédée d'une **confirmation manuelle** ; **idempotence = check via connexion PVWA**.
-5. **Hardening** : brancher le **PSMHardening personnalisé** + appliquer l'**AppLocker XML maison** versionné.
-6. **Nommage** : composants `PSM-<SERVERNAME>` en majuscules.
-7. **Validation** : smoke test = **services up** uniquement.
-8. **Logs** : local only (déjà en place).
+1. **Prereqs**: no longer install the RDS role (done by CyberArk); keep only the **local RDS licensing** config.
+2. **Software**: replace `config/software.psd1` with a **`config/software.xml`** (schema: app = name + relative exe + arguments + return codes + detection test) + installer source folder.
+3. **Secrets**: `zones.psd1` = **PVWA per DC** + auth method + install account (retrieved via PVWA API). *(CCP abandoned.)*
+4. **Register**: call the sources' **registration automation** with the **XML files**, preceded by a **manual confirmation**; **idempotence = check via PVWA connection**.
+5. **Hardening**: hook up the **customized PSMHardening** + apply the versioned **in-house AppLocker XML**.
+6. **Naming**: components `PSM-<SERVERNAME>` in uppercase.
+7. **Validation**: smoke test = **services up** only.
+8. **Logs**: local only (already in place).
 
-## À rapporter du meeting L2 (fichiers/valeurs)
-- [ ] Commande + arguments CLI exacts de l'install PSM
-- [ ] XML d'enregistrement (registration automation)
-- [ ] XML de spécification PSMConnect/PSMAdminConnect (sources d'install)
-- [ ] PSMHardening personnalisé
-- [ ] XML AppLocker maison
-- [ ] XML logiciels additionnels + .exe + lignes de commande
-- [ ] Valeurs par DC : URL PVWA, méthode d'auth, Safe + compte d'install à récupérer, FQDN serveur licence RDS
-- [ ] Points de reboot exacts dans la procédure
+## To bring back from the L2 meeting (files/values)
+- [ ] Exact command + CLI arguments of the PSM install
+- [ ] Registration XML (registration automation)
+- [ ] PSMConnect/PSMAdminConnect specification XML (install sources)
+- [ ] Customized PSMHardening
+- [ ] In-house AppLocker XML
+- [ ] Additional software XML + .exe files + command lines
+- [ ] Per-DC values: PVWA URL, auth method, Safe + install account to retrieve, RDS license server FQDN
+- [ ] Exact reboot points in the procedure

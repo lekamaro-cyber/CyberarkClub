@@ -1,62 +1,62 @@
-# À montrer au L2 — De quoi parle ce projet (en clair)
+# To show the L2 — What this project is about (in plain terms)
 
-## Le problème qu'on veut résoudre
-Aujourd'hui tu déploies les PSM **à la main**, étape par étape. C'est long, il y a
-plusieurs reboots, et une petite erreur (mauvaise zone, étape oubliée, étape rejouée)
-peut coûter cher. On veut **outiller ta procédure**, pas la remplacer par une boîte noire.
+## The problem we want to solve
+Today you deploy the PSMs **by hand**, step by step. It takes a long time, there are
+several reboots, and a small mistake (wrong zone, skipped step, replayed step)
+can be costly. We want to **tool up your procedure**, not replace it with a black box.
 
-## L'idée : un script « idempotent » (comme Ansible)
-« Idempotent » veut simplement dire : **on peut le relancer autant de fois qu'on veut,
-il ne refait que ce qui manque**. Pour chaque étape, le script fait deux choses :
+## The idea: an "idempotent" script (like Ansible)
+"Idempotent" simply means: **it can be rerun as many times as you want,
+it only redoes what is missing**. For each phase, the script does two things:
 
-1. **TEST** : « est-ce que c'est déjà fait / déjà conforme ? »
-2. **SET** : si non → il applique. Si oui → il ne touche à rien.
+1. **TEST**: "is this already done / already compliant?"
+2. **SET**: if not → it applies it. If yes → it touches nothing.
 
-À la fin, il affiche un récap type :
+At the end, it displays a summary like:
 ```
-Role RD Session Host .............. OK        (déjà là)
-Licence RDS ....................... CHANGED   (appliquée)
-Installation PSM .................. OK
-Enregistrement Vault .............. CHANGED
+Role RD Session Host .............. OK        (already there)
+RDS license ....................... CHANGED   (applied)
+PSM installation .................. OK
+Vault registration ................ CHANGED
 Hardening ......................... OK
 ```
-`OK` = rien changé, `CHANGED` = appliqué, `FAILED` = échec (et on s'arrête là).
+`OK` = nothing changed, `CHANGED` = applied, `FAILED` = failure (and it stops there).
 
-## Comment on garde le contrôle (anti-bêtise)
-- **Mode « plan » (`-WhatIf`)** : on lance à blanc, il **dit ce qu'il ferait** sans rien modifier.
-- **Confirmation de la zone** : avant d'agir, il affiche le datacenter et le PVWA visés,
-  et **demande OUI** — pour éviter de dérouler sur le mauvais DC.
-- **Confirmation avant l'enregistrement Vault** (l'étape sensible).
-- **Fail-fast** : à la première erreur, il **s'arrête** ; on corrige, on relance, il **reprend où il en était**.
+## How we keep control (blunder-proofing)
+- **"Plan" mode (`-WhatIf`)**: dry run, it **says what it would do** without changing anything.
+- **Zone confirmation**: before acting, it displays the targeted datacenter and PVWA,
+  and **asks for YES** — to avoid running against the wrong DC.
+- **Confirmation before Vault registration** (the sensitive step).
+- **Fail-fast**: at the first error, it **stops**; you fix, you rerun, it **resumes where it left off**.
 
-## Ce que le script fait, dans l'ordre (calqué sur ta procédure)
-1. **Pré-vol** : vérifie les droits admin, la zone, les accès Vault/PVWA.
-2. **Prérequis** : licence RDS locale (le rôle RDS, lui, est posé par l'auto-install CyberArk).
-3. **Logiciels additionnels** : installe les clients/outils (piloté par un fichier de config + un dossier d'exe).
-4. **Installation PSM** : lance l'installation automatisée CyberArk (ta commande).
-5. **Enregistrement Vault** : registration automation + les XML, **après confirmation**.
-6. **Hardening** : ton PSMHardening personnalisé + la politique AppLocker maison.
-7. **Validation** : vérifie que les services PSM tournent.
-8. **Reboots** : gérés automatiquement, avec **reprise automatique** après redémarrage.
+## What the script does, in order (modeled on your procedure)
+1. **Pre-flight**: checks admin rights, the zone, Vault/PVWA access.
+2. **Prerequisites**: local RDS license (the RDS role itself is set up by the CyberArk auto-install).
+3. **Additional software**: installs the clients/tools (driven by a config file + a folder of exe files).
+4. **PSM installation**: launches the CyberArk automated installation (your command).
+5. **Vault registration**: registration automation + the XML files, **after confirmation**.
+6. **Hardening**: your customized PSMHardening + the in-house AppLocker policy.
+7. **Validation**: checks that the PSM services are running.
+8. **Reboots**: handled automatically, with **automatic resume** after restart.
 
-## Où viennent les mots de passe (sécurité)
-- **L'admin qui réalise l'installation s'authentifie lui-même sur le PVWA** (il a déjà
-  accès à tous les comptes CyberArk). Le script récupère alors, **à la volée via l'API REST
-  du PVWA**, le mot de passe du compte d'install/admin Vault dont il a besoin —
-  **jamais écrit en dur, jamais dans les logs** (masqué automatiquement).
-- **Pas de CCP/AIM** : rien à provisionner (ni AppID, ni certificat applicatif). C'est la
-  session de l'admin qui autorise la récupération.
-- Les mots de passe **PSMConnect/PSMAdminConnect** ne sont **pas** saisis : le service PSM
-  les récupère tout seul à l'exécution (via le Safe PSMConnect), comme aujourd'hui.
+## Where the passwords come from (security)
+- **The admin performing the installation authenticates themselves to the PVWA** (they
+  already have access to all CyberArk accounts). The script then retrieves, **on the fly via
+  the PVWA REST API**, the password of the Vault install/admin account it needs —
+  **never hard-coded, never in the logs** (masked automatically).
+- **No CCP/AIM**: nothing to provision (no AppID, no application certificate). The
+  admin's session is what authorizes the retrieval.
+- The **PSMConnect/PSMAdminConnect** passwords are **not** entered: the PSM service
+  retrieves them on its own at runtime (via the PSMConnect Safe), just like today.
 
-## Ce qu'on NE change PAS
-- La **façon** dont CyberArk installe (on utilise **tes** commandes/scripts CyberArk).
-- Le **Load Balancer** (géré en avance de phase, hors script).
-- L'**antivirus/EDR** (géré par les admins OS).
-- Le **contenu** de ton hardening et de ton AppLocker : on **embarque tes fichiers** et on
-  les applique — tu gardes la main.
+## What we do NOT change
+- The **way** CyberArk installs (we use **your** CyberArk commands/scripts).
+- The **Load Balancer** (handled ahead of time, outside the script).
+- The **antivirus/EDR** (handled by the OS admins).
+- The **content** of your hardening and your AppLocker: we **embed your files** and
+  apply them — you stay in control.
 
-## Ce dont on a besoin de toi (le L2)
-Surtout : **les fichiers réels** et **comment détecter qu'une étape est déjà faite**.
-La liste précise est dans `Inspection-PSM-modele.md` (à lancer sur le PSM modèle) et dans
-la checklist de fin de `Synthese-reponses.md`.
+## What we need from you (the L2)
+Above all: **the real files** and **how to detect that a step is already done**.
+The precise list is in `Inspection-PSM-modele.md` (to run on the model PSM) and in
+the checklist at the end of `Synthese-reponses.md`.

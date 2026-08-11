@@ -1,140 +1,140 @@
-# Questionnaire — Rendez-vous L2 « Déploiement manuel d'un PSM CyberArk »
+# Questionnaire — L2 meeting "Manual deployment of a CyberArk PSM"
 
-> **But du meeting** : capturer le savoir-faire manuel du L2 (qui déploie ces
-> serveurs à la main) afin de fiabiliser/compléter le script de déploiement
-> idempotent (`PSM-Deploy/`). Chaque section correspond à une phase du script
-> et aux points encore ouverts (`TODO`/`STUB`).
+> **Purpose of the meeting**: capture the manual know-how of the L2 (who deploys
+> these servers by hand) in order to harden/complete the idempotent deployment
+> script (`PSM-Deploy/`). Each section maps to a phase of the script
+> and to the points still open (`TODO`/`STUB`).
 >
-> **Mode d'emploi** : on déroule section par section. Pour chaque question,
-> noter la réponse + (si utile) la **commande exacte** ou le **fichier** utilisé,
-> et signaler les **pièges connus**. Les questions ⭐ sont prioritaires.
+> **How to use**: we go through it section by section. For each question,
+> note the answer + (if useful) the **exact command** or the **file** used,
+> and flag the **known pitfalls**. Questions marked ⭐ are priorities.
 
 ---
 
-## 0. Contexte & cadrage général
+## 0. Context & general framing
 
-- [ ] ⭐ Combien de PSM déployés / an, et combien à venir sur ce lot ?
-- [ ] ⭐ Quelle est la **procédure manuelle actuelle de bout en bout** ? (existe-t-il un runbook / doc interne ? le récupérer)
-- [ ] Durée moyenne d'un déploiement manuel et nombre de reboots typiques ?
-- [ ] Quelles sont les **3 erreurs les plus fréquentes** lors d'un déploiement manuel ?
-- [ ] Y a-t-il des différences de procédure entre **DC1 et DC2** au-delà du réseau ? (OS, comptes, ordre des étapes…)
+- [ ] ⭐ How many PSMs deployed per year, and how many upcoming in this batch?
+- [ ] ⭐ What is the **current end-to-end manual procedure**? (is there a runbook / internal doc? get a copy)
+- [ ] Average duration of a manual deployment and typical number of reboots?
+- [ ] What are the **3 most frequent mistakes** during a manual deployment?
+- [ ] Are there procedure differences between **DC1 and DC2** beyond the network? (OS, accounts, order of steps…)
 
-## 1. Média, versions & sources
+## 1. Media, versions & sources
 
-- [ ] ⭐ Emplacement et **structure exacte du média** PSM (12.6) ? (arborescence des dossiers/installeurs)
-- [ ] ⭐ Quels **fichiers/scripts CyberArk** sont lancés pour l'install, et dans quel ordre ?
-      (ex. `InstallationAutomation.ps1`, `CreateCredFile`, `PSMHardening.ps1`, `PSMConfigureAppLocker.ps1`… — noter les **noms réels**)
-- [ ] Existe-t-il un **fichier de réponse** (silent/unattended) ? Lequel, et quels champs faut-il y remplir ?
-- [ ] Différences connues **12.6 → 14.0** sur l'install/hardening (chemins, scripts renommés, nouveaux prérequis) ?
-- [ ] Le média contient-il déjà les **connection components** ou sont-ils ajoutés à part ?
-- [ ] Y a-t-il un **patch / hotfix** à appliquer après l'install de base ?
+- [ ] ⭐ Location and **exact structure of the PSM media** (12.6)? (folder/installer tree)
+- [ ] ⭐ Which **CyberArk files/scripts** are launched for the install, and in what order?
+      (e.g. `InstallationAutomation.ps1`, `CreateCredFile`, `PSMHardening.ps1`, `PSMConfigureAppLocker.ps1`… — note the **actual names**)
+- [ ] Is there an **answer file** (silent/unattended)? Which one, and which fields must be filled in?
+- [ ] Known **12.6 → 14.0** differences for install/hardening (paths, renamed scripts, new prerequisites)?
+- [ ] Does the media already contain the **connection components** or are they added separately?
+- [ ] Is there a **patch / hotfix** to apply after the base install?
 
-## 2. Prérequis OS / RDS / licences
+## 2. OS / RDS prerequisites / licensing
 
-- [ ] ⭐ Version(s) de **Windows Server** cible(s) ? (2019 / 2022 …)
-- [ ] ⭐ Le **rôle RD Session Host** est-il installé par la procédure, ou pré-provisionné par l'image/GPO ?
-- [ ] ⭐ **Licences RDS** : mode (Per-User / Per-Device) + **FQDN du serveur de licence** ? Réglé en local ou par GPO ?
-- [ ] Fonctionnalités/prérequis additionnels installés à la main ? (.NET version, redistribuables VC++, etc.)
-- [ ] Réglages **registre / services** spécifiques posés manuellement avant ou après l'install ?
-- [ ] Le serveur est-il **joint au domaine avant ou après** l'install PSM ? OU déployé hors-domaine puis joint ?
-- [ ] Réglages **fuseau horaire / locale / clavier** importants pour les sessions PSM ?
+- [ ] ⭐ Target **Windows Server** version(s)? (2019 / 2022 …)
+- [ ] ⭐ Is the **RD Session Host role** installed by the procedure, or pre-provisioned by the image/GPO?
+- [ ] ⭐ **RDS licensing**: mode (Per-User / Per-Device) + **license server FQDN**? Set locally or via GPO?
+- [ ] Additional features/prerequisites installed by hand? (.NET version, VC++ redistributables, etc.)
+- [ ] Specific **registry / services** settings applied manually before or after the install?
+- [ ] Is the server **joined to the domain before or after** the PSM install? OR deployed out of domain then joined?
+- [ ] **Time zone / locale / keyboard** settings that matter for PSM sessions?
 
-## 3. Comptes
+## 3. Accounts
 
-- [ ] ⭐ **PSMConnect / PSMAdminConnect** : noms exacts des comptes de **domaine** ? Dans quelle **OU** ? Convention de nommage ?
-- [ ] ⭐ Confirmer : leurs mots de passe ne sont **jamais saisis à l'install** (récupérés à l'exécution via le Safe PSMConnect) ?
-- [ ] ⭐ **Compte admin/install Vault** : quel compte, quelle **méthode d'auth PVWA** (CyberArk/LDAP/RADIUS), quels droits exacts ?
-- [ ] **Comptes composants PSMApp_/PSMGw_** : convention de nommage (suffixe = hostname ? PSM Server ID ?), dans quel **Safe** ?
-- [ ] Les **credential files** locaux (`.cred`) sont-ils générés par `CreateCredFile` ? Où sont-ils stockés ? Liés au hardware/IP ?
-- [ ] Droits/local groups à configurer (ex. ajout de PSMConnect aux *Remote Desktop Users*) — manuel ou via script ?
+- [ ] ⭐ **PSMConnect / PSMAdminConnect**: exact names of the **domain** accounts? In which **OU**? Naming convention?
+- [ ] ⭐ Confirm: their passwords are **never entered at install time** (retrieved at runtime via the PSMConnect Safe)?
+- [ ] ⭐ **Vault admin/install account**: which account, which **PVWA auth method** (CyberArk/LDAP/RADIUS), which exact rights?
+- [ ] **PSMApp_/PSMGw_ component accounts**: naming convention (suffix = hostname? PSM Server ID?), in which **Safe**?
+- [ ] Are the local **credential files** (`.cred`) generated by `CreateCredFile`? Where are they stored? Bound to hardware/IP?
+- [ ] Rights/local groups to configure (e.g. adding PSMConnect to *Remote Desktop Users*) — manual or via script?
 
-## 4. CCP (récupération des secrets)
+## 4. CCP (secret retrieval)
 
-- [ ] ⭐ **URL exacte du CCP** par datacenter (DC1 / DC2) ? Un CCP par DC, ou un partagé ?
-- [ ] ⭐ Aujourd'hui l'AppID utilisé est-il **avec ou sans certificat** client ? (état réel)
-- [ ] ⭐ **AppID / Safe / nom d'objet** du compte admin Vault, par zone ?
-- [ ] Si certificat : **thumbprint** + où est installé le cert (LocalMachine\My ?) + autorité ?
-- [ ] Restrictions de l'AppID côté CCP (machines autorisées / OS user / path) ?
-- [ ] Un endpoint CCP dédié « Require client cert » est-il envisageable côté équipe CCP ? (pour la cible sécurisée)
+- [ ] ⭐ **Exact CCP URL** per datacenter (DC1 / DC2)? One CCP per DC, or a shared one?
+- [ ] ⭐ Today, is the AppID used **with or without a client certificate**? (actual state)
+- [ ] ⭐ **AppID / Safe / object name** of the Vault admin account, per zone?
+- [ ] If certificate: **thumbprint** + where the cert is installed (LocalMachine\My?) + authority?
+- [ ] AppID restrictions on the CCP side (allowed machines / OS user / path)?
+- [ ] Is a dedicated "Require client cert" CCP endpoint feasible on the CCP team's side? (for the secured target)
 
-## 5. Vault / PVWA / enregistrement
+## 5. Vault / PVWA / registration
 
-- [ ] ⭐ **Adresse(s) du Vault** et **URL PVWA** par datacenter ?
-- [ ] ⭐ Étapes **exactes** de l'enregistrement du PSM (côté PVWA et/ou côté serveur) ? Manuel via console ou API ?
-- [ ] Comment savoir qu'un PSM est **déjà enregistré** ? (test d'idempotence : quoi interroger ?)
-- [ ] **PSM Server ID** : comment est-il déterminé / nommé ?
-- [ ] Plateformes / Safes à associer au PSM ? Étape manuelle dans PVWA ?
-- [ ] Y a-t-il une étape de **réconciliation** ou de validation côté Vault après install ?
+- [ ] ⭐ **Vault address(es)** and **PVWA URL** per datacenter?
+- [ ] ⭐ **Exact** steps of the PSM registration (PVWA side and/or server side)? Manual via console or API?
+- [ ] How do you know a PSM is **already registered**? (idempotence test: what to query?)
+- [ ] **PSM Server ID**: how is it determined / named?
+- [ ] Platforms / Safes to associate with the PSM? Manual step in PVWA?
+- [ ] Is there a **reconciliation** or validation step on the Vault side after install?
 
-## 6. Load Balancer & haute dispo
+## 6. Load Balancer & high availability
 
-- [ ] ⭐ Type de LB et **méthode** (santé/health check sur quel port/URL ?) — pertinent pour la mise en/hors service ?
-- [ ] Faut-il **sortir le PSM du pool LB** pendant le déploiement, puis l'y remettre ? Manuel ou automatisable ?
-- [ ] Affinité de session / persistance configurée côté LB qui impacte le PSM ?
-- [ ] Certificats (PSM Gateway/HTML5 si applicable plus tard) à poser ? (hors périmètre pour l'instant ?)
+- [ ] ⭐ LB type and **method** (health check on which port/URL?) — relevant for putting into/taking out of service?
+- [ ] Must the PSM be **removed from the LB pool** during deployment, then put back? Manual or automatable?
+- [ ] Session affinity / persistence configured on the LB side that impacts the PSM?
+- [ ] Certificates (PSM Gateway/HTML5 if applicable later) to install? (out of scope for now?)
 
-## 7. Reboots & reprise
+## 7. Reboots & resume
 
-- [ ] ⭐ Combien de **reboots** dans la procédure et **à quels moments précis** ?
-- [ ] Après reboot, **quelles étapes** sont reprises manuellement ? (valide la machine à états du script)
-- [ ] Y a-t-il des **temporisations / attentes de service** nécessaires entre étapes ?
+- [ ] ⭐ How many **reboots** in the procedure and **at which precise moments**?
+- [ ] After a reboot, **which steps** are resumed manually? (validates the script's state machine)
+- [ ] Are there **delays / service waits** needed between steps?
 
-## 8. Logiciels / clients additionnels
+## 8. Additional software / clients
 
-- [ ] ⭐ **Liste exhaustive** des binaires installés après le PSM (nom + version) ?
-- [ ] ⭐ Pour **chaque** appli : installeur exact + **ligne de commande silencieuse** + **codes de retour** valides ?
-- [ ] Comment détecter qu'une appli est **déjà installée** (chemin, clé registre, version) ? (idempotence)
-- [ ] Configurations post-install des clients (profils, raccourcis, paramètres par défaut) faites à la main ?
-- [ ] Ordre d'installation imposé / dépendances entre logiciels ?
+- [ ] ⭐ **Exhaustive list** of the binaries installed after the PSM (name + version)?
+- [ ] ⭐ For **each** app: exact installer + **silent command line** + valid **return codes**?
+- [ ] How to detect that an app is **already installed** (path, registry key, version)? (idempotence)
+- [ ] Post-install client configurations (profiles, shortcuts, default settings) done by hand?
+- [ ] Mandated install order / dependencies between software?
 
 ## 9. Hardening & AppLocker
 
-- [ ] ⭐ Le **PSMHardening.ps1** est-il lancé tel quel ou **personnalisé** ? (récupérer la version utilisée)
-- [ ] ⭐ La politique **AppLocker** : fichier XML de référence utilisé ? Modifié à la main pour les binaires additionnels ?
-- [ ] Comment savoir que le hardening / AppLocker est **déjà appliqué** ? (marqueur d'idempotence)
-- [ ] Exclusions / ajustements manuels récurrents (ex. règles AppLocker pour navigateur, SSMS, WinSCP) ?
-- [ ] Exclusions **antivirus / EDR** à poser pour le PSM ? (chemins, processus)
-- [ ] GPO de domaine qui **complètent ou écrasent** le durcissement local ?
+- [ ] ⭐ Is **PSMHardening.ps1** run as-is or **customized**? (get the version used)
+- [ ] ⭐ The **AppLocker** policy: reference XML file used? Modified by hand for the additional binaries?
+- [ ] How do you know the hardening / AppLocker is **already applied**? (idempotence marker)
+- [ ] Recurring manual exclusions / adjustments (e.g. AppLocker rules for browser, SSMS, WinSCP)?
+- [ ] **Antivirus / EDR** exclusions to set for the PSM? (paths, processes)
+- [ ] Domain GPOs that **complement or override** the local hardening?
 
-## 10. Enregistrements de session (recordings)
+## 10. Session recordings
 
-- [ ] Emplacement par défaut et **volume** des enregistrements ? Disque local dédié ?
-- [ ] Envoi vers un **Safe** du Vault ou conservation locale ? Politique de rétention/purge ?
-- [ ] Réglages à poser à la main aujourd'hui ? (à formaliser plus tard côté script)
+- [ ] Default location and **volume** of the recordings? Dedicated local disk?
+- [ ] Sent to a Vault **Safe** or kept locally? Retention/purge policy?
+- [ ] Settings applied by hand today? (to formalize later on the script side)
 
-## 11. Validation post-installation (smoke tests)
+## 11. Post-install validation (smoke tests)
 
-- [ ] ⭐ **Checklist exacte** que le L2 vérifie pour déclarer un PSM « OK » ?
-      (services à vérifier, test de connexion via PSM, logs à contrôler…)
-- [ ] Quels **services Windows** doivent tourner (noms exacts) ?
-- [ ] Test fonctionnel type : se connecter à quoi, via quel connection component, pour valider ?
+- [ ] ⭐ **Exact checklist** the L2 verifies to declare a PSM "OK"?
+      (services to check, connection test via PSM, logs to review…)
+- [ ] Which **Windows services** must be running (exact names)?
+- [ ] Typical functional test: connect to what, via which connection component, to validate?
 
-## 12. Pièges, échecs & rollback
+## 12. Pitfalls, failures & rollback
 
-- [ ] ⭐ Cas d'échec déjà rencontrés et **comment ils sont rattrapés** manuellement ?
-- [ ] Y a-t-il une étape **non rejouable** (qui casse si relancée) ? → impact direct sur l'idempotence
-- [ ] Procédure de **rollback / réinstallation propre** d'un PSM ?
-- [ ] Particularités liées aux **flux fermés entre DC1 et DC2** (ce qui n'est joignable que depuis un DC) ?
+- [ ] ⭐ Failure cases already encountered and **how they are recovered** manually?
+- [ ] Is there a **non-replayable** step (that breaks if rerun)? → direct impact on idempotence
+- [ ] **Rollback / clean reinstall** procedure for a PSM?
+- [ ] Specifics related to the **closed network flows between DC1 and DC2** (what is only reachable from one DC)?
 
-## 13. Sécurité & traçabilité
+## 13. Security & traceability
 
-- [ ] Sous quel **compte** la procédure est-elle exécutée ? Comment l'élévation est-elle obtenue ?
-- [ ] Des secrets transitent-ils aujourd'hui **en clair** quelque part ? (à éliminer)
-- [ ] Exigences d'**audit/journalisation** internes (où doivent finir les logs) ?
+- [ ] Under which **account** is the procedure executed? How is elevation obtained?
+- [ ] Do any secrets transit **in clear text** anywhere today? (to be eliminated)
+- [ ] Internal **audit/logging** requirements (where must the logs end up)?
 
 ---
 
-## Synthèse à remplir en fin de meeting
+## Summary to fill in at the end of the meeting
 
-| Point bloquant identifié | Décision / valeur | Responsable | Échéance |
+| Blocking point identified | Decision / value | Owner | Due date |
 |---|---|---|---|
 |  |  |  |  |
 |  |  |  |  |
 
-**Éléments à récupérer du L2** (cocher) :
-- [ ] Runbook / doc de procédure manuelle
-- [ ] Fichier(s) de réponse silencieux PSM
-- [ ] `PSMHardening.ps1` utilisé (version réelle)
-- [ ] XML AppLocker de référence
-- [ ] Liste + lignes de commande des logiciels additionnels
-- [ ] Valeurs : PVWA, CCP, AppID, Safe, Object, serveur de licence RDS (par DC)
+**Items to obtain from the L2** (check off):
+- [ ] Runbook / manual procedure doc
+- [ ] Silent PSM answer file(s)
+- [ ] `PSMHardening.ps1` used (actual version)
+- [ ] Reference AppLocker XML
+- [ ] List + command lines of the additional software
+- [ ] Values: PVWA, CCP, AppID, Safe, Object, RDS license server (per DC)

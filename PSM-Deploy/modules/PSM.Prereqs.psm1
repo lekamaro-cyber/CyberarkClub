@@ -1,15 +1,15 @@
 <#
 .SYNOPSIS
-    Phases "prerequis" : stages CyberArk Readiness + Prerequisites (Execute-Stage.ps1)
-    + configuration locale de la licence RD Session Host.
+    "Prerequisites" phases: CyberArk Readiness + Prerequisites stages (Execute-Stage.ps1)
+    + local RD Session Host licensing configuration.
 
 .DESCRIPTION
-    - Readiness / Prerequisites : pilotes via le framework CyberArk (installation
-      du role RDS, .NET, NLA, RDS Security Layer...). Le reboot eventuel est
-      signale par restartRequired et gere par l'orchestrateur.
-    - Licence RDS : la config du mode + du/des serveur(s) de licence reste de
-      notre cote (site-specific), appliquee APRES l'installation du role RDS.
-    - Test-PSMLicenseServers : controle de connectivite (utilise en pre-vol).
+    - Readiness / Prerequisites: driven through the CyberArk framework (RDS role
+      installation, .NET, NLA, RDS Security Layer...). A possible reboot is
+      signaled via restartRequired and handled by the orchestrator.
+    - RDS licensing: the mode + license server(s) config stays on our side
+      (site-specific), applied AFTER the RDS role installation.
+    - Test-PSMLicenseServers: connectivity check (used during pre-flight).
 #>
 
 Set-StrictMode -Version Latest
@@ -17,8 +17,8 @@ $ErrorActionPreference = 'Stop'
 
 function Get-PSMRegValue {
     <#
-        Lecture registre robuste : renvoie la valeur, ou $null si la cle/valeur
-        n'existe pas (evite l'exception StrictMode sur une propriete absente).
+        Robust registry read: returns the value, or $null when the key/value
+        does not exist (avoids the StrictMode exception on a missing property).
     #>
     [CmdletBinding()]
     param(
@@ -36,9 +36,9 @@ function Get-PSMRegValue {
 
 function Test-PSMLicenseServers {
     <#
-        Controle de connectivite vers le/les serveur(s) de licence RDS.
-        Port 135 = RPC endpoint mapper (utilise par le service de licences RDS).
-        Non bloquant : journalise OK/WARN et renvoie $true si tous joignables.
+        Connectivity check towards the RDS license server(s).
+        Port 135 = RPC endpoint mapper (used by the RDS licensing service).
+        Non-blocking: logs OK/WARN and returns $true when all are reachable.
     #>
     [CmdletBinding()]
     param(
@@ -61,10 +61,10 @@ function Test-PSMLicenseServers {
         catch { $ok = $false }
 
         if ($ok) {
-            Write-PSMLog -Level OK   -Message "Serveur de licence RDS joignable : $srv (TCP $Port)."
+            Write-PSMLog -Level OK   -Message "RDS license server reachable: $srv (TCP $Port)."
         }
         else {
-            Write-PSMLog -Level WARN -Message "Serveur de licence RDS INJOIGNABLE : $srv (TCP $Port) - verifier DNS/pare-feu."
+            Write-PSMLog -Level WARN -Message "RDS license server UNREACHABLE: $srv (TCP $Port) - check DNS/firewall."
             $allOk = $false
         }
     }
@@ -72,7 +72,7 @@ function Test-PSMLicenseServers {
 }
 
 function Invoke-PSMReadiness {
-    # Stage CyberArk "Readiness" (CheckOS, CheckSystemRequirements, .NET, domaine...).
+    # CyberArk "Readiness" stage (CheckOS, CheckSystemRequirements, .NET, domain...).
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)] $Settings,
@@ -85,7 +85,7 @@ function Invoke-PSMReadiness {
 }
 
 function Invoke-PSMPrerequisites {
-    # Stage CyberArk "Prerequisites" (InstallRDS, DisableNLA, RDS Security Layer, .NET...).
+    # CyberArk "Prerequisites" stage (InstallRDS, DisableNLA, RDS Security Layer, .NET...).
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)] $Settings,
@@ -99,9 +99,9 @@ function Invoke-PSMPrerequisites {
 
 function Invoke-PSMRdsLicensing {
     <#
-        Configure le mode et le/les serveur(s) de licence RD Session Host
-        (valeur registre 'LicenseServers' = liste separee par des virgules).
-        A executer APRES l'installation du role RDS (stage Prerequisites).
+        Configures the RD Session Host licensing mode and license server(s)
+        ('LicenseServers' registry value = comma-separated list).
+        To be run AFTER the RDS role installation (Prerequisites stage).
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param([Parameter(Mandatory)] $Settings)
@@ -111,7 +111,7 @@ function Invoke-PSMRdsLicensing {
     $licSrvStr  = $licSrvList -join ','
     $rdKey      = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
 
-    Invoke-IdempotentStep -Name "Mode licence RDS ($licMode)" `
+    Invoke-IdempotentStep -Name "RDS licensing mode ($licMode)" `
         -Test   {
             $modeVal = if ($licMode -eq 'PerUser') { 4 } else { 2 }
             (Get-PSMRegValue -Path $rdKey -Name 'LicensingMode') -eq $modeVal
@@ -122,7 +122,7 @@ function Invoke-PSMRdsLicensing {
             Set-ItemProperty -Path $rdKey -Name 'LicensingMode' -Value $modeVal -Type DWord
         }
 
-    Invoke-IdempotentStep -Name "Serveur(s) de licence RDS ($licSrvStr)" `
+    Invoke-IdempotentStep -Name "RDS license server(s) ($licSrvStr)" `
         -Test   {
             $cur = Get-PSMRegValue -Path $rdKey -Name 'LicenseServers'
             ((($cur -as [string]) -replace '\s*,\s*', ',')) -eq $licSrvStr

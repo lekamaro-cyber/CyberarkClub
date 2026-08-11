@@ -1,29 +1,29 @@
 @{
     # =====================================================================
-    # Parametres GLOBAUX non sensibles du deploiement PSM.
-    # Aucune valeur sensible ici (les secrets sont recuperes via l'API PVWA au runtime).
+    # GLOBAL non-sensitive parameters of the PSM deployment.
+    # No sensitive value here (secrets are retrieved through the PVWA API at runtime).
     # =====================================================================
 
-    # Version cible : '12.6' ou '14.0'. Pilote les chemins/branches version-specifiques.
+    # Target version: '12.6' or '14.0'. Drives the version-specific paths/branches.
     PsmVersion = '12.6'
 
-    # --- Licences RD Session Host ---------------------------------------
+    # --- RD Session Host licensing ---------------------------------------
     Rds = @{
         LicenseMode    = 'PerUser'                 # 'PerUser' | 'PerDevice'
-        # Un OU plusieurs serveurs de licence, dans l'ordre de preference.
-        # Ecrits dans la valeur registre 'LicenseServers' (liste separee par des virgules).
+        # One OR several license servers, in order of preference.
+        # Written into the 'LicenseServers' registry value (comma-separated list).
         LicenseServers = @(
-            '<RDS-LICENSE-SERVER-1>'               # TODO (deploiement) : FQDN du/des serveur(s)
+            '<RDS-LICENSE-SERVER-1>'               # TODO (deployment): FQDN of the server(s)
             # '<RDS-LICENSE-SERVER-2>'
         )
     }
 
-    # --- Installation PSM : pilotage du framework CyberArk (Execute-Stage.ps1) -
-    # On pilote CyberArk "etape par etape". Chaque stage a son XML de config
-    # (rempli par l'equipe, cf. dossiers Templates du media).
+    # --- PSM installation: driving the CyberArk framework (Execute-Stage.ps1) -
+    # We drive CyberArk "stage by stage". Each stage has its own XML config
+    # (filled in by the team, see the media's Templates folders).
     Install = @{
-        MediaRelativePath             = 'media\PSM'              # sous-dossier du media dans les sources
-        InstallationAutomationSubPath = 'InstallationAutomation' # dossier du framework CyberArk
+        MediaRelativePath             = 'media\PSM'              # media subfolder inside the sources
+        InstallationAutomationSubPath = 'InstallationAutomation' # CyberArk framework folder
         Stages = @{
             Readiness        = 'Readiness\ReadinessConfig.xml'
             Prerequisites    = 'Prerequisites\PrerequisitesConfig.xml'
@@ -33,32 +33,32 @@
             Hardening        = 'Hardening\HardeningConfig.xml'
         }
 
-        # ================== DOSSIER D'INSTALLATION : source UNIQUE ==================
-        # >>> UN SEUL endroit a changer pour deplacer toute l'install. <<<
-        # A partir de cette valeur, le code DERIVE automatiquement :
-        #   - InstallationDirectory injecte dans InstallationConfig.xml
-        #   - le dossier PSM (<InstallDir>\PSM)
-        #   - le dossier d'enregistrements (RecordingDir ci-dessous, sinon
+        # ================== INSTALLATION FOLDER: SINGLE SOURCE ==================
+        # >>> ONE single place to change to relocate the whole install. <<<
+        # From this value, the code automatically DERIVES:
+        #   - InstallationDirectory injected into InstallationConfig.xml
+        #   - the PSM folder (<InstallDir>\PSM)
+        #   - the recordings folder (RecordingDir below, otherwise
         #     <InstallDir>\PSM\Recordings)
-        #   - le chemin PSMConfigureAppLocker.xml (Hardening) => rien a resaisir.
-        # Defaut CyberArk : 'C:\Program Files (x86)\CyberArk'.
+        #   - the PSMConfigureAppLocker.xml path (Hardening) => nothing to re-enter.
+        # CyberArk default: 'C:\Program Files (x86)\CyberArk'.
         InstallDir   = 'D:\CyberArk'
-        RecordingDir = ''            # vide -> <InstallDir>\PSM\Recordings (sinon chemin absolu)
+        RecordingDir = ''            # empty -> <InstallDir>\PSM\Recordings (otherwise absolute path)
 
-        # --- Injections STATIQUES supplementaires dans les *Config.xml (optionnel) --
-        # InstallationDirectory / RecordingDirectory sont DEJA derives de InstallDir /
-        # RecordingDir ci-dessus : inutile de les remettre ici. N'ajouter ici que
-        # d'autres champs a forcer (ceux-ci PRIMENT). Forme :
+        # --- Additional STATIC injections into the stage *Config.xml files (optional) --
+        # InstallationDirectory / RecordingDirectory are ALREADY derived from InstallDir /
+        # RecordingDir above: no need to re-enter them here. Only add other fields to
+        # force here (those WIN). Shape:
         #   @{ <StageKey> = @{ '<xpath>' = @{ Attribute='Value'; Value='...' } } }
-        # Ex. Installation = @{ "//Parameter[@Name='Company']" = @{ Attribute='Value'; Value='Ma Societe' } }
-        # ATTENTION : XPath sensible a la casse ('Step'/'Parameter', pas 'step').
-        # Si un noeud est introuvable, le script liste les Steps/Parameters disponibles.
+        # E.g. Installation = @{ "//Parameter[@Name='Company']" = @{ Attribute='Value'; Value='My Company' } }
+        # WARNING: XPath is case-sensitive ('Step'/'Parameter', not 'step').
+        # When a node is not found, the script lists the available Steps/Parameters.
         Injections = @{
-            # Comptes de session PSM en DOMAINE (zones.psd1) : ces 2 steps ne
-            # configurent que des utilisateurs LOCAUX (screensaver, proprietes de
-            # session) et echouent avec des comptes de domaine -> desactives.
-            # CONTREPARTIE : l'equivalent doit etre porte par l'AD/GPO pour les
-            # comptes de la zone (comme sur les PSM existants).
+            # PSM session accounts in the DOMAIN (zones.psd1): these 2 steps only
+            # configure LOCAL users (screensaver, session properties) and fail with
+            # domain accounts -> disabled.
+            # COUNTERPART: the equivalent must be carried by AD/GPO for the zone
+            # accounts (as on the existing PSMs).
             PostInstallation = @{
                 "//Step[@Name='DisableScreenSaver']" = @{ Attribute = 'Enable'; Value = 'No' }
                 "//Step[@Name='ConfigurePSMUsers']"  = @{ Attribute = 'Enable'; Value = 'No' }
@@ -66,57 +66,57 @@
         }
     }
 
-    # --- Enregistrement : injection de l'adresse Vault depuis zones.psd1 --------
-    # Le script ecrit l'adresse Vault (cluster,DR) de la zone dans une COPIE de
-    # RegistrationConfig.xml -> deposer une nouvelle source CyberArk ne demande
-    # AUCUNE edition manuelle du XML. Le champ confirme dans RegistrationConfig.xml
-    # est 'vaultip' (step RegisterPsm) ; le port est un champ separe 'vaultport'.
+    # --- Registration: Vault address injection from zones.psd1 -----------------
+    # The script writes the zone's Vault address (cluster,DR) into a COPY of
+    # RegistrationConfig.xml -> dropping in a new CyberArk source requires
+    # NO manual editing of the XML. The confirmed field in RegistrationConfig.xml
+    # is 'vaultip' (RegisterPsm step); the port is a separate 'vaultport' field.
     Registration = @{
         VaultAddressXPath     = "//Step[@Name='RegisterPsm']/Parameters/Parameter[@Name='vaultip']"
-        VaultAddressAttribute = 'Value'                          # attribut a ecrire (vide = InnerText du noeud)
+        VaultAddressAttribute = 'Value'                          # attribute to write (empty = node's InnerText)
 
-        # --- Convention de nommage des comptes composants -------------------
-        # RegisterComponent.exe genere des noms aleatoires (PSMApp_<hex>/PSMGw_<hex>)
-        # sans AUCUNE option de nommage pour PSM. Apres l'enregistrement, le script
-        # renomme automatiquement (comme fait a la main sur les PSM existants) :
-        # user Vault via l'API PVWA + ligne Username= des cred files (mot de passe
-        # inchange, sauvegarde .orig) + PSMServerId/PSMServerAdminId de basic_psm.ini,
-        # service PSM arrete/relance pendant l'operation. {HOSTNAME} = nom machine
-        # en MAJUSCULES. Mettre RenameComponents = $false pour desactiver.
+        # --- Component account naming convention -------------------------
+        # RegisterComponent.exe generates random names (PSMApp_<hex>/PSMGw_<hex>)
+        # with NO naming option for PSM. After the registration, the script renames
+        # them automatically (as previously done by hand on the existing PSMs):
+        # Vault user via the PVWA API + Username= line of the cred files (password
+        # unchanged, .orig backup) + PSMServerId/PSMServerAdminId of basic_psm.ini,
+        # PSM service stopped/restarted during the operation. {HOSTNAME} = machine
+        # name in UPPERCASE. Set RenameComponents = $false to disable.
         RenameComponents = $true
-        AppUserPattern   = 'PSM-{HOSTNAME}'    # ex. PSM-FRPRDSRV4539  (PSMServerId)
-        GwUserPattern    = 'PSMA{HOSTNAME}'    # ex. PSMAFRPRDSRV4539  (PSMServerAdminId)
+        AppUserPattern   = 'PSM-{HOSTNAME}'    # e.g. PSM-FRPRDSRV4539  (PSMServerId)
+        GwUserPattern    = 'PSMA{HOSTNAME}'    # e.g. PSMAFRPRDSRV4539  (PSMServerAdminId)
     }
 
-    # --- Hardening : comptes de session PSM de DOMAINE (PSMConnect/PSMAdminConnect) --
-    # Ces comptes NE sont PAS des parametres de stage : ils sont declares comme
-    # VARIABLES en tete des scripts de hardening CyberArk, GENERES A L'INSTALLATION
-    # dans <InstallDir>\PSM\Hardening (PAS dans le media) :
+    # --- Hardening: DOMAIN PSM session accounts (PSMConnect/PSMAdminConnect) --
+    # These accounts are NOT stage parameters: they are declared as VARIABLES at
+    # the top of the CyberArk hardening scripts, GENERATED AT INSTALL TIME under
+    # <InstallDir>\PSM\Hardening (NOT in the media):
     #   - PSMHardening.ps1          : $PSM_CONNECT_USER / $PSM_ADMIN_CONNECT_USER
     #   - PSMConfigureAppLocker.ps1 : $PSM_CONNECT      / $PSM_ADMIN_CONNECT
-    # (constate sur un PSM en service ; si le nom differe sur votre version, le
-    # script s'arrete en listant les variables candidates du fichier).
-    # Le patch se fait EN PLACE (sauvegarde .orig, re-jouable) au debut de la phase
-    # Hardening, avec les comptes de la zone (zones.psd1 PSMConnectUserName /
-    # PSMAdminConnectUserName). INACTIF si les comptes de zone sont vides.
-    # Les mots de passe restent geres dans le Safe PSM cote Vault.
+    # (observed on a production PSM; if the name differs on your version, the
+    # script stops and lists the file's candidate variables).
+    # The patch is done IN PLACE (.orig backup, replayable) at the start of the
+    # Hardening phase, with the zone's accounts (zones.psd1 PSMConnectUserName /
+    # PSMAdminConnectUserName). INACTIVE when the zone accounts are empty.
+    # Passwords stay managed in the PSM Safe on the Vault side.
     Hardening = @{
-        # Echec du stage Hardening TOLERE (WARN au lieu d'un arret fail-fast) : le
-        # deploiement se termine meme si des steps de durcissement echouent (cas
-        # rencontre : EDR bloquant les modifications d'ACL systeme, meme takeown).
-        # Les steps en echec restent A REPRENDRE : corriger la cause (exclusion EDR),
-        # retirer 'Hardening' de state\progress.json et relancer. Remettre a $false
-        # une fois l'environnement corrige pour retrouver le comportement strict.
+        # Hardening stage failure TOLERATED (WARN instead of a fail-fast stop): the
+        # deployment completes even when hardening steps fail (observed case: EDR
+        # blocking system ACL modifications, even takeown).
+        # The failed steps remain TO BE REDONE: fix the cause (EDR exclusion),
+        # remove 'Hardening' from state\progress.json and relaunch. Set back to
+        # $false once the environment is fixed to restore the strict behavior.
         NonBlocking  = $true
-        HardeningDir = ''   # vide -> derive de Install.InstallDir (<InstallDir>\PSM\Hardening)
-        # fichier -> nom des variables a patcher (Connect / AdminConnect)
+        HardeningDir = ''   # empty -> derived from Install.InstallDir (<InstallDir>\PSM\Hardening)
+        # file -> name of the variables to patch (Connect / AdminConnect)
         ScriptAccountVariables = @{
             'PSMHardening.ps1'          = @{ Connect = 'PSM_CONNECT_USER'; AdminConnect = 'PSM_ADMIN_CONNECT_USER' }
             'PSMConfigureAppLocker.ps1' = @{ Connect = 'PSM_CONNECT';      AdminConnect = 'PSM_ADMIN_CONNECT' }
         }
     }
 
-    # --- Dossiers de travail (relatifs a la racine des sources) ----------
+    # --- Working folders (relative to the sources root) ------------------
     Paths = @{
         State = 'state'
         Logs  = 'logs'

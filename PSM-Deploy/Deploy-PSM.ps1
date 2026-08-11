@@ -1,221 +1,221 @@
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    Orchestrateur de deploiement idempotent d'un Privileged Session Manager (PSM) CyberArk.
+    Idempotent deployment orchestrator for a CyberArk Privileged Session Manager (PSM).
 
 .DESCRIPTION
-    Execution LOCALE sur chaque serveur PSM, depuis le dossier "sources" auto-portant.
-    Idempotent (facon Ansible) : chaque phase Test -> Set, restitution OK/CHANGED/FAILED.
-    Machine a etats avec reprise automatique apres reboot (RDS/PSM).
-    Fail-fast : arret a la premiere erreur, reprise possible apres correction.
+    Runs LOCALLY on each PSM server, from the self-contained "sources" folder.
+    Idempotent (Ansible-style): every phase Test -> Set, reported OK/CHANGED/FAILED.
+    State machine with automatic resume after reboot (RDS/PSM).
+    Fail-fast: stops at the first error, resumable after fixing.
 
-    Phases (les stages CyberArk sont pilotes via InstallationAutomation\Execute-Stage.ps1) :
-      PreVol -> Readiness -> Prerequisites(RDS) -> [reboot] -> RdsLicensing
-             -> Logiciels -> Installation -> PostInstallation -> [reboot eventuel a chaque stage]
-             -> Registration(secret via API PVWA) -> Hardening(+AppLocker) -> Validation
+    Phases (CyberArk stages are driven via InstallationAutomation\Execute-Stage.ps1):
+      PreFlight -> Readiness -> Prerequisites(RDS) -> [reboot] -> RdsLicensing
+             -> Software -> Installation -> PostInstallation -> [possible reboot at each stage]
+             -> Registration(secret via PVWA API) -> Hardening(+AppLocker) -> Validation
 
 .PARAMETER Zone
-    Cle de zone dans config\zones.psd1 (ex: DC1, DC2). Selectionne Vault/PVWA.
+    Zone key in config\zones.psd1 (e.g. DC1, DC2). Selects Vault/PVWA.
 
 .PARAMETER Resume
-    Reprise apres reboot (declenchee par la tache planifiee). Reprend a la 1ere phase non terminee.
+    Resume after reboot (triggered by the scheduled task). Restarts at the first unfinished phase.
 
 .PARAMETER NonInteractive
-    Saute les confirmations interactives (a reserver a l'automatisation).
+    Skips the interactive confirmations (reserve for automation).
 
 .EXAMPLE
-    # Mode "plan" (dry-run) : ne modifie rien
+    # "Plan" mode (dry-run): changes nothing
     .\Deploy-PSM.ps1 -Zone DC1 -WhatIf
 
 .EXAMPLE
-    # Deploiement reel avec confirmations
+    # Real deployment with confirmations
     .\Deploy-PSM.ps1 -Zone DC1
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    # Zone cible (config\zones.psd1). Obligatoire au premier lancement ; en reprise
-    # (-Resume) elle est relue depuis l'etat si omise (la tache planifiee la transmet).
+    # Target zone (config\zones.psd1). Mandatory on first launch; on resume
+    # (-Resume) it is re-read from state when omitted (the scheduled task passes it).
     [string] $Zone,
     [switch] $Resume,
 
-    # Repart de zero : reinitialise l'etat (progress.json) avant de deployer, pour
-    # rejouer TOUTES les phases (utile apres avoir desinstalle/nettoye le PSM).
-    # Incompatible avec -Resume.
+    # Start from scratch: resets the state (progress.json) before deploying, to
+    # replay ALL phases (useful after uninstalling/cleaning up the PSM).
+    # Incompatible with -Resume.
     [switch] $Reset,
     [switch] $NonInteractive,
 
-    # Compte PVWA de l'admin qui realise l'installation. Si omis en interactif,
-    # il est demande via Get-Credential. Les secrets Vault sont ensuite recuperes
-    # via l'API REST PVWA (pas de CCP/AIM).
+    # PVWA account of the admin performing the installation. When omitted in
+    # interactive mode, it is requested via Get-Credential. Vault secrets are then
+    # retrieved through the PVWA REST API (no CCP/AIM).
     [pscredential] $PvwaCredential
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# --- Localisation & chargement des modules ---------------------------------
+# --- Location & module loading ---------------------------------------------
 $SourcesRoot = $PSScriptRoot
 Get-ChildItem (Join-Path $SourcesRoot 'modules') -Filter '*.psm1' |
     ForEach-Object { Import-Module $_.FullName -Force }
 
-# --- Chargement de la configuration ----------------------------------------
+# --- Configuration loading --------------------------------------------------
 $Settings = Import-PowerShellDataFile (Join-Path $SourcesRoot 'config\settings.psd1')
 $Zones    = Import-PowerShellDataFile (Join-Path $SourcesRoot 'config\zones.psd1')
 $Software = Import-PowerShellDataFile (Join-Path $SourcesRoot 'config\software.psd1')
 
-# --- Init journalisation + etat --------------------------------------------
+# --- Logging + state init ---------------------------------------------------
 $StateDir = Join-Path $SourcesRoot $Settings.Paths.State
 Initialize-PSMLogging -LogDirectory (Join-Path $SourcesRoot $Settings.Paths.Logs)
 Initialize-PSMState   -StateDirectory $StateDir
 
-# La config est copiee/editee a la main par l'equipe : signale les cles manquantes
-# par rapport a cette version du script (fonctionnalites sinon silencieusement inactives).
+# The config is copied/hand-edited by the team: report the keys missing compared
+# to this version of the script (features would otherwise be silently inactive).
 Test-PSMSettingsDrift -Settings $Settings | Out-Null
 
-# --- Reinitialisation eventuelle de l'etat (partir de zero) ----------------
+# --- Optional state reset (start from scratch) ------------------------------
 if ($Reset -and $Resume) {
-    throw "-Reset et -Resume sont incompatibles (repartir de zero vs reprendre)."
+    throw "-Reset and -Resume are incompatible (start from scratch vs resume)."
 }
 if ($Reset) {
     Reset-PSMState
-    Unregister-PSMResumeTask   # supprime une eventuelle tache de reprise perimee
+    Unregister-PSMResumeTask   # removes a possibly stale resume task
 }
 
-# --- Resolution de la zone (parametre, sinon etat en reprise) --------------
+# --- Zone resolution (parameter, otherwise state on resume) -----------------
 if (-not $Zone -and $Resume) {
     $Zone = Get-PSMStateValue -Name 'Zone'
-    if ($Zone) { Write-PSMLog -Level INFO -Message "Reprise : zone '$Zone' relue depuis l'etat." }
+    if ($Zone) { Write-PSMLog -Level INFO -Message "Resume: zone '$Zone' re-read from state." }
 }
 if (-not $Zone) {
-    throw "Parametre -Zone requis pour un premier lancement (aucune zone persistee pour la reprise)."
+    throw "-Zone parameter required for a first launch (no persisted zone available for resume)."
 }
 if (-not $Zones.ContainsKey($Zone)) {
-    throw "Zone '$Zone' inconnue. Zones disponibles : $($Zones.Keys -join ', ')."
+    throw "Unknown zone '$Zone'. Available zones: $($Zones.Keys -join ', ')."
 }
 $ZoneConfig = $Zones[$Zone]
 
-Write-PSMLog -Level INFO -Message "=== Deploiement PSM $($Settings.PsmVersion) | Zone $Zone | Resume=$Resume | WhatIf=$($WhatIfPreference) ==="
+Write-PSMLog -Level INFO -Message "=== PSM deployment $($Settings.PsmVersion) | Zone $Zone | Resume=$Resume | WhatIf=$($WhatIfPreference) ==="
 
-# Programme la reprise supervisee (AtLogOn) puis redemarre. Ne marque PAS la
-# phase courante comme terminee : elle sera rejouee/reprise apres reconnexion.
+# Schedules the supervised resume (AtLogOn) then reboots. Does NOT mark the
+# current phase as completed: it will be replayed/resumed after reconnection.
 function Start-PSMResumeReboot {
     param([Parameter(Mandatory)] [string] $Reason)
-    Write-PSMLog -Level WARN -Message "Reboot requis ($Reason). Programmation de la reprise (AtLogOn) puis redemarrage."
+    Write-PSMLog -Level WARN -Message "Reboot required ($Reason). Scheduling the resume (AtLogOn) then restarting."
     $installUser = Get-PSMStateValue -Name 'InstallUser'
     if (-not $installUser) { $installUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name }
     Register-PSMResumeTask -ScriptPath $PSCommandPath -Zone $Zone -User $installUser
-    Write-PSMLog -Level WARN -Message "Reconnectez-vous avec le compte '$installUser' : le deploiement reprendra automatiquement."
+    Write-PSMLog -Level WARN -Message "Reconnect with account '$installUser': the deployment will resume automatically."
     Restart-Computer -Force
 }
 
 try {
     Assert-PSMElevation
 
-    # ===================== PHASE : PreVol =====================
-    if (-not (Test-PSMPhaseComplete 'PreVol')) {
+    # ===================== PHASE: PreFlight =====================
+    if (-not (Test-PSMPhaseComplete 'PreFlight')) {
         Confirm-PSMZone -ZoneConfig $ZoneConfig -NonInteractive:$NonInteractive
-        # Controle de connectivite des serveurs de licence RDS (non bloquant : WARN).
+        # Connectivity check of the RDS license servers (non-blocking: WARN).
         Test-PSMLicenseServers -Servers $Settings.Rds.LicenseServers | Out-Null
-        # Comptes de session PSM de la zone : doivent etre resolubles dans le domaine
-        # MAINTENANT, sinon le Hardening echouera bien plus tard ("identity references
-        # could not be translated"). Piege classique : sAMAccountName limite a 20
-        # caracteres, tronque et different du Name/CN affiche dans la console AD.
+        # The zone's PSM session accounts must resolve in the domain NOW, otherwise
+        # the Hardening will fail much later ("identity references could not be
+        # translated"). Classic trap: sAMAccountName limited to 20 characters,
+        # truncated and therefore different from the Name/CN shown in the AD console.
         foreach ($acctKey in 'PSMConnectUserName', 'PSMAdminConnectUserName') {
             $acct = Get-PSMConfigValue -Config $ZoneConfig -Key $acctKey
             if ($acct -and -not (Test-PSMDomainAccount -Account $acct)) {
-                throw ("PreVol : compte de zone '$acct' ($acctKey) irresoluble dans le domaine. " +
-                       "Verifier le sAMAccountName REEL du compte dans l'AD (limite 20 caracteres, " +
-                       "souvent tronque par rapport au Name/CN) et corriger zones.psd1.")
+                throw ("PreFlight: zone account '$acct' ($acctKey) cannot be resolved in the domain. " +
+                       "Check the account's REAL sAMAccountName in AD (20-character limit, " +
+                       "often truncated compared to the Name/CN) and fix zones.psd1.")
             }
         }
-        # TODO (deploiement) : verifs connectivite Vault/PVWA, OS supporte, media present.
-        if ($PSCmdlet.ShouldProcess('PreVol', 'Valider les prerequis de vol')) {
-            # Persiste la zone + l'admin installateur pour la reprise apres reboot.
+        # TODO (deployment): Vault/PVWA connectivity checks, supported OS, media present.
+        if ($PSCmdlet.ShouldProcess('PreFlight', 'Validate the pre-flight requirements')) {
+            # Persist the zone + the installing admin for the resume after reboot.
             Set-PSMStateValue -Name 'Zone'        -Value $Zone
             Set-PSMStateValue -Name 'InstallUser' -Value ([Security.Principal.WindowsIdentity]::GetCurrent().Name)
-            Set-PSMPhaseComplete 'PreVol'
+            Set-PSMPhaseComplete 'PreFlight'
         }
     }
 
-    # Filet de securite : la tache de reprise (AtLogOn) est armee DES MAINTENANT,
-    # pas seulement quand l'orchestrateur decide lui-meme d'un reboot. Certains
-    # installeurs CyberArk redemarrent la machine SANS rendre la main (constate au
-    # stage Installation) : sans cette tache pre-armee, plus rien ne reprend apres
-    # reconnexion. Supprimee en fin de deploiement (Unregister-PSMResumeTask).
+    # Safety net: the resume task (AtLogOn) is armed RIGHT NOW, not only when the
+    # orchestrator itself decides to reboot. Some CyberArk installers restart the
+    # machine WITHOUT returning control (observed at the Installation stage):
+    # without this pre-armed task, nothing would resume after reconnection.
+    # Removed at the end of the deployment (Unregister-PSMResumeTask).
     if (-not $WhatIfPreference) {
         $resumeUser = Get-PSMStateValue -Name 'InstallUser'
         if (-not $resumeUser) { $resumeUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name }
         Register-PSMResumeTask -ScriptPath $PSCommandPath -Zone $Zone -User $resumeUser
     }
 
-    # ===================== STAGE CyberArk : Readiness =====================
+    # ===================== CyberArk STAGE: Readiness =====================
     if (-not (Test-PSMPhaseComplete 'Readiness')) {
         $r = Invoke-PSMReadiness -Settings $Settings -SourcesRoot $SourcesRoot
-        if (-not $r.Succeeded) { throw "Stage Readiness en echec : $($r.ErrorData)" }
-        if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'stage Readiness'; return }
+        if (-not $r.Succeeded) { throw "Readiness stage failed: $($r.ErrorData)" }
+        if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'Readiness stage'; return }
         if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'Readiness' }
     }
 
-    # ===================== STAGE CyberArk : Prerequisites (RDS, .NET, NLA...) =====================
+    # ===================== CyberArk STAGE: Prerequisites (RDS, .NET, NLA...) =====================
     if (-not (Test-PSMPhaseComplete 'Prerequisites')) {
         $r = Invoke-PSMPrerequisites -Settings $Settings -SourcesRoot $SourcesRoot
-        if (-not $r.Succeeded) { throw "Stage Prerequisites en echec : $($r.ErrorData)" }
-        if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'stage Prerequisites (RDS)'; return }
+        if (-not $r.Succeeded) { throw "Prerequisites stage failed: $($r.ErrorData)" }
+        if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'Prerequisites stage (RDS)'; return }
         if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'Prerequisites' }
     }
 
-    # ===================== PHASE : Licence RDS (locale, apres RDS installe) =====================
+    # ===================== PHASE: RDS licensing (local, after RDS is installed) =====================
     if (-not (Test-PSMPhaseComplete 'RdsLicensing')) {
         Invoke-PSMRdsLicensing -Settings $Settings
         if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'RdsLicensing' }
     }
 
-    # ===================== PHASE : Logiciels additionnels =====================
+    # ===================== PHASE: Additional software =====================
     if (-not (Test-PSMPhaseComplete 'Software')) {
         Invoke-PSMSoftware -SoftwareList $Software.Applications -SourcesRoot $SourcesRoot
         if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'Software' }
     }
 
-    # ===================== STAGE CyberArk : Installation =====================
+    # ===================== CyberArk STAGE: Installation =====================
     if (-not (Test-PSMPhaseComplete 'Installation')) {
         $r = Invoke-PSMInstall -Settings $Settings -SourcesRoot $SourcesRoot
-        if (-not $r.Succeeded) { throw "Stage Installation en echec : $($r.ErrorData)" }
-        if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'stage Installation'; return }
+        if (-not $r.Succeeded) { throw "Installation stage failed: $($r.ErrorData)" }
+        if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'Installation stage'; return }
         if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'Installation' }
     }
 
-    # ===================== STAGE CyberArk : PostInstallation =====================
+    # ===================== CyberArk STAGE: PostInstallation =====================
     if (-not (Test-PSMPhaseComplete 'PostInstallation')) {
-        # Comptes PSM de domaine propages aux constantes du framework CyberArk
-        # (InstallationAutomation\Consts.ps1) avant les steps qui les consomment.
+        # Zone's domain PSM accounts propagated to the CyberArk framework constants
+        # (InstallationAutomation\Consts.ps1) before the steps that consume them.
         Set-PSMAutomationConsts -Settings $Settings -SourcesRoot $SourcesRoot -ZoneConfig $ZoneConfig | Out-Null
         $r = Invoke-PSMPostInstall -Settings $Settings -SourcesRoot $SourcesRoot
-        if (-not $r.Succeeded) { throw "Stage PostInstallation en echec : $($r.ErrorData)" }
-        if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'stage PostInstallation'; return }
+        if (-not $r.Succeeded) { throw "PostInstallation stage failed: $($r.ErrorData)" }
+        if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'PostInstallation stage'; return }
         if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'PostInstallation' }
     }
 
-    # ===================== STAGE CyberArk : Registration (secret via PVWA) =====================
+    # ===================== CyberArk STAGE: Registration (secret via PVWA) =====================
     if (-not (Test-PSMPhaseComplete 'Registration')) {
         if ($WhatIfPreference) {
-            Write-PSMLog -Level INFO -Message "WhatIf : le stage Registration serait execute (mot de passe Vault recupere via l'API PVWA)."
+            Write-PSMLog -Level INFO -Message "WhatIf: the Registration stage would run (Vault password retrieved via the PVWA API)."
         }
         else {
-            # 1) Authentification PVWA de l'admin realisant l'installation.
+            # 1) PVWA authentication of the admin performing the installation.
             $pvwaCred = $PvwaCredential
             if (-not $pvwaCred) {
                 if ($NonInteractive) {
-                    throw "PVWA : credential requis en mode NonInteractive (parametre -PvwaCredential)."
+                    throw "PVWA: credential required in NonInteractive mode (-PvwaCredential parameter)."
                 }
-                $pvwaCred = Get-Credential -Message "Compte PVWA de l'admin ($($ZoneConfig.PvwaAuthMethod)) - zone $($ZoneConfig.Name)"
+                $pvwaCred = Get-Credential -Message "Admin PVWA account ($($ZoneConfig.PvwaAuthMethod)) - zone $($ZoneConfig.Name)"
             }
 
             $session = Connect-PvwaSession -PvwaUrl $ZoneConfig.PvwaUrl -Credential $pvwaCred `
                             -AuthMethod $ZoneConfig.PvwaAuthMethod `
                             -SkipCertificateCheck:$ZoneConfig.SkipCertificateCheck
             try {
-                # 2) Mot de passe du compte d'install/admin Vault via l'API PVWA
-                #    (sinon on reutilise le compte de l'admin connecte).
+                # 2) Vault install/admin account password via the PVWA API
+                #    (otherwise the connected admin's account is reused).
                 if ($ZoneConfig.InstallAccountSafe) {
                     $install = Get-PvwaAccountPassword -Session $session `
                                     -Safe     $ZoneConfig.InstallAccountSafe `
@@ -226,17 +226,17 @@ try {
                     $installCred = $pvwaCred
                 }
 
-                # 3) Stage Registration CyberArk : l'adresse Vault (cluster,DR) vient
-                #    de zones.psd1 et est injectee dans une copie de RegistrationConfig.xml
-                #    (on ne modifie pas le media). Mot de passe injecte via -spwdObj.
+                # 3) CyberArk Registration stage: the Vault address (cluster,DR) comes
+                #    from zones.psd1 and is injected into a copy of RegistrationConfig.xml
+                #    (the media is not modified). Password injected via -spwdObj.
                 $r = Invoke-PSMRegister -Settings $Settings -SourcesRoot $SourcesRoot `
                         -InstallCredential $installCred `
                         -VaultAddress $ZoneConfig.VaultAddress
 
-                # 4) Convention de nommage des comptes composants (PSM-<HOST> / PSMA<HOST>) :
-                #    RegisterComponent.exe genere des noms aleatoires (PSMApp_<hex>) sans
-                #    option de nommage -> renommage automatise apres l'enregistrement
-                #    (Vault via la session PVWA encore ouverte + cred files + basic_psm.ini).
+                # 4) Component account naming convention (PSM-<HOST> / PSMA<HOST>):
+                #    RegisterComponent.exe generates random names (PSMApp_<hex>) with no
+                #    naming option -> automated rename right after the registration
+                #    (Vault via the still-open PVWA session + cred files + basic_psm.ini).
                 if ($r.Succeeded) {
                     Rename-PSMComponentAccounts -Settings $Settings -Session $session | Out-Null
                 }
@@ -244,61 +244,61 @@ try {
             finally {
                 Disconnect-PvwaSession -Session $session
             }
-            if (-not $r.Succeeded) { throw "Stage Registration en echec : $($r.ErrorData)" }
-            if ($r.RestartRequired) { Start-PSMResumeReboot -Reason 'stage Registration'; return }
+            if (-not $r.Succeeded) { throw "Registration stage failed: $($r.ErrorData)" }
+            if ($r.RestartRequired) { Start-PSMResumeReboot -Reason 'Registration stage'; return }
             Set-PSMPhaseComplete 'Registration'
         }
     }
 
-    # ===================== STAGE CyberArk : Hardening (+ AppLocker) =====================
+    # ===================== CyberArk STAGE: Hardening (+ AppLocker) =====================
     if (-not (Test-PSMPhaseComplete 'Hardening')) {
-        # Comptes de session PSM de domaine : Consts.ps1 (framework) + variables des
-        # scripts PSMHardening.ps1 / PSMConfigureAppLocker.ps1 (via Invoke-PSMHardening).
+        # Domain PSM session accounts: Consts.ps1 (framework) + variables of the
+        # PSMHardening.ps1 / PSMConfigureAppLocker.ps1 scripts (via Invoke-PSMHardening).
         Set-PSMAutomationConsts -Settings $Settings -SourcesRoot $SourcesRoot -ZoneConfig $ZoneConfig | Out-Null
         $r = Invoke-PSMHardening -Settings $Settings -SourcesRoot $SourcesRoot -ZoneConfig $ZoneConfig
         if (-not $r.Succeeded) {
-            # Hardening.NonBlocking : l'echec du durcissement ne bloque pas le
-            # deploiement (ex. EDR qui bloque les modifications d'ACL systeme).
-            # Les steps en echec restent A REPRENDRE une fois la cause corrigee.
+            # Hardening.NonBlocking: a hardening failure does not block the deployment
+            # (e.g. EDR blocking system ACL modifications). The failed steps remain
+            # TO BE REDONE once the cause is fixed.
             $hCfg = Get-PSMConfigValue -Config $Settings -Key 'Hardening'
             $tolerated = $hCfg -and [bool](Get-PSMConfigValue -Config $hCfg -Key 'NonBlocking')
             if ($tolerated) {
-                Write-PSMLog -Level WARN -Message ("Stage Hardening en ECHEC TOLERE (Hardening.NonBlocking) : $($r.ErrorData) " +
-                    "-> deploiement poursuivi. A REPRENDRE : corriger la cause (ex. exclusion EDR), retirer 'Hardening' " +
-                    "de state\progress.json puis relancer, ou rejouer les steps en echec via Execute-Stage.")
+                Write-PSMLog -Level WARN -Message ("Hardening stage FAILURE TOLERATED (Hardening.NonBlocking): $($r.ErrorData) " +
+                    "-> deployment continues. TO BE REDONE: fix the cause (e.g. EDR exclusion), remove 'Hardening' " +
+                    "from state\progress.json then relaunch, or replay the failed steps via Execute-Stage.")
             }
             else {
-                throw "Stage Hardening en echec : $($r.ErrorData)"
+                throw "Hardening stage failed: $($r.ErrorData)"
             }
         }
-        if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'stage Hardening'; return }
+        if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'Hardening stage'; return }
         if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'Hardening' }
     }
 
-    # ===================== PHASE : Validation =====================
+    # ===================== PHASE: Validation =====================
     if (-not (Test-PSMPhaseComplete 'Validation')) {
         if (Test-PSMInstalled) {
-            Write-PSMLog -Level OK   -Message "Validation : service PSM present."
+            Write-PSMLog -Level OK   -Message "Validation: PSM service present."
         }
         else {
-            Write-PSMLog -Level WARN -Message "Validation : service PSM introuvable (a verifier)."
+            Write-PSMLog -Level WARN -Message "Validation: PSM service not found (to be checked)."
         }
         if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'Validation' }
     }
 
-    # Nettoyage de la tache de reprise une fois tout termine.
+    # Resume task cleanup once everything is done.
     Unregister-PSMResumeTask
-    Write-PSMLog -Level OK -Message "Deploiement termine."
+    Write-PSMLog -Level OK -Message "Deployment completed."
 }
 catch {
-    Write-PSMLog -Level ERROR -Message "Arret (fail-fast) : $($_.Exception.Message)"
-    Write-PSMLog -Level WARN  -Message ("La tache 'PSM-Deploy-Resume' reste armee : apres correction, le deploiement " +
-        "reprendra a la reconnexion (ou relancer .\Deploy-PSM.ps1 -Zone $Zone). " +
-        "Pour l'annuler : Unregister-ScheduledTask PSM-Deploy-Resume.")
+    Write-PSMLog -Level ERROR -Message "Stop (fail-fast): $($_.Exception.Message)"
+    Write-PSMLog -Level WARN  -Message ("The 'PSM-Deploy-Resume' task stays armed: after fixing, the deployment " +
+        "will resume at reconnection (or relaunch .\Deploy-PSM.ps1 -Zone $Zone). " +
+        "To cancel it: Unregister-ScheduledTask PSM-Deploy-Resume.")
     Write-PSMSummary
     exit 1
 }
 
 Write-PSMSummary
-# Code de sortie : 0 = OK ; (convention possible : 2 si des CHANGED) - voir README.
+# Exit code: 0 = OK; (possible convention: 2 when CHANGED) - see README.
 exit 0

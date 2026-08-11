@@ -1,15 +1,15 @@
 <#
 .SYNOPSIS
-    Phase "Hardening" : stage CyberArk "Hardening" via Execute-Stage.ps1.
+    "Hardening" phase: CyberArk "Hardening" stage via Execute-Stage.ps1.
 
 .DESCRIPTION
-    Le stage Hardening applique le durcissement CyberArk et les regles AppLocker
-    (RunTheHardeningScript, SetupAppLockerRules...). La personnalisation "maison"
-    se fait dans HardeningConfig.xml et les CSV du dossier Hardening du media
-    (PSMConfigureRemoteSessionControl.csv, PSMHideDrives.csv, etc.), remplis par
-    l'equipe - pas de politique AppLocker separee a maintenir de notre cote.
+    The Hardening stage applies the CyberArk hardening and the AppLocker rules
+    (RunTheHardeningScript, SetupAppLockerRules...). The in-house customization
+    lives in HardeningConfig.xml and the CSV files of the media's Hardening folder
+    (PSMConfigureRemoteSessionControl.csv, PSMHideDrives.csv, etc.), filled in by
+    the team - no separate AppLocker policy to maintain on our side.
 
-    Renvoie l'objet resultat de Invoke-PSMStage ; l'orchestrateur gere le reboot.
+    Returns the Invoke-PSMStage result object; the orchestrator handles the reboot.
 #>
 
 Set-StrictMode -Version Latest
@@ -17,19 +17,19 @@ $ErrorActionPreference = 'Stop'
 
 function Set-PSMConnectAccounts {
     <#
-        Injecte les comptes de DOMAINE PSMConnect / PSMAdminConnect de la zone dans
-        les VARIABLES en tete des scripts de hardening CyberArk (fichiers GENERES A
-        L'INSTALLATION dans <InstallDir>\PSM\Hardening, PAS dans le media) :
+        Injects the zone's DOMAIN PSMConnect / PSMAdminConnect accounts into the
+        VARIABLES at the top of the CyberArk hardening scripts (files GENERATED AT
+        INSTALL TIME under <InstallDir>\PSM\Hardening, NOT in the media):
           - PSMHardening.ps1          : $PSM_CONNECT_USER / $PSM_ADMIN_CONNECT_USER
           - PSMConfigureAppLocker.ps1 : $PSM_CONNECT      / $PSM_ADMIN_CONNECT
-        (mapping configurable : settings.psd1 Hardening.ScriptAccountVariables).
+        (configurable mapping: settings.psd1 Hardening.ScriptAccountVariables).
 
-        Patch EN PLACE avec sauvegarde '.orig' faite une seule fois ; on repart
-        TOUJOURS de l'original -> re-jeu idempotent, pas de cumul. Les mots de
-        passe ne sont PAS touches (Safe PSM cote Vault).
+        Patched IN PLACE with a '.orig' backup made only once; we ALWAYS start
+        over from the original -> replayable, no stacking. Passwords are NOT
+        touched (PSM Safe on the Vault side).
 
-        INACTIF si la zone ne fournit aucun compte : ne fait rien et renvoie $false.
-        Renvoie $true si au moins un fichier a ete patche.
+        INACTIVE when the zone provides no account: does nothing and returns $false.
+        Returns $true when at least one file was patched.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -40,14 +40,14 @@ function Set-PSMConnectAccounts {
 
     $psmConnect = Get-PSMConfigValue -Config $ZoneConfig -Key 'PSMConnectUserName'
     $psmAdmin   = Get-PSMConfigValue -Config $ZoneConfig -Key 'PSMAdminConnectUserName'
-    if (-not $psmConnect -and -not $psmAdmin) { return $false }   # rien a injecter
+    if (-not $psmConnect -and -not $psmAdmin) { return $false }   # nothing to inject
 
     $h = Get-PSMConfigValue -Config $Settings -Key 'Hardening'
-    if (-not $h) { throw "settings.psd1 : bloc 'Hardening' absent (comptes de zone fournis)." }
+    if (-not $h) { throw "settings.psd1: 'Hardening' block missing (zone accounts provided)." }
     $varMap = Get-PSMConfigValue -Config $h -Key 'ScriptAccountVariables'
-    if (-not $varMap) { throw "settings.psd1 : Hardening.ScriptAccountVariables non defini (comptes de zone fournis)." }
+    if (-not $varMap) { throw "settings.psd1: Hardening.ScriptAccountVariables not set (zone accounts provided)." }
 
-    # Dossier Hardening explicite si fourni, sinon DERIVE de Install.InstallDir.
+    # Explicit Hardening folder when provided, otherwise DERIVED from Install.InstallDir.
     $hardDir = Get-PSMConfigValue -Config $h -Key 'HardeningDir'
     if (-not $hardDir) { $hardDir = (Get-PSMInstallPaths -Settings $Settings).HardeningDir }
 
@@ -56,7 +56,7 @@ function Set-PSMConnectAccounts {
         $filePath = Join-Path $hardDir $fileName
         $map      = $varMap[$fileName]
 
-        # Variables a ecrire dans CE fichier (seulement les comptes fournis).
+        # Variables to write in THIS file (only the provided accounts).
         $todo = @()
         $vConnect = Get-PSMConfigValue -Config $map -Key 'Connect'
         $vAdmin   = Get-PSMConfigValue -Config $map -Key 'AdminConnect'
@@ -64,37 +64,37 @@ function Set-PSMConnectAccounts {
         if ($psmAdmin   -and $vAdmin)   { $todo += ,@($vAdmin,   $psmAdmin) }
         if (-not $todo) { continue }
 
-        if (-not $PSCmdlet.ShouldProcess($filePath, 'Patcher les variables de comptes PSM (domaine)')) {
-            Write-PSMLog -Level INFO -Message "WhatIf : '$fileName' serait patche (comptes de domaine)."
+        if (-not $PSCmdlet.ShouldProcess($filePath, 'Patch the PSM account variables (domain)')) {
+            Write-PSMLog -Level INFO -Message "WhatIf: '$fileName' would be patched (domain accounts)."
             continue
         }
         if (-not (Test-Path $filePath)) {
-            throw "'$fileName' introuvable : $filePath (genere a l'INSTALLATION ; verifier Install.InstallDir / Hardening.HardeningDir)."
+            throw "'$fileName' not found: $filePath (generated at INSTALL time; check Install.InstallDir / Hardening.HardeningDir)."
         }
 
-        # Sauvegarde de l'original une seule fois ; on repart TOUJOURS de l'original.
+        # Back up the original only once; ALWAYS start over from the original.
         $backup = "$filePath.orig"
         if (-not (Test-Path $backup)) { Copy-Item -Path $filePath -Destination $backup -Force }
         $content = Get-Content -Path $backup -Raw
 
         foreach ($t in $todo) {
             $varName = $t[0]; $value = [string]$t[1]
-            # Premiere affectation de la variable : $VAR = "..." ou '...' (quote preservee).
+            # First assignment of the variable: $VAR = "..." or '...' (quote preserved).
             $pattern = '(?m)^(\s*\$' + [regex]::Escape($varName) + '\s*=\s*)(["''])(.*?)\2'
             $rx = [regex]$pattern
             if (-not $rx.IsMatch($content)) {
-                # Aide au diagnostic : liste les affectations candidates du fichier.
+                # Diagnostic aid: lists the file's candidate assignments.
                 $cands = ([regex]::Matches($content, '(?m)^\s*\$(\w*PSM\w*)\s*=') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique) -join ', '
-                throw ("'$fileName' : variable `$$varName introuvable. Variables candidates : $cands. " +
-                       'Ajuster settings.psd1 Hardening.ScriptAccountVariables.')
+                throw ("'$fileName': variable `$$varName not found. Candidate variables: $cands. " +
+                       'Adjust settings.psd1 Hardening.ScriptAccountVariables.')
             }
-            $safeValue = $value.Replace('$', '$$')   # neutralise les substitutions regex
+            $safeValue = $value.Replace('$', '$$')   # neutralizes regex substitutions
             $content   = $rx.Replace($content, ('${1}${2}' + $safeValue + '${2}'), 1)
-            Write-PSMLog -Level INFO -Message "'$fileName' : `$$varName <- '$value'"
+            Write-PSMLog -Level INFO -Message "'$fileName': `$$varName <- '$value'"
         }
 
         Set-Content -Path $filePath -Value $content -NoNewline
-        Write-PSMLog -Level INFO -Message "'$fileName' patche (comptes de domaine) -> $filePath"
+        Write-PSMLog -Level INFO -Message "'$fileName' patched (domain accounts) -> $filePath"
         $patched = $true
     }
     return $patched
@@ -105,11 +105,11 @@ function Invoke-PSMHardening {
     param(
         [Parameter(Mandatory)] $Settings,
         [Parameter(Mandatory)] [string] $SourcesRoot,
-        $ZoneConfig     # comptes PSMConnect/PSMAdminConnect de la zone (facultatif)
+        $ZoneConfig     # zone's PSMConnect/PSMAdminConnect accounts (optional)
     )
-    # Comptes de session de DOMAINE : patch en place des variables de
-    # PSMHardening.ps1 / PSMConfigureAppLocker.ps1 AVANT de lancer le stage
-    # (les steps RunHardening / RunApplocker relisent ces scripts ensuite).
+    # Domain session accounts: in-place patch of the PSMHardening.ps1 /
+    # PSMConfigureAppLocker.ps1 variables BEFORE running the stage
+    # (the RunHardening / RunApplocker steps re-read these scripts afterwards).
     Set-PSMConnectAccounts -Settings $Settings -ZoneConfig $ZoneConfig | Out-Null
 
     $stage = Resolve-PSMStageConfig -Settings $Settings -SourcesRoot $SourcesRoot -StageKey 'Hardening'

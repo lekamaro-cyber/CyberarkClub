@@ -1,18 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Politique AppLocker CONTROLEE pour le PSM (versionnee avec le script de deploiement).
-  Objectif : garder la maitrise de l'AppLocker plutot que d'appliquer la politique
-  par defaut telle quelle, et y inclure les binaires additionnels (cf. config\software.psd1).
+  CONTROLLED AppLocker policy for the PSM (versioned with the deployment script).
+  Goal: keep control of the AppLocker policy instead of applying the default one
+  as-is, and include the additional binaries in it (see config\software.psd1).
 
-  Ce fichier est un PLACEHOLDER : a remplir au moment du deploiement a partir du
-  PSMConfigureAppLocker de reference CyberArk (version 12.6 / 14.0), augmente des
-  regles correspondant a chaque application listee dans software.psd1.
+  This file is a PLACEHOLDER: to be filled in at deployment time from the
+  CyberArk reference PSMConfigureAppLocker (version 12.6 / 14.0), extended with
+  the rules matching each application listed in software.psd1.
 
-  TODO (deploiement) :
-    - Partir du modele CyberArk de la version cible.
-    - Ajouter une regle Allow par binaire additionnel installe.
-    - Verifier que les chemins/editeurs correspondent aux installeurs reels.
+  TODO (deployment):
+    - Start from the CyberArk template of the target version.
+    - Add an Allow rule per additional installed binary.
+    - Check that the paths/publishers match the real installers.
 -->
 <AppLockerPolicy Version="1">
-  <!-- TODO : RuleCollections (Exe / Script / Dll / Msi) a definir au deploiement. -->
+  <!-- TODO: RuleCollections (Exe / Script / Dll / Msi) to define at deployment time. -->
 </AppLockerPolicy>

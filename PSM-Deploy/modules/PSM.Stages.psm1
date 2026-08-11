@@ -1,19 +1,19 @@
 <#
 .SYNOPSIS
-    Pilotage "etape par etape" du framework d'automatisation CyberArk
+    "Stage-by-stage" driving of the CyberArk automation framework
     (InstallationAutomation\Execute-Stage.ps1).
 
 .DESCRIPTION
-    Notre orchestrateur appelle CyberArk stage par stage (Installation,
-    PostInstallation, Registration, Hardening...). Chaque stage est decrit par
-    son fichier de config XML (rempli par l'equipe). Execute-Stage.ps1 :
-      - s'appelle avec  -configFilePath <xml> -silentMode Silent -displayJson
-      - accepte le mot de passe Vault via -spwdObj (SecureString) [Registration]
-      - renvoie un JSON : { isSucceeded (0=OK,1=Warn,2=Err), errorData, logPath,
+    Our orchestrator calls CyberArk stage by stage (Installation,
+    PostInstallation, Registration, Hardening...). Each stage is described by
+    its XML config file (filled in by the team). Execute-Stage.ps1:
+      - is called with  -configFilePath <xml> -silentMode Silent -displayJson
+      - accepts the Vault password via -spwdObj (SecureString) [Registration]
+      - returns JSON: { isSucceeded (0=OK,1=Warn,2=Err), errorData, logPath,
         restartRequired }
-      - gere sa PROPRE reprise par etape (registre Recovery) ; c'est a l'APPELANT
-        de rebooter quand restartRequired = $true (repris ensuite via notre tache
-        AtLogOn qui relance le meme stage).
+      - handles its OWN per-step recovery (Recovery registry); it is up to the
+        CALLER to reboot when restartRequired = $true (then resumed through our
+        AtLogOn task which reruns the same stage).
 #>
 
 Set-StrictMode -Version Latest
@@ -21,8 +21,8 @@ $ErrorActionPreference = 'Stop'
 
 function Get-PSMStagePaths {
     <#
-        Construit les chemins du framework CyberArk pour un stage donne
-        (racine media -> InstallationAutomation -> Execute-Stage.ps1 + config XML).
+        Builds the CyberArk framework paths for a given stage
+        (media root -> InstallationAutomation -> Execute-Stage.ps1 + XML config).
     #>
     [CmdletBinding()]
     param(
@@ -36,7 +36,7 @@ function Get-PSMStagePaths {
 
     $rel = $Settings.Install.Stages[$StageKey]
     if (-not $rel) {
-        throw "Aucun fichier de config declare pour le stage '$StageKey' (settings.psd1 Install.Stages)."
+        throw "No config file declared for stage '$StageKey' (settings.psd1 Install.Stages)."
     }
     $config = Join-Path $iaRoot $rel
 
@@ -50,14 +50,14 @@ function Get-PSMStagePaths {
 
 function Update-PSMStageXml {
     <#
-        Injecte des valeurs (depuis notre config) dans un *Config.xml de stage
-        CyberArk et enregistre une COPIE patchee dans state\config\<Stage>\.
-        Le media reste intact -> deposer une nouvelle source ne demande aucune
-        edition manuelle des XML.
+        Injects values (from our config) into a CyberArk stage *Config.xml and
+        saves a patched COPY under state\config\<Stage>\.
+        The media stays intact -> dropping in a new source requires no manual
+        editing of the XML files.
 
         -Injections : table @{ '<xpath>' = @{ Attribute='Value'; Value='...' } }
-                      (Attribute vide => on ecrit l'InnerText du noeud).
-        Renvoie le chemin de la copie patchee a passer a Execute-Stage.
+                      (empty Attribute => the node's InnerText is written).
+        Returns the path of the patched copy to pass to Execute-Stage.
     #>
     [CmdletBinding()]
     param(
@@ -67,7 +67,7 @@ function Update-PSMStageXml {
         [Parameter(Mandatory)] [string]    $StageName
     )
     if (-not (Test-Path $SourceConfigPath)) {
-        throw "Config '$StageName' introuvable : $SourceConfigPath (verifier le media)."
+        throw "'$StageName' config not found: $SourceConfigPath (check the media)."
     }
 
     [xml]$doc = Get-Content -Path $SourceConfigPath -Raw
@@ -77,42 +77,42 @@ function Update-PSMStageXml {
         $value = [string]$spec.Value
         $node  = $doc.SelectSingleNode($xpath)
         if (-not $node) {
-            # Aide au diagnostic : liste Steps et Parameters pour ajuster le XPath
-            # (rappel : XPath sensible a la casse -> 'Step'/'Parameter').
+            # Diagnostic aid: lists Steps and Parameters to help adjust the XPath
+            # (reminder: XPath is case-sensitive -> 'Step'/'Parameter').
             $steps  = ($doc.SelectNodes('//Step')      | ForEach-Object { $_.Name }) -join ', '
             $params = ($doc.SelectNodes('//Parameter') | ForEach-Object { $_.Name }) -join ', '
-            throw ("Config '$StageName' : noeud introuvable (XPath: $xpath - attention a la casse). " +
-                   "Steps disponibles : $steps. Parametres disponibles : $params. Ajuster settings.psd1.")
+            throw ("'$StageName' config: node not found (XPath: $xpath - mind the case). " +
+                   "Available Steps: $steps. Available Parameters: $params. Adjust settings.psd1.")
         }
         if ($spec.Attribute) { [void]$node.SetAttribute($spec.Attribute, $value) }
         else                 { $node.InnerText = $value }
-        Write-PSMLog -Level INFO -Message "Config '$StageName' : '$xpath' <- '$value'"
+        Write-PSMLog -Level INFO -Message "'$StageName' config: '$xpath' <- '$value'"
     }
 
     $outDir = Join-Path $StateDir (Join-Path 'config' $StageName)
     if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir -Force | Out-Null }
     $outXml = Join-Path $outDir (Split-Path $SourceConfigPath -Leaf)
     $doc.Save($outXml)
-    Write-PSMLog -Level INFO -Message "Config '$StageName' patchee -> $outXml"
+    Write-PSMLog -Level INFO -Message "'$StageName' config patched -> $outXml"
     return $outXml
 }
 
 function Set-PSMAutomationConsts {
     <#
-        Propage les comptes de DOMAINE PSMConnect / PSMAdminConnect de la zone dans
-        InstallationAutomation\Consts.ps1 du media :
+        Propagates the zone's DOMAIN PSMConnect / PSMAdminConnect accounts into the
+        media's InstallationAutomation\Consts.ps1:
             Set-Variable PSM_CONNECT       -value "PSMConnect"
             Set-Variable PSM_ADMIN_CONNECT -value "PSMAdminConnect"
-        Ces constantes sont consommees par les steps d'automatisation eux-memes
+        These constants are consumed by the automation steps themselves
         (ConfigureOutOfDomainPSMServer, EnableUsersToPrintPSMSessions...).
 
-        Seule entorse au principe "media intact" : Consts.ps1 est charge par le
-        framework depuis SON dossier (pas de -configFilePath pour le rediriger vers
-        une copie). Patch EN PLACE avec sauvegarde '.orig' faite une seule fois ;
-        on repart TOUJOURS de l'original -> re-jouable, et une NOUVELLE source
-        deposee est re-patchee automatiquement (toujours zero edition manuelle).
+        Only exception to the "media intact" principle: Consts.ps1 is loaded by the
+        framework from ITS OWN folder (no -configFilePath to redirect it to a copy).
+        Patched IN PLACE with a '.orig' backup made only once; we ALWAYS start over
+        from the original -> replayable, and a NEWLY dropped source is re-patched
+        automatically (still zero manual editing).
 
-        INACTIF si la zone ne fournit aucun compte : renvoie $false sans rien faire.
+        INACTIVE when the zone provides no account: returns $false without doing anything.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -128,15 +128,15 @@ function Set-PSMAutomationConsts {
     $mediaPsm = Join-Path $SourcesRoot $Settings.Install.MediaRelativePath
     $path     = Join-Path (Join-Path $mediaPsm $Settings.Install.InstallationAutomationSubPath) 'Consts.ps1'
 
-    if (-not $PSCmdlet.ShouldProcess($path, 'Patcher Consts.ps1 (comptes PSM de domaine)')) {
-        Write-PSMLog -Level INFO -Message "WhatIf : Consts.ps1 serait patche (comptes de domaine)."
+    if (-not $PSCmdlet.ShouldProcess($path, 'Patch Consts.ps1 (domain PSM accounts)')) {
+        Write-PSMLog -Level INFO -Message "WhatIf: Consts.ps1 would be patched (domain accounts)."
         return $false
     }
     if (-not (Test-Path $path)) {
-        throw "Consts.ps1 introuvable : $path (verifier le media dans media\PSM)."
+        throw "Consts.ps1 not found: $path (check the media under media\PSM)."
     }
 
-    # Sauvegarde de l'original une seule fois ; on repart TOUJOURS de l'original.
+    # Back up the original only once; ALWAYS start over from the original.
     $backup = "$path.orig"
     if (-not (Test-Path $backup)) { Copy-Item -Path $path -Destination $backup -Force }
     $content = Get-Content -Path $backup -Raw
@@ -149,32 +149,32 @@ function Set-PSMAutomationConsts {
         $rx = [regex]('(?im)^(\s*Set-Variable\s+' + [regex]::Escape($varName) + '\s+-value\s+)(["''])(.*?)\2')
         if (-not $rx.IsMatch($content)) {
             $cands = ([regex]::Matches($content, '(?im)^\s*Set-Variable\s+(\w+)') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique) -join ', '
-            throw "Consts.ps1 : 'Set-Variable $varName' introuvable. Variables candidates : $cands."
+            throw "Consts.ps1: 'Set-Variable $varName' not found. Candidate variables: $cands."
         }
         $content = $rx.Replace($content, ('${1}${2}' + $value.Replace('$', '$$') + '${2}'), 1)
-        Write-PSMLog -Level INFO -Message "Consts.ps1 : $varName <- '$value'"
+        Write-PSMLog -Level INFO -Message "Consts.ps1: $varName <- '$value'"
     }
 
     Set-Content -Path $path -Value $content -NoNewline
-    Write-PSMLog -Level INFO -Message "Consts.ps1 patche (comptes de domaine) -> $path"
+    Write-PSMLog -Level INFO -Message "Consts.ps1 patched (domain accounts) -> $path"
     return $true
 }
 
 function Resolve-PSMStageConfig {
     <#
-        Point d'entree unique pour obtenir les chemins d'un stage CyberArk PRETS a
-        etre passes a Invoke-PSMStage :
-          - resout Execute-Stage.ps1 + le *Config.xml du media (Get-PSMStagePaths) ;
-          - si des injections sont definies pour ce stage (valeurs STATIQUES depuis
-            settings.psd1 Install.Injections[<StageKey>], fusionnees avec les valeurs
-            DYNAMIQUES passees via -ExtraInjections), patche une COPIE dans
-            state\config\<Stage>\ (media intact) via Update-PSMStageXml ;
-          - sinon renvoie le XML du media tel quel (comportement historique).
+        Single entry point that returns a CyberArk stage's paths READY to be
+        passed to Invoke-PSMStage:
+          - resolves Execute-Stage.ps1 + the media's *Config.xml (Get-PSMStagePaths);
+          - when injections are defined for this stage (STATIC values from
+            settings.psd1 Install.Injections[<StageKey>], merged with the DYNAMIC
+            values passed via -ExtraInjections), patches a COPY under
+            state\config\<Stage>\ (media intact) via Update-PSMStageXml;
+          - otherwise returns the media's XML as-is (historical behavior).
 
-        -ExtraInjections : injections dynamiques (ex. adresse Vault de la zone),
-                           meme forme que Update-PSMStageXml (@{ '<xpath>' = @{ Attribute; Value } }).
-                           Elles priment sur les injections statiques en cas de meme XPath.
-        Renvoie [pscustomobject]@{ ExecuteStage; ConfigFilePath }.
+        -ExtraInjections : dynamic injections (e.g. the zone's Vault address),
+                           same shape as Update-PSMStageXml (@{ '<xpath>' = @{ Attribute; Value } }).
+                           They win over static injections on the same XPath.
+        Returns [pscustomobject]@{ ExecuteStage; ConfigFilePath }.
     #>
     [CmdletBinding()]
     param(
@@ -186,7 +186,7 @@ function Resolve-PSMStageConfig {
     $paths      = Get-PSMStagePaths -Settings $Settings -SourcesRoot $SourcesRoot -StageKey $StageKey
     $configPath = $paths.Config
 
-    # Injections statiques (optionnelles) declarees dans settings.psd1.
+    # Static (optional) injections declared in settings.psd1.
     $injections = @{}
     $staticSet = $null
     if ($Settings.Install.PSObject.Properties.Name -contains 'Injections') {
@@ -201,7 +201,7 @@ function Resolve-PSMStageConfig {
         }
     }
 
-    # Injections dynamiques (priment en cas de conflit de XPath).
+    # Dynamic injections (win on XPath conflicts).
     if ($ExtraInjections) {
         foreach ($xpath in $ExtraInjections.Keys) {
             $injections[$xpath] = $ExtraInjections[$xpath]
@@ -223,9 +223,9 @@ function Resolve-PSMStageConfig {
 
 function Invoke-PSMStage {
     <#
-        Execute un stage CyberArk via Execute-Stage.ps1 et renvoie un objet :
+        Runs a CyberArk stage through Execute-Stage.ps1 and returns an object:
           { StageName, Succeeded, RestartRequired, LogPath, ErrorData, Raw }
-        Respecte -WhatIf (ne lance rien, renvoie un resultat neutre).
+        Honors -WhatIf (runs nothing, returns a neutral result).
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -236,20 +236,20 @@ function Invoke-PSMStage {
     )
 
     if (-not (Test-Path $ExecuteStagePath)) {
-        throw "Execute-Stage.ps1 introuvable : $ExecuteStagePath (verifier le media dans media\PSM)."
+        throw "Execute-Stage.ps1 not found: $ExecuteStagePath (check the media under media\PSM)."
     }
     if (-not (Test-Path $ConfigFilePath)) {
-        throw "Config du stage '$StageName' introuvable : $ConfigFilePath (a remplir par l'equipe)."
+        throw "'$StageName' stage config not found: $ConfigFilePath (to be filled in by the team)."
     }
 
-    if (-not $PSCmdlet.ShouldProcess("Stage CyberArk '$StageName'", 'Executer Execute-Stage.ps1')) {
+    if (-not $PSCmdlet.ShouldProcess("CyberArk stage '$StageName'", 'Run Execute-Stage.ps1')) {
         return [pscustomobject]@{
             StageName = $StageName; Succeeded = $true; RestartRequired = $false
             LogPath = $null; ErrorData = $null; Raw = $null; WhatIf = $true
         }
     }
 
-    Write-PSMLog -Level INFO -Message "Stage CyberArk '$StageName' : execution (Execute-Stage.ps1)..."
+    Write-PSMLog -Level INFO -Message "CyberArk stage '$StageName': running (Execute-Stage.ps1)..."
 
     $params = @{
         configFilePath = $ConfigFilePath
@@ -258,28 +258,28 @@ function Invoke-PSMStage {
     }
     if ($VaultPassword) { $params['spwdObj'] = $VaultPassword }
 
-    # Execute-Stage.ps1 s'appuie sur son propre dossier (modules de stage).
+    # Execute-Stage.ps1 relies on its own folder (stage modules).
     $iaDir = Split-Path $ExecuteStagePath -Parent
     Push-Location $iaDir
     try {
-        # IMPORTANT : les scripts CyberArk ne sont PAS ecrits pour StrictMode.
-        # Nos modules l'activent (Latest) et le script enfant en heriterait, ce qui
-        # provoque des erreurs (NullReference / proprietes absentes). On le desactive
-        # pour l'appel enfant (portee locale a cette fonction).
+        # IMPORTANT: CyberArk's scripts are NOT written for StrictMode.
+        # Our modules enable it (Latest) and the child script would inherit it,
+        # causing errors (NullReference / missing properties). Disable it for the
+        # child call (scope local to this function).
         Set-StrictMode -Off
         $raw = & $ExecuteStagePath @params
     }
     catch {
         $cyberLog = Get-ChildItem "$env:windir\Temp\PSM$StageName-*.log" -ErrorAction SilentlyContinue |
                     Sort-Object LastWriteTime -Descending | Select-Object -First 1
-        $hint = if ($cyberLog) { " Log CyberArk : $($cyberLog.FullName)" } else { '' }
-        throw "Stage '$StageName' : Execute-Stage.ps1 a leve une exception : $($_.Exception.Message).$hint"
+        $hint = if ($cyberLog) { " CyberArk log: $($cyberLog.FullName)" } else { '' }
+        throw "Stage '$StageName': Execute-Stage.ps1 threw an exception: $($_.Exception.Message).$hint"
     }
     finally {
         Pop-Location
     }
 
-    # Execute-Stage renvoie le resultat en JSON (via 'return ... | ConvertTo-Json').
+    # Execute-Stage returns its result as JSON (via 'return ... | ConvertTo-Json').
     $text   = ($raw | Out-String).Trim()
     $result = $null
     try {
@@ -290,20 +290,20 @@ function Invoke-PSMStage {
         if ($m.Success) { $result = $m.Value | ConvertFrom-Json }
     }
     if (-not $result) {
-        throw "Stage '$StageName' : resultat JSON illisible depuis Execute-Stage. Sortie brute : $text"
+        throw "Stage '$StageName': unreadable JSON result from Execute-Stage. Raw output: $text"
     }
 
-    # isSucceeded : 0=Success, 1=Warning, 2=Error
+    # isSucceeded: 0=Success, 1=Warning, 2=Error
     $succeeded = ($result.isSucceeded -eq 0) -or ($result.isSucceeded -eq 1)
 
     if ($result.logPath) {
-        Write-PSMLog -Level INFO -Message "Stage '$StageName' - log CyberArk : $($result.logPath)"
+        Write-PSMLog -Level INFO -Message "Stage '$StageName' - CyberArk log: $($result.logPath)"
     }
     if ($result.isSucceeded -eq 1) {
-        Write-PSMLog -Level WARN -Message "Stage '$StageName' termine avec avertissement(s) - voir le log CyberArk."
+        Write-PSMLog -Level WARN -Message "Stage '$StageName' completed with warning(s) - see the CyberArk log."
     }
     if (-not $succeeded) {
-        Write-PSMLog -Level ERROR -Message "Stage '$StageName' en echec : $($result.errorData)"
+        Write-PSMLog -Level ERROR -Message "Stage '$StageName' failed: $($result.errorData)"
     }
 
     return [pscustomobject]@{

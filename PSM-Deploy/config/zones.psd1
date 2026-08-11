@@ -1,71 +1,72 @@
 @{
     # =====================================================================
-    # Mapping ZONE (datacenter) -> parametres Vault / PVWA.
-    # Les 2 datacenters ont des flux fermes entre eux : on selectionne la
-    # zone au lancement (-Zone) puis on confirme interactivement.
+    # ZONE (datacenter) mapping -> Vault / PVWA parameters.
+    # The 2 datacenters have closed network flows between them: the zone is
+    # selected at launch (-Zone) then confirmed interactively.
     #
-    # Recuperation des secrets : via l'API REST du PVWA (PAS de CCP/AIM).
-    #   -> L'admin qui realise l'installation s'authentifie sur le PVWA
-    #      (il a acces a tous les comptes CyberArk) ; le script recupere a la
-    #      volee le mot de passe du compte d'install/admin Vault.
+    # Secret retrieval: through the PVWA REST API (NO CCP/AIM).
+    #   -> The admin performing the installation authenticates to the PVWA
+    #      (they have access to all CyberArk accounts); the script retrieves
+    #      the Vault install/admin account password on the fly.
     #
-    # InstallAccountSafe / InstallAccountUserName :
-    #   - renseignes -> le script recupere ce compte via l'API PVWA et l'utilise
-    #                   pour l'enregistrement (registration automation du media).
-    #   - vides      -> le script reutilise directement le compte de l'admin
-    #                   connecte au PVWA comme compte d'install.
+    # InstallAccountSafe / InstallAccountUserName:
+    #   - filled in -> the script retrieves this account through the PVWA API and
+    #                  uses it for the registration (media's registration automation).
+    #   - empty     -> the script directly reuses the account of the admin
+    #                  connected to the PVWA as the install account.
     #
-    # SkipCertificateCheck : $true UNIQUEMENT en lab (PVWA a certificat auto-signe).
+    # SkipCertificateCheck: $true ONLY in the lab (PVWA with a self-signed certificate).
     #
-    # VaultAddress : adresse(s) du Vault pour l'ENREGISTREMENT, format "ipCluster,ipDr"
-    #   (cluster/primaire en premier, DR ensuite). Injectee au runtime dans une copie
-    #   de RegistrationConfig.xml -> une nouvelle source CyberArk ne demande aucune
-    #   edition manuelle du XML.
+    # VaultAddress: Vault address(es) for the REGISTRATION, "clusterIp,drIp" format
+    #   (cluster/primary first, DR second). Injected at runtime into a copy of
+    #   RegistrationConfig.xml -> a new CyberArk source requires no manual
+    #   editing of the XML.
     #
-    # PSMConnectUserName / PSMAdminConnectUserName : comptes de session PSM, comptes
-    #   de DOMAINE deja crees (format "DOMAINE\utilisateur"). Les MOTS DE PASSE ne
-    #   sont PAS ici : ils sont geres dans le Safe PSM cote Vault.
-    #   Ces comptes ne sont PAS des parametres de stage : ils sont ecrits dans
-    #   PSMConfigureAppLocker.xml (genere a l'installation), patche EN PLACE au debut
-    #   de la phase Hardening (cf. settings.psd1 Hardening.*). VIDES par defaut =
-    #   injection INACTIVE. Les renseigner ET definir les XPath Hardening.* (a
-    #   confirmer sur le fichier genere) pour activer.
+    # PSMConnectUserName / PSMAdminConnectUserName: PSM session accounts, DOMAIN
+    #   accounts already created (format "DOMAIN\user"). The PASSWORDS are NOT
+    #   here: they are managed in the PSM Safe on the Vault side.
+    #   These accounts are not stage parameters: they are written into the
+    #   hardening script variables and the framework constants (Consts.ps1),
+    #   patched IN PLACE at the start of the relevant phases (see settings.psd1
+    #   Hardening.*). EMPTY by default = injection INACTIVE.
+    #   WARNING: use the account's REAL sAMAccountName (20-character limit, often
+    #   truncated compared to the Name/CN shown in the AD console).
     # =====================================================================
 
-    # --- Bac a sable / PRE (PVWA de test) -------------------------------
+    # --- Sandbox / PRE (test PVWA) ---------------------------------------
     PRE = @{
         Name                   = 'PRE'
-        PvwaUrl                = 'https://<PVWA-PRE>'      # TODO : URL PVWA du bac a sable
+        PvwaUrl                = 'https://<PVWA-PRE>'      # TODO: sandbox PVWA URL
         PvwaAuthMethod         = 'CyberArk'                # CyberArk | LDAP | Windows | RADIUS
-        SkipCertificateCheck   = $true                     # lab : certificat auto-signe tolere
-        VaultAddress           = '<IP-CLUSTER-PRE>,<IP-DR-PRE>'  # cluster,DR
-        InstallAccountSafe     = ''                        # vide -> utilise le compte admin connecte
+        SkipCertificateCheck   = $true                     # lab: self-signed certificate tolerated
+        VaultAddress           = '<CLUSTER-IP-PRE>,<DR-IP-PRE>'  # cluster,DR
+        InstallAccountSafe     = ''                        # empty -> uses the connected admin account
         InstallAccountUserName = ''
-        PSMConnectUserName      = ''   # vide = pas d'injection (cf. note en tete)
+        PSMConnectUserName      = ''   # empty = no injection (see note above)
         PSMAdminConnectUserName = ''
     }
 
     DC1 = @{
         Name                   = 'DC1'
-        PvwaUrl                = 'https://<PVWA-DC1>'      # TODO (deploiement)
-        PvwaAuthMethod         = 'LDAP'                     # admin de domaine -> LDAP en general
+        PvwaUrl                = 'https://<PVWA-DC1>'      # TODO (deployment)
+        PvwaAuthMethod         = 'LDAP'                     # domain admin -> usually LDAP
         SkipCertificateCheck   = $false
-        VaultAddress           = '<IP-CLUSTER-DC1>,<IP-DR-DC1>'  # cluster,DR
-        InstallAccountSafe     = '<SAFE-INSTALL-DC1>'      # Safe du compte d'install Vault
-        InstallAccountUserName = '<USER-INSTALL-DC1>'      # nom du compte d'install a recuperer
-        PSMConnectUserName      = ''   # vide = pas d'injection (cf. note en tete)
+        VaultAddress           = '<CLUSTER-IP-DC1>,<DR-IP-DC1>'  # cluster,DR
+        InstallAccountSafe     = '<INSTALL-SAFE-DC1>'      # Safe of the Vault install account
+        InstallAccountUserName = '<INSTALL-USER-DC1>'      # name of the install account to retrieve
+        PSMConnectUserName      = ''   # empty = no injection (see note above)
         PSMAdminConnectUserName = ''
     }
 
     DC2 = @{
         Name                   = 'DC2'
-        PvwaUrl                = 'https://<PVWA-DC2>'      # TODO (deploiement)
+        PvwaUrl                = 'https://<PVWA-DC2>'      # TODO (deployment)
         PvwaAuthMethod         = 'LDAP'
         SkipCertificateCheck   = $false
-        VaultAddress           = '<IP-CLUSTER-DC2>,<IP-DR-DC2>'  # cluster,DR
-        InstallAccountSafe     = '<SAFE-INSTALL-DC2>'
-        InstallAccountUserName = '<USER-INSTALL-DC2>'
-        PSMConnectUserName      = ''   # vide = pas d'injection (cf. note en tete)
+        VaultAddress           = '<CLUSTER-IP-DC2>,<DR-IP-DC2>'  # cluster,DR
+        InstallAccountSafe     = '<INSTALL-SAFE-DC2>'
+        InstallAccountUserName = '<INSTALL-USER-DC2>'
+        PSMConnectUserName      = ''   # empty = no injection (see note above)
         PSMAdminConnectUserName = ''
     }
 }
