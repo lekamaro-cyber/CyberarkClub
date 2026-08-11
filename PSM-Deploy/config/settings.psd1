@@ -84,8 +84,18 @@
         # PSM service stopped/restarted during the operation. {HOSTNAME} = machine
         # name in UPPERCASE. Set RenameComponents = $false to disable.
         RenameComponents = $true
-        AppUserPattern   = 'PSM-{HOSTNAME}'    # e.g. PSM-FRPRDSRV4539  (PSMServerId)
-        GwUserPattern    = 'PSMA{HOSTNAME}'    # e.g. PSMAFRPRDSRV4539  (PSMServerAdminId)
+        AppUserPattern   = 'PSM-{HOSTNAME}'    # e.g. PSM-FRPRDSRV4539
+        GwUserPattern    = 'PSMA{HOSTNAME}'    # e.g. PSMAFRPRDSRV4539
+
+        # OPT-IN: also update PSMServerId/PSMServerAdminId in basic_psm.ini.
+        # These IDs must stay ALIGNED with the "PSM Server" object in PVWA
+        # (PVConfiguration), which the REST API cannot rename: only enable this
+        # if you ALSO rename the object in PVWA (Administration > Options >
+        # Privileged Session Management > Configured PSM Servers), as done on
+        # the production PSMs. $false = ini left as generated (PSMServer_<hex>),
+        # consistent with PVWA; the Vault users / System Health display name are
+        # renamed either way.
+        RenameServerIds  = $false
     }
 
     # --- Hardening: DOMAIN PSM session accounts (PSMConnect/PSMAdminConnect) --

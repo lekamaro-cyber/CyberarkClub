@@ -78,6 +78,11 @@ function Rename-PSMComponentAccounts {
     )
     $regCfg = Get-PSMConfigValue -Config $Settings -Key 'Registration'
     if (-not $regCfg -or -not (Get-PSMConfigValue -Config $regCfg -Key 'RenameComponents')) { return $false }
+    # basic_psm.ini PSMServerId/PSMServerAdminId must stay ALIGNED with the "PSM
+    # Server" object in PVWA (PVConfiguration), which the REST API cannot rename.
+    # Their update is therefore OPT-IN (Registration.RenameServerIds) and must be
+    # paired with the manual object rename in PVWA Options (as done in production).
+    $renameIds = [bool](Get-PSMConfigValue -Config $regCfg -Key 'RenameServerIds')
 
     $hostName   = $env:COMPUTERNAME.ToUpper()
     $appPattern = Get-PSMConfigValue -Config $regCfg -Key 'AppUserPattern'
@@ -149,16 +154,27 @@ function Rename-PSMComponentAccounts {
             Set-Content -Path $t.CredPath -Value $raw -NoNewline
             Write-PSMLog -Level INFO -Message "Cred file updated: $($t.CredPath) (Username=$($t.NewName))."
         }
-        # 3) basic_psm.ini: matching ID.
-        if ($ini -notmatch ('(?im)^\s*' + $t.IniKey + '\s*=\s*"')) {
-            throw "Rename-PSMComponentAccounts: key '$($t.IniKey)' not found in $iniPath."
+        # 3) basic_psm.ini: matching ID (OPT-IN, see RenameServerIds above).
+        if ($renameIds) {
+            if ($ini -notmatch ('(?im)^\s*' + $t.IniKey + '\s*=\s*"')) {
+                throw "Rename-PSMComponentAccounts: key '$($t.IniKey)' not found in $iniPath."
+            }
+            $ini = ([regex]('(?im)^(\s*' + $t.IniKey + '\s*=\s*")[^"]*(")')).Replace($ini, ('${1}' + $t.NewName + '${2}'), 1)
         }
-        $ini = ([regex]('(?im)^(\s*' + $t.IniKey + '\s*=\s*")[^"]*(")')).Replace($ini, ('${1}' + $t.NewName + '${2}'), 1)
     }
-    $iniBackup = "$iniPath.orig"
-    if (-not (Test-Path $iniBackup)) { Copy-Item -Path $iniPath -Destination $iniBackup -Force }
-    Set-Content -Path $iniPath -Value $ini -NoNewline
-    Write-PSMLog -Level INFO -Message "basic_psm.ini updated (PSMServerId=$appNew, PSMServerAdminId=$gwNew)."
+    if ($renameIds) {
+        $iniBackup = "$iniPath.orig"
+        if (-not (Test-Path $iniBackup)) { Copy-Item -Path $iniPath -Destination $iniBackup -Force }
+        Set-Content -Path $iniPath -Value $ini -NoNewline
+        Write-PSMLog -Level WARN -Message ("basic_psm.ini updated (PSMServerId=$appNew, PSMServerAdminId=$gwNew). " +
+            "REQUIRED PAIRED STEP: rename the PSM server object ID accordingly in PVWA " +
+            "(Administration > Options > Privileged Session Management > Configured PSM Servers), " +
+            "otherwise the PSM will not find its server configuration.")
+    }
+    else {
+        Write-PSMLog -Level INFO -Message ("basic_psm.ini PSMServerId/PSMServerAdminId left unchanged " +
+            "(Registration.RenameServerIds=false): they stay aligned with the PSM server object in PVWA Options.")
+    }
 
     if ($wasRunning) {
         Start-Service -Name 'Cyberark Privileged Session Manager'

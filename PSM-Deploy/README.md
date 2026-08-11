@@ -168,9 +168,12 @@ The resume is **interactive** (the PVWA `Get-Credential` prompts work) and
     (`PSMApp_<hex>`/`PSMGw_<hex>`) **with no naming option** for PSM. After
     registration, the script automatically renames them per the convention
     (`PSM-<HOSTNAME>` / `PSMA<HOSTNAME>`, configurable patterns): Vault user via
-    the PVWA API + `Username=` of the cred files (password unchanged, `.orig` backup)
-    + `PSMServerId`/`PSMServerAdminId` in `basic_psm.ini`, with the PSM service
-    stopped/restarted during the operation. Idempotent (does nothing if already compliant).
+    the PVWA API + `Username=` of the cred files (password unchanged, `.orig` backup),
+    with the PSM service stopped/restarted during the operation. Idempotent (does
+    nothing if already compliant). `PSMServerId`/`PSMServerAdminId` in `basic_psm.ini`
+    are **opt-in** (`Registration.RenameServerIds`, off by default): they must stay
+    aligned with the "PSM Server" object in PVWA Options — enable only if you **also
+    rename that object manually** in PVWA (as done on the production PSMs).
   - **`Hardening.NonBlocking`** (`settings.psd1`, enabled by default): a failure of the
     Hardening stage is **tolerated** (WARN, deployment continues) instead of stopping —
     case encountered: EDR blocking system ACL modifications (even `takeown`). The failed
