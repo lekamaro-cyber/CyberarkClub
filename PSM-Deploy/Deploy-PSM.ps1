@@ -214,37 +214,49 @@ try {
                             -AuthMethod $ZoneConfig.PvwaAuthMethod `
                             -SkipCertificateCheck:$ZoneConfig.SkipCertificateCheck
             try {
-                # 2) Vault install/admin account password via the PVWA API
-                #    (otherwise the connected admin's account is reused).
-                if ($ZoneConfig.InstallAccountSafe) {
-                    $install = Get-PvwaAccountPassword -Session $session `
-                                    -Safe     $ZoneConfig.InstallAccountSafe `
-                                    -UserName $ZoneConfig.InstallAccountUserName
-                    $installCred = $install.Credential
+                # The CyberArk registration itself is tracked SEPARATELY from the phase:
+                # re-running Execute-Stage Registration would create ANOTHER server ID
+                # (CyberArk behavior). If a previous run failed AFTER a successful
+                # registration (e.g. during the component rename), the retry must only
+                # redo the rename - never a second registration.
+                if (-not [bool](Get-PSMStateValue -Name 'RegistrationStageDone')) {
+                    # 2) Vault install/admin account password via the PVWA API
+                    #    (otherwise the connected admin's account is reused).
+                    if ($ZoneConfig.InstallAccountSafe) {
+                        $install = Get-PvwaAccountPassword -Session $session `
+                                        -Safe     $ZoneConfig.InstallAccountSafe `
+                                        -UserName $ZoneConfig.InstallAccountUserName
+                        $installCred = $install.Credential
+                    }
+                    else {
+                        $installCred = $pvwaCred
+                    }
+
+                    # 3) CyberArk Registration stage: the Vault address (cluster,DR) comes
+                    #    from zones.psd1 and is injected into a copy of RegistrationConfig.xml
+                    #    (the media is not modified). Password injected via -spwdObj.
+                    $r = Invoke-PSMRegister -Settings $Settings -SourcesRoot $SourcesRoot `
+                            -InstallCredential $installCred `
+                            -VaultAddress $ZoneConfig.VaultAddress
+                    if (-not $r.Succeeded) { throw "Registration stage failed: $($r.ErrorData)" }
+                    Set-PSMStateValue -Name 'RegistrationStageDone' -Value $true
                 }
                 else {
-                    $installCred = $pvwaCred
+                    Write-PSMLog -Level INFO -Message 'CyberArk registration already completed - resuming at the component account rename.'
+                    $r = [pscustomobject]@{ Succeeded = $true; RestartRequired = $false }
                 }
-
-                # 3) CyberArk Registration stage: the Vault address (cluster,DR) comes
-                #    from zones.psd1 and is injected into a copy of RegistrationConfig.xml
-                #    (the media is not modified). Password injected via -spwdObj.
-                $r = Invoke-PSMRegister -Settings $Settings -SourcesRoot $SourcesRoot `
-                        -InstallCredential $installCred `
-                        -VaultAddress $ZoneConfig.VaultAddress
 
                 # 4) Component account naming convention (PSM-<HOST> / PSMA<HOST>):
                 #    RegisterComponent.exe generates random names (PSMApp_<hex>) with no
                 #    naming option -> automated rename right after the registration
-                #    (Vault via the still-open PVWA session + cred files + basic_psm.ini).
-                if ($r.Succeeded) {
-                    Rename-PSMComponentAccounts -Settings $Settings -Session $session | Out-Null
-                }
+                #    (Vault via the still-open PVWA session + cred files). MANDATORY when
+                #    Registration.RenameComponents is enabled: a failure here stops the
+                #    deployment (fail-fast), and the retry redoes ONLY the rename.
+                Rename-PSMComponentAccounts -Settings $Settings -Session $session | Out-Null
             }
             finally {
                 Disconnect-PvwaSession -Session $session
             }
-            if (-not $r.Succeeded) { throw "Registration stage failed: $($r.ErrorData)" }
             if ($r.RestartRequired) { Start-PSMResumeReboot -Reason 'Registration stage'; return }
             Set-PSMPhaseComplete 'Registration'
         }
