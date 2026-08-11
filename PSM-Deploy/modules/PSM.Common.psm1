@@ -244,6 +244,45 @@ function Get-PSMInstallPaths {
     }
 }
 
+function Test-PSMSettingsDrift {
+    <#
+        La config (settings.psd1) est copiee puis editee a la main par l'equipe :
+        quand le script evolue, une cle manquante = fonctionnalite silencieusement
+        inactive (ex. RenameComponents absent -> pas de renommage, sans erreur).
+        Compare la config chargee a la liste des cles attendues par CETTE version
+        du script et WARN si des cles manquent. Ne bloque jamais.
+        Renvoie la liste des cles manquantes (vide si conforme).
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] $Settings)
+
+    $expected = @(
+        'PsmVersion',
+        'Rds.LicenseMode', 'Rds.LicenseServers',
+        'Install.MediaRelativePath', 'Install.InstallationAutomationSubPath', 'Install.Stages',
+        'Install.InstallDir', 'Install.RecordingDir', 'Install.Injections',
+        'Registration.VaultAddressXPath', 'Registration.VaultAddressAttribute',
+        'Registration.RenameComponents', 'Registration.AppUserPattern', 'Registration.GwUserPattern',
+        'Hardening.NonBlocking', 'Hardening.HardeningDir', 'Hardening.ScriptAccountVariables',
+        'Paths.State', 'Paths.Logs'
+    )
+    $missing = @()
+    foreach ($keyPath in $expected) {
+        $node = $Settings
+        foreach ($part in $keyPath.Split('.')) {
+            $node = Get-PSMConfigValue -Config $node -Key $part
+            if ($null -eq $node) { break }
+        }
+        if ($null -eq $node) { $missing += $keyPath }
+    }
+    if ($missing) {
+        Write-PSMLog -Level WARN -Message ("settings.psd1 : cle(s) ABSENTE(S) par rapport a cette version du script -> " +
+            ($missing -join ', ') + ". Les fonctionnalites correspondantes sont INACTIVES : reporter ces cles " +
+            "depuis le config\settings.psd1 de la branche (en conservant vos valeurs locales).")
+    }
+    return $missing
+}
+
 function Test-PSMDomainAccount {
     <#
         Verifie qu'un compte "DOMAINE\utilisateur" est resoluble en SID par Windows.

@@ -68,6 +68,10 @@ $StateDir = Join-Path $SourcesRoot $Settings.Paths.State
 Initialize-PSMLogging -LogDirectory (Join-Path $SourcesRoot $Settings.Paths.Logs)
 Initialize-PSMState   -StateDirectory $StateDir
 
+# La config est copiee/editee a la main par l'equipe : signale les cles manquantes
+# par rapport a cette version du script (fonctionnalites sinon silencieusement inactives).
+Test-PSMSettingsDrift -Settings $Settings | Out-Null
+
 # --- Reinitialisation eventuelle de l'etat (partir de zero) ----------------
 if ($Reset -and $Resume) {
     throw "-Reset et -Resume sont incompatibles (repartir de zero vs reprendre)."

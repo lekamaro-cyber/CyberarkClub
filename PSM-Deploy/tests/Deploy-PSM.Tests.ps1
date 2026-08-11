@@ -356,6 +356,24 @@ Describe 'Get-PSMInstallPaths (source unique du dossier d install)' {
     }
 }
 
+Describe 'Test-PSMSettingsDrift (derive de config vs version du script)' {
+    BeforeAll {
+        Import-Module (Join-Path $root 'modules\PSM.Common.psm1') -Force
+        Initialize-PSMLogging -LogDirectory (Join-Path $env:TEMP 'psm-test-logs')
+    }
+    It 'La config de reference du depot est complete (aucune cle manquante)' {
+        $s = Import-PowerShellDataFile (Join-Path $root 'config\settings.psd1')
+        Test-PSMSettingsDrift -Settings $s | Should -BeNullOrEmpty
+    }
+    It 'Detecte les cles manquantes sur une config partielle' {
+        $partial = @{ PsmVersion = '12.6'; Rds = @{ LicenseMode = 'PerUser' } }
+        $missing = Test-PSMSettingsDrift -Settings $partial
+        $missing | Should -Contain 'Registration.RenameComponents'
+        $missing | Should -Contain 'Install.InstallDir'
+        $missing | Should -Contain 'Rds.LicenseServers'
+    }
+}
+
 Describe 'Test-PSMDomainAccount (resolution SID des comptes de zone)' {
     BeforeAll {
         Import-Module (Join-Path $root 'modules\PSM.Common.psm1') -Force
