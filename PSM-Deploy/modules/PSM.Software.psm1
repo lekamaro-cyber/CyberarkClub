@@ -31,8 +31,17 @@ function Invoke-PSMSoftware {
                     throw "Installer not found for '$($app.Name)': $installer"
                 }
                 Write-PSMLog -Level INFO -Message "Installing $($app.Name)..."
-                $p = Start-Process -FilePath $installer -ArgumentList $app.Arguments `
-                        -Wait -PassThru -NoNewWindow
+                if ([System.IO.Path]::GetExtension($installer) -ieq '.msi') {
+                    # MSI packages must go through msiexec (launching the .msi
+                    # directly does not reliably pass the silent arguments).
+                    $p = Start-Process -FilePath 'msiexec.exe' `
+                            -ArgumentList "/i `"$installer`" $($app.Arguments)" `
+                            -Wait -PassThru -NoNewWindow
+                }
+                else {
+                    $p = Start-Process -FilePath $installer -ArgumentList $app.Arguments `
+                            -Wait -PassThru -NoNewWindow
+                }
                 if ($p.ExitCode -ne 0 -and $app.SuccessExitCodes -notcontains $p.ExitCode) {
                     throw "$($app.Name): exit code $($p.ExitCode)."
                 }
