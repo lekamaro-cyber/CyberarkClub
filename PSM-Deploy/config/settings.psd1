@@ -74,6 +74,18 @@
     Registration = @{
         VaultAddressXPath     = "//Step[@Name='RegisterPsm']/Parameters/Parameter[@Name='vaultip']"
         VaultAddressAttribute = 'Value'                          # attribut a ecrire (vide = InnerText du noeud)
+
+        # --- Convention de nommage des comptes composants -------------------
+        # RegisterComponent.exe genere des noms aleatoires (PSMApp_<hex>/PSMGw_<hex>)
+        # sans AUCUNE option de nommage pour PSM. Apres l'enregistrement, le script
+        # renomme automatiquement (comme fait a la main sur les PSM existants) :
+        # user Vault via l'API PVWA + ligne Username= des cred files (mot de passe
+        # inchange, sauvegarde .orig) + PSMServerId/PSMServerAdminId de basic_psm.ini,
+        # service PSM arrete/relance pendant l'operation. {HOSTNAME} = nom machine
+        # en MAJUSCULES. Mettre RenameComponents = $false pour desactiver.
+        RenameComponents = $true
+        AppUserPattern   = 'PSM-{HOSTNAME}'    # ex. PSM-FRPRDSRV4539  (PSMServerId)
+        GwUserPattern    = 'PSMA{HOSTNAME}'    # ex. PSMAFRPRDSRV4539  (PSMServerAdminId)
     }
 
     # --- Hardening : comptes de session PSM de DOMAINE (PSMConnect/PSMAdminConnect) --

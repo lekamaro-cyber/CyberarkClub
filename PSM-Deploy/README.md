@@ -163,6 +163,14 @@ La reprise est **interactive** (les prompts `Get-Credential` PVWA fonctionnent) 
     `ConfigurePSMUsers` (utilisateurs **locaux** uniquement) sont **désactivés** via
     `Install.Injections` (actif par défaut dans `settings.psd1`) — porter l'équivalent
     (screensaver, propriétés de session) par **GPO/AD** sur les comptes de la zone.
+  - **Nommage des comptes composants** (`settings.psd1` → `Registration.RenameComponents`,
+    actif par défaut) : `RegisterComponent.exe` génère des noms aléatoires
+    (`PSMApp_<hex>`/`PSMGw_<hex>`) **sans option de nommage** pour PSM. Après
+    l'enregistrement, le script les renomme automatiquement selon la convention
+    (`PSM-<HOSTNAME>` / `PSMA<HOSTNAME>`, patterns configurables) : user Vault via
+    l'API PVWA + `Username=` des cred files (mot de passe inchangé, sauvegarde `.orig`)
+    + `PSMServerId`/`PSMServerAdminId` de `basic_psm.ini`, service PSM arrêté/relancé
+    pendant l'opération. Idempotent (ne refait rien si déjà conforme).
   - **`Hardening.NonBlocking`** (`settings.psd1`, actif par défaut) : un échec du stage
     Hardening est **toléré** (WARN, déploiement poursuivi) au lieu d'arrêter — cas
     rencontré : EDR bloquant les modifications d'ACL système (même `takeown`). Les steps

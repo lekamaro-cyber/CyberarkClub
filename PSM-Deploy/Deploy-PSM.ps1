@@ -228,6 +228,14 @@ try {
                 $r = Invoke-PSMRegister -Settings $Settings -SourcesRoot $SourcesRoot `
                         -InstallCredential $installCred `
                         -VaultAddress $ZoneConfig.VaultAddress
+
+                # 4) Convention de nommage des comptes composants (PSM-<HOST> / PSMA<HOST>) :
+                #    RegisterComponent.exe genere des noms aleatoires (PSMApp_<hex>) sans
+                #    option de nommage -> renommage automatise apres l'enregistrement
+                #    (Vault via la session PVWA encore ouverte + cred files + basic_psm.ini).
+                if ($r.Succeeded) {
+                    Rename-PSMComponentAccounts -Settings $Settings -Session $session | Out-Null
+                }
             }
             finally {
                 Disconnect-PvwaSession -Session $session

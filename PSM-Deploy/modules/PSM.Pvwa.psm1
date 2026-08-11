@@ -99,6 +99,55 @@ function Disconnect-PvwaSession {
     }
 }
 
+function Find-PvwaUser {
+    <# Recherche des USERS du Vault (API v2). Renvoie les objets { id, username, ... }. #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] $Session,
+        [Parameter(Mandatory)] [string] $Search,
+        [int] $TimeoutSec = 60
+    )
+    $uri  = "$($Session.PvwaUrl)/PasswordVault/API/Users?search=$([uri]::EscapeDataString($Search))"
+    $resp = Invoke-RestMethod -Uri $uri -Method Get -Headers $Session.Headers -TimeoutSec $TimeoutSec -ErrorAction Stop
+    if ($resp.PSObject.Properties.Name -contains 'Users') { return @($resp.Users) }
+    return @()
+}
+
+function Rename-PvwaUser {
+    <#
+        Renomme un user du Vault via l'API PVWA (PUT /API/Users/{id}) :
+        recupere l'objet complet, remplace 'username', renvoie l'objet mis a jour.
+        Utilise pour aligner les comptes composants PSM sur la convention de nommage.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)] $Session,
+        [Parameter(Mandatory)] [string] $UserName,
+        [Parameter(Mandatory)] [string] $NewUserName,
+        [int] $TimeoutSec = 60
+    )
+    $match = @(Find-PvwaUser -Session $Session -Search $UserName | Where-Object { $_.username -eq $UserName })
+    if ($match.Count -ne 1) {
+        throw "Rename-PvwaUser : user '$UserName' introuvable ou ambigu ($($match.Count) resultat(s)) cote Vault."
+    }
+    $id = $match[0].id
+
+    if (-not $PSCmdlet.ShouldProcess($UserName, "Renommer en '$NewUserName' (PVWA API)")) { return $null }
+
+    $userUri = "$($Session.PvwaUrl)/PasswordVault/API/Users/$id"
+    $user    = Invoke-RestMethod -Uri $userUri -Method Get -Headers $Session.Headers -TimeoutSec $TimeoutSec -ErrorAction Stop
+    $user.username = $NewUserName
+    try {
+        return Invoke-RestMethod -Uri $userUri -Method Put -Headers $Session.Headers `
+                -Body ($user | ConvertTo-Json -Depth 8) -ContentType 'application/json' `
+                -TimeoutSec $TimeoutSec -ErrorAction Stop
+    }
+    catch {
+        throw ("Echec du renommage PVWA de '$UserName' en '$NewUserName' : $($_.Exception.Message). " +
+               'Alternative : renommer le user dans PVWA (Administration > Users) puis relancer.')
+    }
+}
+
 function Find-PvwaAccount {
     <# Recherche des comptes (filtre par Safe + recherche texte user/objet/adresse). #>
     [CmdletBinding()]
@@ -177,4 +226,4 @@ function Get-PvwaAccountPassword {
 }
 
 Export-ModuleMember -Function Set-PvwaTlsBypass, Connect-PvwaSession, Disconnect-PvwaSession, `
-                              Find-PvwaAccount, Get-PvwaAccountPassword
+                              Find-PvwaAccount, Get-PvwaAccountPassword, Find-PvwaUser, Rename-PvwaUser

@@ -389,7 +389,8 @@ Describe 'Module PVWA (recuperation des secrets via API REST)' {
         Import-Module (Join-Path $root 'modules\PSM.Pvwa.psm1')   -Force
     }
     It 'Expose les fonctions attendues' {
-        foreach ($fn in 'Connect-PvwaSession','Disconnect-PvwaSession','Get-PvwaAccountPassword','Find-PvwaAccount') {
+        foreach ($fn in 'Connect-PvwaSession','Disconnect-PvwaSession','Get-PvwaAccountPassword','Find-PvwaAccount',
+                        'Find-PvwaUser','Rename-PvwaUser') {
             Get-Command $fn -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
         }
     }
