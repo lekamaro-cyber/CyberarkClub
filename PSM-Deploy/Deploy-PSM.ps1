@@ -96,10 +96,21 @@ $ZoneConfig = $Zones[$Zone]
 
 Write-PSMLog -Level INFO -Message "=== PSM deployment $($Settings.PsmVersion) | Zone $Zone | Resume=$Resume | WhatIf=$($WhatIfPreference) ==="
 
-# Schedules the supervised resume (AtLogOn) then reboots. Does NOT mark the
-# current phase as completed: it will be replayed/resumed after reconnection.
+# Schedules the supervised resume (AtLogOn) then reboots. Callers mark the phase
+# complete BEFORE calling this when the stage succeeded; a phase interrupted by a
+# "wild" installer reboot is simply replayed (nothing was marked).
 function Start-PSMResumeReboot {
     param([Parameter(Mandatory)] [string] $Reason)
+    # Loop guard: the same phase requesting reboots over and over means the stage
+    # never converges (seen with version-dependent installer behavior) - stop
+    # explicitly instead of cycling forever. Counters are wiped by -Reset.
+    $rebootKey = "RebootCount:$Reason"
+    $rebootCount = [int](Get-PSMStateValue -Name $rebootKey)
+    if ($rebootCount -ge 2) {
+        throw ("Reboot requested by '$Reason' for the 3rd time - reboot loop detected, stopping. " +
+               'Check the CyberArk stage log before relaunching.')
+    }
+    Set-PSMStateValue -Name $rebootKey -Value ($rebootCount + 1)
     Write-PSMLog -Level WARN -Message "Reboot required ($Reason). Scheduling the resume (AtLogOn) then restarting."
     $installUser = Get-PSMStateValue -Name 'InstallUser'
     if (-not $installUser) { $installUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name }
@@ -180,8 +191,13 @@ try {
     if (-not (Test-PSMPhaseComplete 'Readiness')) {
         $r = Invoke-PSMReadiness -Settings $Settings -SourcesRoot $SourcesRoot
         if (-not $r.Succeeded) { throw "Readiness stage failed: $($r.ErrorData)" }
-        if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'Readiness stage'; return }
+        # The stage reported SUCCESS: all its steps ran. Mark the phase complete
+        # BEFORE any reboot so the resume continues at the NEXT phase (re-running
+        # a completed stage is version-dependent: harmless no-op on 12.6, endless
+        # REINSTALL loop on 14.0). A mid-stage "wild" reboot still replays the
+        # phase: the process dies before this marker is written.
         if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'Readiness' }
+        if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'Readiness stage'; return }
     }
 
     # ===================== CyberArk STAGE: Prerequisites (RDS, .NET, NLA...) =====================
@@ -200,8 +216,13 @@ try {
             $r = Invoke-PSMPrerequisites -Settings $Settings -SourcesRoot $SourcesRoot
         }
         if (-not $r.Succeeded) { throw "Prerequisites stage failed: $($r.ErrorData)" }
-        if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'Prerequisites stage (RDS)'; return }
+        # The stage reported SUCCESS: all its steps ran. Mark the phase complete
+        # BEFORE any reboot so the resume continues at the NEXT phase (re-running
+        # a completed stage is version-dependent: harmless no-op on 12.6, endless
+        # REINSTALL loop on 14.0). A mid-stage "wild" reboot still replays the
+        # phase: the process dies before this marker is written.
         if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'Prerequisites' }
+        if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'Prerequisites stage (RDS)'; return }
     }
 
     # ===================== PHASE: RDS licensing (local, after RDS is installed) =====================
@@ -220,8 +241,13 @@ try {
     if (-not (Test-PSMPhaseComplete 'Installation')) {
         $r = Invoke-PSMInstall -Settings $Settings -SourcesRoot $SourcesRoot
         if (-not $r.Succeeded) { throw "Installation stage failed: $($r.ErrorData)" }
-        if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'Installation stage'; return }
+        # The stage reported SUCCESS: all its steps ran. Mark the phase complete
+        # BEFORE any reboot so the resume continues at the NEXT phase (re-running
+        # a completed stage is version-dependent: harmless no-op on 12.6, endless
+        # REINSTALL loop on 14.0). A mid-stage "wild" reboot still replays the
+        # phase: the process dies before this marker is written.
         if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'Installation' }
+        if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'Installation stage'; return }
     }
 
     # ===================== CyberArk STAGE: PostInstallation =====================
@@ -231,8 +257,13 @@ try {
         Set-PSMAutomationConsts -Settings $Settings -SourcesRoot $SourcesRoot -ZoneConfig $ZoneConfig | Out-Null
         $r = Invoke-PSMPostInstall -Settings $Settings -SourcesRoot $SourcesRoot
         if (-not $r.Succeeded) { throw "PostInstallation stage failed: $($r.ErrorData)" }
-        if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'PostInstallation stage'; return }
+        # The stage reported SUCCESS: all its steps ran. Mark the phase complete
+        # BEFORE any reboot so the resume continues at the NEXT phase (re-running
+        # a completed stage is version-dependent: harmless no-op on 12.6, endless
+        # REINSTALL loop on 14.0). A mid-stage "wild" reboot still replays the
+        # phase: the process dies before this marker is written.
         if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'PostInstallation' }
+        if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'PostInstallation stage'; return }
     }
 
     # ===================== CyberArk STAGE: Registration (secret via PVWA) =====================
@@ -296,8 +327,9 @@ try {
             finally {
                 Disconnect-PvwaSession -Session $session
             }
-            if ($r.RestartRequired) { Start-PSMResumeReboot -Reason 'Registration stage'; return }
+            # Same rule as the other stages: success => phase complete BEFORE reboot.
             Set-PSMPhaseComplete 'Registration'
+            if ($r.RestartRequired) { Start-PSMResumeReboot -Reason 'Registration stage'; return }
         }
     }
 
@@ -322,8 +354,13 @@ try {
                 throw "Hardening stage failed: $($r.ErrorData)"
             }
         }
-        if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'Hardening stage'; return }
+        # The stage reported SUCCESS: all its steps ran. Mark the phase complete
+        # BEFORE any reboot so the resume continues at the NEXT phase (re-running
+        # a completed stage is version-dependent: harmless no-op on 12.6, endless
+        # REINSTALL loop on 14.0). A mid-stage "wild" reboot still replays the
+        # phase: the process dies before this marker is written.
         if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'Hardening' }
+        if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'Hardening stage'; return }
     }
 
     # ===================== PHASE: Validation =====================
