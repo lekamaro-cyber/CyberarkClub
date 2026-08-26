@@ -63,6 +63,12 @@
                 "//Step[@Name='DisableScreenSaver']" = @{ Attribute = 'Enable'; Value = 'No' }
                 "//Step[@Name='ConfigurePSMUsers']"  = @{ Attribute = 'Enable'; Value = 'No' }
             }
+            # EULA acceptance: mandatory for a silent registration (the media ships
+            # with accepteula="no"). Declared here - explicit, versioned, auditable -
+            # instead of hand-editing the media XML on every new media drop.
+            Registration = @{
+                "//Step[@Name='RegisterPsm']/Parameters/Parameter[@Name='accepteula']" = @{ Attribute = 'Value'; Value = 'Yes' }
+            }
         }
     }
 
