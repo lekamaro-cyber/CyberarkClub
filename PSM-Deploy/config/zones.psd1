@@ -36,14 +36,14 @@
     # --- Sandbox / PRE (test PVWA) ---------------------------------------
     PRE = @{
         Name                   = 'PRE'
-        PvwaUrl                = 'https://<PVWA-PRE>'      # TODO: sandbox PVWA URL
+        PvwaUrl                = 'https://oneconnection.pre.intra.corp'
         PvwaAuthMethod         = 'CyberArk'                # CyberArk | LDAP | Windows | RADIUS
         SkipCertificateCheck   = $true                     # lab: self-signed certificate tolerated
-        VaultAddress           = '<CLUSTER-IP-PRE>,<DR-IP-PRE>'  # cluster,DR
+        VaultAddress           = '10.176.202.17,10.176.202.25'   # cluster,DR
         InstallAccountSafe     = ''                        # empty -> uses the connected admin account
         InstallAccountUserName = ''
-        PSMConnectUserName      = ''   # empty = no injection (see note above)
-        PSMAdminConnectUserName = ''
+        PSMConnectUserName      = 'FRANCE\FRSVCPREPSMConnect'
+        PSMAdminConnectUserName = 'FRANCE\FRSVCPREPSMAdminConn'  # real sAMAccountName (20-char limit)
     }
 
     DC1 = @{

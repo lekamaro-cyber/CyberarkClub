@@ -200,6 +200,37 @@ The resume is **interactive** (the PVWA `Get-Credential` prompts work) and
     `state\progress.json` and rerun). Set back to `$false` for the strict behavior.
 - `config/software.psd1`: any additional software.
 
+## Per-server deployment checklist
+
+**Once per ZONE** (`config\zones.psd1` — PRE is filled in, DC1/DC2 to complete):
+- [ ] `PvwaUrl` + `PvwaAuthMethod` (+ `SkipCertificateCheck = $false` outside the lab)
+- [ ] `VaultAddress` = `clusterIp,drIp`
+- [ ] `InstallAccountSafe` / `InstallAccountUserName` (or empty = connected admin)
+- [ ] `PSMConnectUserName` / `PSMAdminConnectUserName` = **real sAMAccountNames**
+      (20-character limit — check in AD, the Name/CN can differ)
+
+**Once per MEDIA version** (12.6, 14.0...):
+- [ ] Drop the media **as-is** under `media\PSM` (never edited by hand)
+- [ ] Fill in the stage `*Config.xml` from **that media's** Templates
+- [ ] On the first run, adjust the version-dependent names when a guided error
+      lists the candidates: `Hardening.ScriptAccountVariables` (14.0 uses
+      obfuscated `PSMHRDxxx` names — discovery one-liner in `settings.psd1`),
+      injection XPaths if a `Step`/`Parameter` was renamed
+
+**For EACH server:**
+- [ ] Machine: Server 2022, **domain-joined**, `D:` drive present, EDR exclusion
+      for the install window (otherwise Hardening ends in the tolerated WARN)
+- [ ] AD (ahead of time): the per-server ACL group
+      `...-Administrators-<SERVER>` contains the zone's **PSMAdminConnect**
+      (and NOT PSMConnect) — PreFlight verifies both and WARNs
+- [ ] If REDEPLOYING the same hostname: delete the previous Vault users
+      `PSM-<HOST>` / `PSMA<HOST>` **and** any `PSMApp_*`/`PSMGw_*` orphans
+      (list them with `Find-PvwaUser -Search 'PSMApp_'` / `'PSMGw_'`; the live
+      accounts are the ones named in the cred files) — deletion is manual by design
+- [ ] Launch: `.\Deploy-PSM.ps1 -Zone <zone> -Reset` — then let it run
+      (reboots auto-resume; one PVWA prompt at Registration; type `YES`/`A`
+      at the confirmations)
+
 ## Tests
 
 ```powershell

@@ -5,7 +5,7 @@
     # =====================================================================
 
     # Target version: '12.6' or '14.0'. Drives the version-specific paths/branches.
-    PsmVersion = '12.6'
+    PsmVersion = '14.0'
 
     # --- RD Session Host licensing ---------------------------------------
     Rds = @{
@@ -13,8 +13,8 @@
         # One OR several license servers, in order of preference.
         # Written into the 'LicenseServers' registry value (comma-separated list).
         LicenseServers = @(
-            '<RDS-LICENSE-SERVER-1>'               # TODO (deployment): FQDN of the server(s)
-            # '<RDS-LICENSE-SERVER-2>'
+            'FRPRDSRV8930.france.intra.corp'
+            # '<RDS-LICENSE-SERVER-2>'             # optional additional server
         )
     }
 
