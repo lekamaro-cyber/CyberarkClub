@@ -288,9 +288,13 @@ try {
             #    credential validation: a wrong account/password triggers a WARN and
             #    a fresh prompt (capped attempts, lockout-aware) instead of failing
             #    the whole deployment. Infrastructure errors still fail fast.
+            #    -ConcurrentSession: during the stage, RegisterComponent.exe logs into
+            #    the Vault with the SAME account; without concurrent sessions the Vault
+            #    invalidates our PVWA token mid-phase (observed: 401 then timeouts on
+            #    the component rename).
             $logon = Connect-PvwaSessionWithRetry -PvwaUrl $ZoneConfig.PvwaUrl `
                         -AuthMethod $ZoneConfig.PvwaAuthMethod -ZoneName $ZoneConfig.Name `
-                        -Credential $PvwaCredential `
+                        -Credential $PvwaCredential -ConcurrentSession `
                         -SkipCertificateCheck:$ZoneConfig.SkipCertificateCheck `
                         -NonInteractive:$NonInteractive
             $session  = $logon.Session
@@ -334,7 +338,23 @@ try {
                 #    (Vault via the still-open PVWA session + cred files). MANDATORY when
                 #    Registration.RenameComponents is enabled: a failure here stops the
                 #    deployment (fail-fast), and the retry redoes ONLY the rename.
-                Rename-PSMComponentAccounts -Settings $Settings -Session $session | Out-Null
+                #    If the PVWA session died during the long registration (401/timeout),
+                #    reconnect with the in-memory credential and retry ONCE - no secret
+                #    is ever written to disk.
+                try {
+                    Rename-PSMComponentAccounts -Settings $Settings -Session $session | Out-Null
+                }
+                catch {
+                    $msg = $_.Exception.Message
+                    if ($msg -match '\(401\)|Unauthorized|timed out|timeout') {
+                        Write-PSMLog -Level WARN -Message "PVWA session lost after the registration ($msg) - reconnecting and retrying the rename once..."
+                        $session = Connect-PvwaSession -PvwaUrl $ZoneConfig.PvwaUrl -Credential $pvwaCred `
+                                        -AuthMethod $ZoneConfig.PvwaAuthMethod -ConcurrentSession `
+                                        -SkipCertificateCheck:$ZoneConfig.SkipCertificateCheck
+                        Rename-PSMComponentAccounts -Settings $Settings -Session $session | Out-Null
+                    }
+                    else { throw }
+                }
             }
             finally {
                 Disconnect-PvwaSession -Session $session

@@ -103,6 +103,7 @@ function Connect-PvwaSessionWithRetry {
         [string] $ZoneName = '',
         [pscredential] $Credential,          # pre-supplied (-PvwaCredential): tried first
         [switch] $SkipCertificateCheck,
+        [switch] $ConcurrentSession,
         [switch] $NonInteractive,
         [int] $MaxAttempts = 3
     )
@@ -117,7 +118,8 @@ function Connect-PvwaSessionWithRetry {
         }
         try {
             $session = Connect-PvwaSession -PvwaUrl $PvwaUrl -Credential $cred `
-                            -AuthMethod $AuthMethod -SkipCertificateCheck:$SkipCertificateCheck
+                            -AuthMethod $AuthMethod -ConcurrentSession:$ConcurrentSession `
+                            -SkipCertificateCheck:$SkipCertificateCheck
             Write-PSMLog -Level OK -Message "PVWA logon OK ($($cred.UserName))."
             return [pscustomobject]@{ Session = $session; Credential = $cred }
         }
