@@ -107,11 +107,17 @@
     # --- Hardening: DOMAIN PSM session accounts (PSMConnect/PSMAdminConnect) --
     # These accounts are NOT stage parameters: they are declared as VARIABLES at
     # the top of the CyberArk hardening scripts, GENERATED AT INSTALL TIME under
-    # <InstallDir>\PSM\Hardening (NOT in the media):
-    #   - PSMHardening.ps1          : $PSM_CONNECT_USER / $PSM_ADMIN_CONNECT_USER
-    #   - PSMConfigureAppLocker.ps1 : $PSM_CONNECT      / $PSM_ADMIN_CONNECT
-    # (observed on a production PSM; if the name differs on your version, the
-    # script stops and lists the file's candidate variables).
+    # <InstallDir>\PSM\Hardening (NOT in the media).
+    # The variable names are VERSION-DEPENDENT:
+    #   - 12.6: PSMHardening.ps1          -> $PSM_CONNECT_USER / $PSM_ADMIN_CONNECT_USER
+    #           PSMConfigureAppLocker.ps1 -> $PSM_CONNECT      / $PSM_ADMIN_CONNECT
+    #   - 14.0: obfuscated names (PSMHRDxxx...). Discover the real ones - they hold
+    #     the default values "PSMConnect"/"PSMAdminConnect" - with:
+    #       Select-String -Path '<InstallDir>\PSM\Hardening\PSMHardening.ps1' `
+    #           -Pattern '^\s*\$\w+\s*=\s*["'']PSM(Admin)?Connect["'']'
+    #     (same for PSMConfigureAppLocker.ps1), then set the names below.
+    # If a configured name does not exist, the script stops and lists the file's
+    # candidate variables.
     # The patch is done IN PLACE (.orig backup, replayable) at the start of the
     # Hardening phase, with the zone's accounts (zones.psd1 PSMConnectUserName /
     # PSMAdminConnectUserName). INACTIVE when the zone accounts are empty.
