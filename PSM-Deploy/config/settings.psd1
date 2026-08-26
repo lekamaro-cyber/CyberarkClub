@@ -108,14 +108,14 @@
     # These accounts are NOT stage parameters: they are declared as VARIABLES at
     # the top of the CyberArk hardening scripts, GENERATED AT INSTALL TIME under
     # <InstallDir>\PSM\Hardening (NOT in the media).
-    # The variable names are VERSION-DEPENDENT:
-    #   - 12.6: PSMHardening.ps1          -> $PSM_CONNECT_USER / $PSM_ADMIN_CONNECT_USER
-    #           PSMConfigureAppLocker.ps1 -> $PSM_CONNECT      / $PSM_ADMIN_CONNECT
-    #   - 14.0: obfuscated names (PSMHRDxxx...). Discover the real ones - they hold
-    #     the default values "PSMConnect"/"PSMAdminConnect" - with:
-    #       Select-String -Path '<InstallDir>\PSM\Hardening\PSMHardening.ps1' `
-    #           -Pattern '^\s*\$\w+\s*=\s*["'']PSM(Admin)?Connect["'']'
-    #     (same for PSMConfigureAppLocker.ps1), then set the names below.
+    # The mechanism is VERSION-DEPENDENT (confirmed on both medias):
+    #   - 14.0: NOTHING to patch in the hardening scripts -> EMPTY mapping.
+    #     RunTheHardeningScript.psm1 dot-sources InstallationAutomation\Consts.ps1
+    #     (which Set-PSMAutomationConsts already patches with the zone accounts)
+    #     and passes them to PSMHardening.ps1 as PARAMETERS
+    #     (-connectionUserName / -connectionAdminUserName ...).
+    #   - 12.6: accounts are VARIABLES at the top of the installed scripts ->
+    #     use the mapping shown in the commented block below.
     # If a configured name does not exist, the script stops and lists the file's
     # candidate variables.
     # The patch is done IN PLACE (.orig backup, replayable) at the start of the
@@ -132,10 +132,13 @@
         NonBlocking  = $true
         HardeningDir = ''   # empty -> derived from Install.InstallDir (<InstallDir>\PSM\Hardening)
         # file -> name of the variables to patch (Connect / AdminConnect)
-        ScriptAccountVariables = @{
-            'PSMHardening.ps1'          = @{ Connect = 'PSM_CONNECT_USER'; AdminConnect = 'PSM_ADMIN_CONNECT_USER' }
-            'PSMConfigureAppLocker.ps1' = @{ Connect = 'PSM_CONNECT';      AdminConnect = 'PSM_ADMIN_CONNECT' }
-        }
+        # 14.0: EMPTY (accounts flow through Consts.ps1, see note above).
+        # 12.6: uncomment the mapping below instead.
+        ScriptAccountVariables = @{}
+        # ScriptAccountVariables = @{
+        #     'PSMHardening.ps1'          = @{ Connect = 'PSM_CONNECT_USER'; AdminConnect = 'PSM_ADMIN_CONNECT_USER' }
+        #     'PSMConfigureAppLocker.ps1' = @{ Connect = 'PSM_CONNECT';      AdminConnect = 'PSM_ADMIN_CONNECT' }
+        # }
     }
 
     # --- Working folders (relative to the sources root) ------------------

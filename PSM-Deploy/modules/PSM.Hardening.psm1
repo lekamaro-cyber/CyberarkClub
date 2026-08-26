@@ -45,7 +45,15 @@ function Set-PSMConnectAccounts {
     $h = Get-PSMConfigValue -Config $Settings -Key 'Hardening'
     if (-not $h) { throw "settings.psd1: 'Hardening' block missing (zone accounts provided)." }
     $varMap = Get-PSMConfigValue -Config $h -Key 'ScriptAccountVariables'
-    if (-not $varMap) { throw "settings.psd1: Hardening.ScriptAccountVariables not set (zone accounts provided)." }
+    if ($null -eq $varMap) { throw "settings.psd1: Hardening.ScriptAccountVariables not set (zone accounts provided)." }
+    if ($varMap.Keys.Count -eq 0) {
+        # DELIBERATELY empty mapping (14.0 flow): the framework's Hardening step
+        # dot-sources Consts.ps1 - which Set-PSMAutomationConsts already patches -
+        # and passes the accounts to PSMHardening.ps1 as PARAMETERS
+        # (-connectionUserName/-connectionAdminUserName...). Nothing to patch here.
+        Write-PSMLog -Level INFO -Message 'Hardening.ScriptAccountVariables is empty: accounts flow through Consts.ps1 (14.0 flow), no hardening script patch needed.'
+        return $false
+    }
 
     # Explicit Hardening folder when provided, otherwise DERIVED from Install.InstallDir.
     $hardDir = Get-PSMConfigValue -Config $h -Key 'HardeningDir'

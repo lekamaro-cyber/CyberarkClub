@@ -212,9 +212,10 @@ The resume is **interactive** (the PVWA `Get-Credential` prompts work) and
 **Once per MEDIA version** (12.6, 14.0...):
 - [ ] Drop the media **as-is** under `media\PSM` (never edited by hand)
 - [ ] Fill in the stage `*Config.xml` from **that media's** Templates
-- [ ] On the first run, adjust the version-dependent names when a guided error
-      lists the candidates: `Hardening.ScriptAccountVariables` (14.0 uses
-      obfuscated `PSMHRDxxx` names — discovery one-liner in `settings.psd1`),
+- [ ] On the first run, adjust the version-dependent settings when a guided error
+      lists the candidates: `Hardening.ScriptAccountVariables` — **14.0: leave
+      EMPTY** (the framework passes the accounts itself from `Consts.ps1`);
+      **12.6: variable mapping** (commented block in `settings.psd1`) — and the
       injection XPaths if a `Step`/`Parameter` was renamed
 
 **For EACH server:**

@@ -270,6 +270,16 @@ $PSM_ADMIN_CONNECT = 'PSMAdminConnect'
         Test-Path (Join-Path $script:hardDir 'PSMHardening.ps1.orig') | Should -BeFalse
     }
 
+    It 'Empty mapping = deliberate no-op (14.0 flow: accounts come from Consts.ps1)' {
+        Reset-HardeningScripts
+        $empty = @{ Hardening = @{ HardeningDir = $script:hardDir; ScriptAccountVariables = @{} } }
+        Set-PSMConnectAccounts -Settings $empty -ZoneConfig @{ PSMConnectUserName = 'CONTOSO\X' } -Confirm:$false |
+            Should -BeFalse
+        # Scripts untouched, no backup created.
+        Get-HardVar 'PSMHardening.ps1' 'PSM_CONNECT_USER' | Should -Be 'PSMConnect'
+        Test-Path (Join-Path $script:hardDir 'PSMHardening.ps1.orig') | Should -BeFalse
+    }
+
     It 'Explicit error (with candidate variables) when the variable is not found' {
         Reset-HardeningScripts
         $bad = @{
