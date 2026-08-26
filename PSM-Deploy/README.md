@@ -130,6 +130,13 @@ The resume is **interactive** (the PVWA `Get-Credential` prompts work) and
 > installed module is not loadable yet. The orchestrator **retries the stage once**
 > after 30s — CyberArk's recovery resumes at the failed step only. No manual action.
 
+> ℹ️ **14.0 install loop (handled automatically)**: the 14.0 `RunInstallation` step
+> logs "*PSM Version 14.0.x was installed on this machine*" then **reinstalls
+> anyway** when replayed. Two protections: a succeeded stage is marked complete
+> **before** any reboot, and an orchestrator-level PreCheck **skips the Installation
+> stage when the PSM service already exists** (recovery from a "wild" installer
+> reboot that killed the orchestrator before the phase marker was written).
+
 ## Security
 
 - Secrets as `SecureString`, **masked** in all logs; no secret in version control.

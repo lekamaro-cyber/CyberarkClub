@@ -239,15 +239,27 @@ try {
 
     # ===================== CyberArk STAGE: Installation =====================
     if (-not (Test-PSMPhaseComplete 'Installation')) {
-        $r = Invoke-PSMInstall -Settings $Settings -SourcesRoot $SourcesRoot
-        if (-not $r.Succeeded) { throw "Installation stage failed: $($r.ErrorData)" }
-        # The stage reported SUCCESS: all its steps ran. Mark the phase complete
-        # BEFORE any reboot so the resume continues at the NEXT phase (re-running
-        # a completed stage is version-dependent: harmless no-op on 12.6, endless
-        # REINSTALL loop on 14.0). A mid-stage "wild" reboot still replays the
-        # phase: the process dies before this marker is written.
-        if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'Installation' }
-        if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'Installation stage'; return }
+        if (Test-PSMInstalled) {
+            # Orchestrator-level PreCheck: the PSM service already exists, meaning a
+            # previous pass completed the installation but its reboot killed the
+            # orchestrator BEFORE the phase marker was written ("wild" installer
+            # reboot). Re-running the stage is version-dependent: the 14.0
+            # RunInstallation step logs the installed version then REINSTALLS
+            # anyway (endless install/reboot loop). Installed => phase complete.
+            Write-PSMLog -Level WARN -Message 'PSM already installed (service present): skipping the Installation stage (wild-reboot recovery).'
+            if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'Installation' }
+        }
+        else {
+            $r = Invoke-PSMInstall -Settings $Settings -SourcesRoot $SourcesRoot
+            if (-not $r.Succeeded) { throw "Installation stage failed: $($r.ErrorData)" }
+            # The stage reported SUCCESS: all its steps ran. Mark the phase complete
+            # BEFORE any reboot so the resume continues at the NEXT phase (re-running
+            # a completed stage is version-dependent: harmless no-op on 12.6, endless
+            # REINSTALL loop on 14.0). A mid-stage "wild" reboot still replays the
+            # phase: the process dies before this marker is written.
+            if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'Installation' }
+            if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'Installation stage'; return }
+        }
     }
 
     # ===================== CyberArk STAGE: PostInstallation =====================
