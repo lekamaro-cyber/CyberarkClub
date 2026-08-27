@@ -8,6 +8,9 @@
       - Installer      : installer path (relative to the sources folder)
       - Arguments      : silent-install arguments
       - DetectTest     : scriptblock returning $true when already installed (idempotency)
+      - Optional       : $true -> when the app is NOT installed and its installer
+                         is not staged, WARN and skip instead of failing (the same
+                         sources tree then works with or without the media staged).
     The PSM "covers everything"; these binaries are the clients/tools added afterwards.
 #>
 
@@ -23,6 +26,16 @@ function Invoke-PSMSoftware {
 
     foreach ($app in $SoftwareList) {
         $detect = [scriptblock]::Create($app.DetectTest)
+        # Optional entry (e.g. test-only tooling): not installed AND installer
+        # not staged -> WARN skip, never a deployment failure. ($app['Optional']
+        # indexing: a missing key is simply $null, StrictMode-safe.)
+        if ([bool]$app['Optional']) {
+            $optInstaller = Join-Path $SourcesRoot $app.Installer
+            if (-not (Test-Path $optInstaller) -and -not (& $detect)) {
+                Write-PSMLog -Level WARN -Message "Software: '$($app.Name)' is optional and its installer is not staged ($optInstaller) - skipped."
+                continue
+            }
+        }
         Invoke-IdempotentStep -Name "Software: $($app.Name)" `
             -Test   $detect `
             -Action {

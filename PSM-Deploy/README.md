@@ -248,6 +248,11 @@ The resume is **interactive** (the PVWA `Get-Credential` prompts work) and
       regenerate the local cred file). Still list/purge older `PSMApp_*`/`PSMGw_*`
       orphans from FAILED past cycles (`Find-PvwaUser -Search 'PSMApp_'` / `'PSMGw_'`;
       the live accounts are the ones named in the cred files)
+- [ ] Optional software (`config\software.psd1`, auto-skipped with a WARN when
+      the installer is not staged): Chrome MSI under `installers\chrome\`; on
+      TEST servers only, the PrivateArk Client MSI under `installers\privateark\`
+      (direct Vault admin from the PSM — do NOT stage it on production PSMs;
+      on a hardened PSM, allow `PrivateArk.exe` in the AppLocker policy)
 - [ ] Launch: `.\Deploy-PSM.ps1 -Zone <zone> -Reset` — then let it run
       (reboots auto-resume; one PVWA prompt at Registration; type `YES`/`A`
       at the confirmations)

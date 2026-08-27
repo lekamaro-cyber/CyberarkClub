@@ -385,6 +385,45 @@ Describe 'Test-PSMSettingsDrift (config drift vs script version)' {
     }
 }
 
+Describe 'Software phase (optional entries)' {
+    BeforeAll {
+        Import-Module (Join-Path $root 'modules\PSM.Common.psm1')   -Force
+        Import-Module (Join-Path $root 'modules\PSM.Software.psm1') -Force
+        Initialize-PSMLogging -LogDirectory (Join-Path $env:TEMP 'psm-test-logs')
+    }
+    It 'Chrome and PrivateArk Client entries are active and Optional (never break a media-less deployment)' {
+        $s = Import-PowerShellDataFile (Join-Path $root 'config\software.psd1')
+        $names = @($s.Applications | ForEach-Object { $_.Name })
+        $names | Should -Contain 'Google Chrome Enterprise (x64)'
+        $names | Should -Contain 'PrivateArk Client (test tooling)'
+        foreach ($app in $s.Applications) { [bool]$app['Optional'] | Should -BeTrue }
+    }
+    It 'An optional entry whose installer is not staged is skipped without error' {
+        $list = @(@{
+            Name = 'Fake optional'; Installer = 'installers\nope\missing.msi'
+            Arguments = '/qn'; SuccessExitCodes = @(0)
+            DetectTest = '$false'; Optional = $true
+        })
+        { Invoke-PSMSoftware -SoftwareList $list -SourcesRoot $env:TEMP } | Should -Not -Throw
+    }
+    It 'A NON-optional entry whose installer is missing still fails fast' {
+        $list = @(@{
+            Name = 'Fake mandatory'; Installer = 'installers\nope\missing.msi'
+            Arguments = '/qn'; SuccessExitCodes = @(0)
+            DetectTest = '$false'
+        })
+        { Invoke-PSMSoftware -SoftwareList $list -SourcesRoot $env:TEMP } | Should -Throw '*Installer not found*'
+    }
+    It 'An optional entry already installed is reported OK without needing the installer' {
+        $list = @(@{
+            Name = 'Fake already there'; Installer = 'installers\nope\missing.msi'
+            Arguments = '/qn'; SuccessExitCodes = @(0)
+            DetectTest = '$true'; Optional = $true
+        })
+        { Invoke-PSMSoftware -SoftwareList $list -SourcesRoot $env:TEMP } | Should -Not -Throw
+    }
+}
+
 Describe 'Existing component Vault user (Overwrite / password-sync policy)' {
     BeforeAll {
         Import-Module (Join-Path $root 'modules\PSM.Common.psm1')   -Force
