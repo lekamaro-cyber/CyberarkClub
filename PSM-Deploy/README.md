@@ -193,6 +193,22 @@ The resume is **interactive** (the PVWA `Get-Credential` prompts work) and
     are **opt-in** (`Registration.RenameServerIds`, off by default): they must stay
     aligned with the "PSM Server" object in PVWA Options — enable only if you **also
     rename that object manually** in PVWA (as done on the production PSMs).
+
+    **Target name already exists in the Vault** (redeploy of the same hostname:
+    wiping/reverting the machine never removes the Vault users — the stale user
+    is what causes the *password mismatch* when the PSM service restarts, since
+    the local cred file and the Vault user then come from different cycles).
+    Handled per `settings.psd1` → `Registration.ExistingAccountAction`:
+    - `Ask` (default): interactive choice at deployment time;
+    - `Overwrite` (**recommended**): deletes the stale user; the freshly
+      registered one is renamed into its place — cred file secret and the
+      current registration's Safe memberships are preserved;
+    - `ResetPassword`: keeps the stale user, resets its password (PVWA API —
+      requires the *"Reset Users' Passwords"* authorization) and regenerates the
+      local cred file with `CreateCredFile.exe` (mirroring its `/AppType` and
+      entropy-file protections); the freshly registered orphan is deleted. The
+      kept user retains its **old** Safe memberships — verify them;
+    - `Fail`: historic behavior (stop, manual cleanup).
   - **`Hardening.NonBlocking`** (`settings.psd1`, enabled by default): a failure of the
     Hardening stage is **tolerated** (WARN, deployment continues) instead of stopping —
     case encountered: EDR blocking system ACL modifications (even `takeown`). The failed
@@ -224,10 +240,14 @@ The resume is **interactive** (the PVWA `Get-Credential` prompts work) and
 - [ ] AD (ahead of time): the per-server ACL group
       `...-Administrators-<SERVER>` contains the zone's **PSMAdminConnect**
       (and NOT PSMConnect) — PreFlight verifies both and WARNs
-- [ ] If REDEPLOYING the same hostname: delete the previous Vault users
-      `PSM-<HOST>` / `PSMA<HOST>` **and** any `PSMApp_*`/`PSMGw_*` orphans
-      (list them with `Find-PvwaUser -Search 'PSMApp_'` / `'PSMGw_'`; the live
-      accounts are the ones named in the cred files) — deletion is manual by design
+- [ ] If REDEPLOYING the same hostname: nothing mandatory anymore — when the
+      target name `PSM-<HOST>` / `PSMA<HOST>` already exists in the Vault, the
+      script detects it and **proposes** (policy `Registration.ExistingAccountAction`,
+      default `Ask`) either **Overwrite** (delete the stale user, recommended) or
+      **Password sync** (keep it, reset its password via the PVWA API and
+      regenerate the local cred file). Still list/purge older `PSMApp_*`/`PSMGw_*`
+      orphans from FAILED past cycles (`Find-PvwaUser -Search 'PSMApp_'` / `'PSMGw_'`;
+      the live accounts are the ones named in the cred files)
 - [ ] Launch: `.\Deploy-PSM.ps1 -Zone <zone> -Reset` — then let it run
       (reboots auto-resume; one PVWA prompt at Registration; type `YES`/`A`
       at the confirmations)

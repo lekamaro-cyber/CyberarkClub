@@ -263,7 +263,7 @@ function Test-PSMSettingsDrift {
         'Install.InstallDir', 'Install.RecordingDir', 'Install.Injections',
         'Registration.VaultAddressXPath', 'Registration.VaultAddressAttribute',
         'Registration.RenameComponents', 'Registration.AppUserPattern', 'Registration.GwUserPattern',
-        'Registration.RenameServerIds',
+        'Registration.RenameServerIds', 'Registration.ExistingAccountAction',
         'Hardening.NonBlocking', 'Hardening.HardeningDir', 'Hardening.ScriptAccountVariables',
         'Paths.State', 'Paths.Logs'
     )

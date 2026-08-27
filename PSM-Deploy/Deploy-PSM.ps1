@@ -342,7 +342,7 @@ try {
                 #    reconnect with the in-memory credential and retry ONCE - no secret
                 #    is ever written to disk.
                 try {
-                    Rename-PSMComponentAccounts -Settings $Settings -Session $session | Out-Null
+                    Rename-PSMComponentAccounts -Settings $Settings -Session $session -NonInteractive:$NonInteractive | Out-Null
                 }
                 catch {
                     $msg = $_.Exception.Message
@@ -351,7 +351,7 @@ try {
                         $session = Connect-PvwaSession -PvwaUrl $ZoneConfig.PvwaUrl -Credential $pvwaCred `
                                         -AuthMethod $ZoneConfig.PvwaAuthMethod -ConcurrentSession `
                                         -SkipCertificateCheck:$ZoneConfig.SkipCertificateCheck
-                        Rename-PSMComponentAccounts -Settings $Settings -Session $session | Out-Null
+                        Rename-PSMComponentAccounts -Settings $Settings -Session $session -NonInteractive:$NonInteractive | Out-Null
                     }
                     else { throw }
                 }

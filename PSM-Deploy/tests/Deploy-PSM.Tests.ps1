@@ -379,8 +379,34 @@ Describe 'Test-PSMSettingsDrift (config drift vs script version)' {
         $partial = @{ PsmVersion = '12.6'; Rds = @{ LicenseMode = 'PerUser' } }
         $missing = Test-PSMSettingsDrift -Settings $partial
         $missing | Should -Contain 'Registration.RenameComponents'
+        $missing | Should -Contain 'Registration.ExistingAccountAction'
         $missing | Should -Contain 'Install.InstallDir'
         $missing | Should -Contain 'Rds.LicenseServers'
+    }
+}
+
+Describe 'Existing component Vault user (Overwrite / password-sync policy)' {
+    BeforeAll {
+        Import-Module (Join-Path $root 'modules\PSM.Common.psm1')   -Force
+        Import-Module (Join-Path $root 'modules\PSM.Pvwa.psm1')     -Force
+        Import-Module (Join-Path $root 'modules\PSM.Register.psm1') -Force
+    }
+    It 'Exposes the collision-handling functions' {
+        foreach ($fn in 'Resolve-PSMExistingComponentUser','New-PSMComponentPassword','Update-PSMCredFile') {
+            Get-Command $fn -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
+        }
+    }
+    It 'settings.psd1 carries a valid ExistingAccountAction policy' {
+        $s = Import-PowerShellDataFile (Join-Path $root 'config\settings.psd1')
+        $s.Registration.ExistingAccountAction | Should -BeIn @('Ask','Overwrite','ResetPassword','Fail')
+    }
+    It 'New-PSMComponentPassword: length and CLI-safe charset (no quote/space/&)' {
+        $generated = New-PSMComponentPassword
+        $generated.Length | Should -Be 32
+        $generated | Should -MatchExactly '^[A-Za-z0-9_-]+$'
+    }
+    It 'New-PSMComponentPassword: two calls do not collide' {
+        New-PSMComponentPassword | Should -Not -Be (New-PSMComponentPassword)
     }
 }
 
@@ -428,7 +454,8 @@ Describe 'PVWA module (secret retrieval through the REST API)' {
     }
     It 'Exposes the expected functions' {
         foreach ($fn in 'Connect-PvwaSession','Connect-PvwaSessionWithRetry','Disconnect-PvwaSession',
-                        'Get-PvwaAccountPassword','Find-PvwaAccount','Find-PvwaUser','Rename-PvwaUser') {
+                        'Get-PvwaAccountPassword','Find-PvwaAccount','Find-PvwaUser','Rename-PvwaUser',
+                        'Remove-PvwaUser','Reset-PvwaUserPassword') {
             Get-Command $fn -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
         }
     }

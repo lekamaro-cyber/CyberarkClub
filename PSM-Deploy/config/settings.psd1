@@ -93,6 +93,21 @@
         AppUserPattern   = 'PSM-{HOSTNAME}'    # e.g. PSM-FRPRDSRV4539
         GwUserPattern    = 'PSMA{HOSTNAME}'    # e.g. PSMAFRPRDSRV4539
 
+        # When the TARGET name (PSM-<HOST> / PSMA<HOST>) ALREADY exists on the
+        # Vault side (leftover from a previous deployment of the same server -
+        # wiping/reverting the machine never removes the Vault users; such a
+        # stale user causes the password mismatch at PSM service restart):
+        #   Ask           -> interactive choice at deployment time (default);
+        #   Overwrite     -> delete the stale user, the freshly registered one is
+        #                    renamed into its place (RECOMMENDED: keeps the current
+        #                    registration's Safe memberships and cred file);
+        #   ResetPassword -> keep the stale user, reset its password (PVWA API,
+        #                    needs the "Reset Users' Passwords" authorization) and
+        #                    regenerate the local cred file (CreateCredFile.exe);
+        #                    the freshly registered orphan is deleted;
+        #   Fail          -> stop with the manual-cleanup error (historic behavior).
+        ExistingAccountAction = 'Ask'
+
         # OPT-IN: also update PSMServerId/PSMServerAdminId in basic_psm.ini.
         # These IDs must stay ALIGNED with the "PSM Server" object in PVWA
         # (PVConfiguration), which the REST API cannot rename: only enable this

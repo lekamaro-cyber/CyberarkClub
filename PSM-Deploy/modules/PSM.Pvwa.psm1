@@ -201,6 +201,79 @@ function Rename-PvwaUser {
     }
 }
 
+function Remove-PvwaUser {
+    <#
+        Deletes a Vault user through the PVWA API (DELETE /API/Users/{id}).
+        Used to clean up a LEFTOVER component user (previous installation of the
+        same server) when the operator chooses to overwrite it, and to remove
+        the freshly generated orphan in the password-sync flow.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)] $Session,
+        [Parameter(Mandatory)] [string] $UserName,
+        [int] $TimeoutSec = 60
+    )
+    $match = @(Find-PvwaUser -Session $Session -Search $UserName | Where-Object { $_.username -eq $UserName })
+    if ($match.Count -ne 1) {
+        throw "Remove-PvwaUser: user '$UserName' not found or ambiguous ($($match.Count) result(s)) on the Vault side."
+    }
+    $id = $match[0].id
+
+    if (-not $PSCmdlet.ShouldProcess($UserName, 'Delete the Vault user (PVWA API)')) { return $false }
+    try {
+        Invoke-RestMethod -Uri "$($Session.PvwaUrl)/PasswordVault/API/Users/$id" `
+            -Method Delete -Headers $Session.Headers -TimeoutSec $TimeoutSec -ErrorAction Stop | Out-Null
+        return $true
+    }
+    catch {
+        throw ("PVWA deletion of user '$UserName' failed: $($_.Exception.Message). " +
+               'Alternative: delete the user in PVWA (Administration > Users) then relaunch.')
+    }
+}
+
+function Reset-PvwaUserPassword {
+    <#
+        Resets a Vault user's password through the PVWA API
+        (POST /API/Users/{id}/ResetPassword). Used by the component-account
+        password-sync flow: the existing PSM-<HOST> user gets a fresh password
+        that is then written into the local cred file (CreateCredFile.exe).
+        Requires the "Reset Users' Passwords" Vault authorization.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)] $Session,
+        [Parameter(Mandatory)] [string] $UserName,
+        [Parameter(Mandatory)] [securestring] $NewPassword,
+        [int] $TimeoutSec = 60
+    )
+    $match = @(Find-PvwaUser -Session $Session -Search $UserName | Where-Object { $_.username -eq $UserName })
+    if ($match.Count -ne 1) {
+        throw "Reset-PvwaUserPassword: user '$UserName' not found or ambiguous ($($match.Count) result(s)) on the Vault side."
+    }
+    $id = $match[0].id
+
+    if (-not $PSCmdlet.ShouldProcess($UserName, 'Reset the Vault user password (PVWA API)')) { return $false }
+    $plain = [System.Management.Automation.PSCredential]::new('x', $NewPassword).GetNetworkCredential().Password
+    if (Get-Command Register-PSMSecret -ErrorAction SilentlyContinue) { Register-PSMSecret -Secret $plain }
+    $body = @{ id = $id; newPassword = $plain } | ConvertTo-Json
+    try {
+        Invoke-RestMethod -Uri "$($Session.PvwaUrl)/PasswordVault/API/Users/$id/ResetPassword" `
+            -Method Post -Headers $Session.Headers -Body $body -ContentType 'application/json' `
+            -TimeoutSec $TimeoutSec -ErrorAction Stop | Out-Null
+        return $true
+    }
+    catch {
+        $msg = $_.Exception.Message
+        if ($msg -match '\(403\)|Forbidden|PASWS') {
+            throw ("PVWA password reset of '$UserName' REFUSED ($msg): the connected admin needs the " +
+                   '"Reset Users'' Passwords" Vault authorization. Grant it (or reset the password in ' +
+                   'PVWA > Administration > Users) then relaunch.')
+        }
+        throw "PVWA password reset of '$UserName' failed: $msg"
+    }
+}
+
 function Find-PvwaAccount {
     <# Account search (filter by Safe + text search on user/object/address). #>
     [CmdletBinding()]
@@ -280,4 +353,4 @@ function Get-PvwaAccountPassword {
 
 Export-ModuleMember -Function Set-PvwaTlsBypass, Connect-PvwaSession, Connect-PvwaSessionWithRetry, `
                               Disconnect-PvwaSession, Find-PvwaAccount, Get-PvwaAccountPassword, `
-                              Find-PvwaUser, Rename-PvwaUser
+                              Find-PvwaUser, Rename-PvwaUser, Remove-PvwaUser, Reset-PvwaUserPassword
