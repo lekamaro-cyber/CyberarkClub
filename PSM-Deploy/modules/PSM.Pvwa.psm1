@@ -296,6 +296,10 @@ function Find-PvwaAccount {
     $resp  = Invoke-RestMethod -Uri $uri -Method Get -Headers $Session.Headers -TimeoutSec $TimeoutSec -ErrorAction Stop
     $items = @($resp.value)
     if ($UserName) { $items = @($items | Where-Object { $_.userName -eq $UserName }) }
+    # Exact address match (the PVWA text search also returns NEIGHBOR machines:
+    # searching SRV1001 matches SRV10013 too). Accounts may be onboarded with
+    # the short name or the FQDN -> both accepted.
+    if ($Address) { $items = @($items | Where-Object { $_.address -ieq $Address -or $_.address -ilike "$Address.*" }) }
     return $items
 }
 
@@ -312,14 +316,15 @@ function Get-PvwaAccountPassword {
         [string] $Safe,
         [string] $UserName,
         [string] $Search,
+        [string] $Address,      # exact machine match (short name or FQDN)
         [string] $Reason = 'PSM automated deployment',
         [int]    $TimeoutSec = 60
     )
 
     if (-not $AccountId) {
-        $found = Find-PvwaAccount -Session $Session -Safe $Safe -UserName $UserName -Search $Search
+        $found = Find-PvwaAccount -Session $Session -Safe $Safe -UserName $UserName -Search $Search -Address $Address
         if (@($found).Count -eq 0) {
-            throw "Account not found in the PVWA (Safe='$Safe' User='$UserName' Search='$Search')."
+            throw "Account not found in the PVWA (Safe='$Safe' User='$UserName' Address='$Address' Search='$Search')."
         }
         if (@($found).Count -gt 1) {
             $ids = ($found | Select-Object -First 5 -ExpandProperty id) -join ', '

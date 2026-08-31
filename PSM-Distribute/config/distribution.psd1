@@ -48,10 +48,11 @@
 
     # Default LOCAL admin account: the SAME account name exists on every
     # machine and is onboarded in CyberArk (the local-accounts collection: one
-    # Vault account per machine, address = the server). The SMB push then
+    # Vault account per machine, address = the server; the accounts are SPREAD
+    # ACROSS Safes - no Safe to declare, the lookup matches on username +
+    # exact machine address, short name or FQDN). The SMB push then
     # authenticates as <SERVER>\<LocalAdminUserName>.
     LocalAdminUserName = ''        # e.g. 'locadm' - REQUIRED
-    LocalAdminSafe     = ''        # optional Safe filter for the Vault lookup
 
     # Target inventory: machine name + server type (= overlay folder).
     Servers = @(

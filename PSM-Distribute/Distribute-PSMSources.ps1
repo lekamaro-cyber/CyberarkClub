@@ -142,9 +142,10 @@ try {
             try {
                 try {
                     # This machine's LOCAL account from the Vault (collection of local
-                    # accounts: userName = LocalAdminUserName, address = the server).
+                    # accounts, spread across Safes: userName = LocalAdminUserName,
+                    # exact address match = the server, short name or FQDN).
                     $acct = Get-PvwaAccountPassword -Session $session `
-                                -Safe $Config['LocalAdminSafe'] -UserName $localAdmin -Address $srv.Name
+                                -UserName $localAdmin -Address $srv.Name
                     # SMB logon must be machine-qualified: <SERVER>\<localuser>.
                     $smbCred = [System.Management.Automation.PSCredential]::new(
                                    "$($srv.Name)\$localAdmin", $acct.Credential.Password)

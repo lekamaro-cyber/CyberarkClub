@@ -596,10 +596,14 @@ Describe 'PSM-Distribute (source distribution from the CPM)' {
     }
     It 'Carries the CyberArk lookup settings (PVWA + default local admin account)' {
         $c = Import-PowerShellDataFile (Join-Path $distRoot 'config\distribution.psd1')
-        $c.Keys      | Should -Contain 'LocalAdminUserName'
-        $c.Keys      | Should -Contain 'LocalAdminSafe'
+        $c.Keys            | Should -Contain 'LocalAdminUserName'
         $c.Pvwa.Url        | Should -Not -BeNullOrEmpty
         $c.Pvwa.AuthMethod | Should -BeIn @('CyberArk', 'LDAP', 'Windows', 'RADIUS')
+    }
+    It 'Get-PvwaAccountPassword accepts an -Address (exact machine match, cross-Safe)' {
+        Import-Module (Join-Path $root 'modules\PSM.Pvwa.psm1') -Force
+        (Get-Command Get-PvwaAccountPassword).Parameters.Keys | Should -Contain 'Address'
+        (Get-Command Find-PvwaAccount).Parameters.Keys        | Should -Contain 'Address'
     }
     It 'overlays-example folders map 1:1 to the declared ServerTypes (Type = folder name)' {
         $c = Import-PowerShellDataFile (Join-Path $distRoot 'config\distribution.psd1')

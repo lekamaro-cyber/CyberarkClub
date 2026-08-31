@@ -89,8 +89,9 @@ per machine with `address` = the server). At launch:
    `Pvwa.Url/AuthMethod`; same validated/retried prompt as the deployment's
    Registration phase, or pass `-PvwaCredential`);
 2. for each target, the script retrieves **that machine's** local account
-   password from the Vault (`userName = LocalAdminUserName`,
-   `address = <server>`, optional `LocalAdminSafe` filter);
+   password from the Vault (`userName = LocalAdminUserName`, exact
+   `address` match on the machine — short name or FQDN). The accounts are
+   spread across Safes: **no Safe to declare**;
 3. the SMB push authenticates as **`<SERVER>\<LocalAdminUserName>`**.
 
 Passwords stay in memory only (masked in the logs) — never written to disk,
