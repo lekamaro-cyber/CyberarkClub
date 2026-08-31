@@ -548,3 +548,51 @@ Describe 'PVWA module (secret retrieval through the REST API)' {
         [PSMTlsBypass]::Disable()   # cleanup: re-validate certificates in the test session
     }
 }
+
+Describe 'PSM-Distribute (source distribution from the CPM)' {
+    BeforeAll {
+        $distRoot = Join-Path (Split-Path $root -Parent) 'PSM-Distribute'
+        Import-Module (Join-Path $root 'modules\PSM.Common.psm1') -Force
+        Import-Module (Join-Path $distRoot 'modules\PSM.Distribute.psm1') -Force
+        Initialize-PSMLogging -LogDirectory (Join-Path $env:TEMP 'psm-test-logs')
+    }
+    It 'Contains the orchestrator, config and module' {
+        Test-Path (Join-Path $distRoot 'Distribute-PSMSources.ps1')          | Should -BeTrue
+        Test-Path (Join-Path $distRoot 'config\distribution.psd1')          | Should -BeTrue
+        Test-Path (Join-Path $distRoot 'modules\PSM.Distribute.psm1')       | Should -BeTrue
+    }
+    It 'distribution.psd1 parses and every server entry is complete' {
+        $c = Import-PowerShellDataFile (Join-Path $distRoot 'config\distribution.psd1')
+        $c.ServerTypes | Should -Not -BeNullOrEmpty
+        $c.Servers     | Should -Not -BeNullOrEmpty
+        foreach ($s in $c.Servers) {
+            $s['Name']       | Should -Not -BeNullOrEmpty
+            $s['Type']       | Should -BeIn $c.ServerTypes
+            $s['Datacenter'] | Should -Not -BeNullOrEmpty
+        }
+    }
+    It 'Build-PSMStagingTree: overlay wins, base extras survive, state\ is never shipped' {
+        $base = Join-Path $env:TEMP 'psm-test-dist-base'
+        $ovl  = Join-Path $env:TEMP 'psm-test-dist-ovl'
+        $stg  = Join-Path $env:TEMP 'psm-test-dist-stg'
+        Remove-Item $base, $ovl, $stg -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path (Join-Path $base 'config'), (Join-Path $base 'state'), (Join-Path $ovl 'config') | Out-Null
+        Set-Content -Path (Join-Path $base 'config\software.psd1') -Value 'base'
+        Set-Content -Path (Join-Path $base 'config\settings.psd1') -Value 'common'
+        Set-Content -Path (Join-Path $base 'state\progress.json')  -Value 'local'
+        Set-Content -Path (Join-Path $ovl  'config\software.psd1') -Value 'overlay'
+        Build-PSMStagingTree -BaseRoot $base -OverlayPath $ovl -StagingPath $stg | Out-Null
+        Get-Content (Join-Path $stg 'config\software.psd1') | Should -Be 'overlay'   # overlay wins
+        Get-Content (Join-Path $stg 'config\settings.psd1') | Should -Be 'common'    # base extras survive
+        Test-Path   (Join-Path $stg 'state')                | Should -BeFalse        # local state never shipped
+    }
+    It 'A base-only recompose is convergent (second run reports nothing to copy)' {
+        $base = Join-Path $env:TEMP 'psm-test-dist-base2'
+        $stg  = Join-Path $env:TEMP 'psm-test-dist-stg2'
+        Remove-Item $base, $stg -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path $base | Out-Null
+        Set-Content -Path (Join-Path $base 'file.txt') -Value 'x'
+        Build-PSMStagingTree -BaseRoot $base -StagingPath $stg | Out-Null
+        Build-PSMStagingTree -BaseRoot $base -StagingPath $stg | Should -Be 0
+    }
+}

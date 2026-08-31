@@ -257,6 +257,14 @@ The resume is **interactive** (the PVWA `Get-Credential` prompts work) and
       (reboots auto-resume; one PVWA prompt at Registration; type `YES`/`A`
       at the confirmations)
 
+## Distributing the sources (multi-server)
+
+Because `installers\` and `software.psd1` differ per server type, the sources
+are not copied by hand: from the CPM, [`../PSM-Distribute`](../PSM-Distribute/README.md)
+composes one tree per type (common base + `overlays\<TYPE>` delta) and mirrors
+it to every PSM over SMB — one admin credential per datacenter, and the
+servers' local `state\` / `logs\` folders are always preserved.
+
 ## Tests
 
 ```powershell
