@@ -566,9 +566,8 @@ Describe 'PSM-Distribute (source distribution from the CPM)' {
         $c.ServerTypes | Should -Not -BeNullOrEmpty
         $c.Servers     | Should -Not -BeNullOrEmpty
         foreach ($s in $c.Servers) {
-            $s['Name']       | Should -Not -BeNullOrEmpty
-            $s['Type']       | Should -BeIn $c.ServerTypes
-            $s['Datacenter'] | Should -Not -BeNullOrEmpty
+            $s['Name'] | Should -Not -BeNullOrEmpty
+            $s['Type'] | Should -BeIn $c.ServerTypes
         }
     }
     It 'Build-PSMStagingTree: overlay wins, base extras survive, state\ is never shipped' {
@@ -595,14 +594,12 @@ Describe 'PSM-Distribute (source distribution from the CPM)' {
         Build-PSMStagingTree -BaseRoot $base -StagingPath $stg | Out-Null
         Build-PSMStagingTree -BaseRoot $base -StagingPath $stg | Should -Be 0
     }
-    It 'DatacenterAccounts keys, if any, match a Datacenter used by the inventory' {
+    It 'Carries the CyberArk lookup settings (PVWA + default local admin account)' {
         $c = Import-PowerShellDataFile (Join-Path $distRoot 'config\distribution.psd1')
-        $c.Keys | Should -Contain 'DatacenterAccounts'
-        $usedDcs = @($c.Servers | ForEach-Object { $_['Datacenter'] })
-        foreach ($dc in @($c.DatacenterAccounts.Keys)) {
-            $dc | Should -BeIn $usedDcs
-            $c.DatacenterAccounts[$dc] | Should -Not -BeNullOrEmpty
-        }
+        $c.Keys      | Should -Contain 'LocalAdminUserName'
+        $c.Keys      | Should -Contain 'LocalAdminSafe'
+        $c.Pvwa.Url        | Should -Not -BeNullOrEmpty
+        $c.Pvwa.AuthMethod | Should -BeIn @('CyberArk', 'LDAP', 'Windows', 'RADIUS')
     }
     It 'overlays-example folders map 1:1 to the declared ServerTypes (Type = folder name)' {
         $c = Import-PowerShellDataFile (Join-Path $distRoot 'config\distribution.psd1')

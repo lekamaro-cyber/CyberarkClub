@@ -1,8 +1,9 @@
 @{
     # =====================================================================
     # Source distribution from the CPM (the CPM reaches every PSM on SMB/445).
-    # No sensitive value here: the per-datacenter admin credentials are
-    # PROMPTED at runtime (Get-Credential), never stored on disk.
+    # No sensitive value here: the operator authenticates to the PVWA at
+    # runtime, and each target machine's LOCAL admin password is retrieved
+    # from the Vault on the fly - nothing is ever stored on disk.
     #
     # CPM disk layout (OverlayRoot/StagingRoot created by the script):
     #   D:\PSMSources\
@@ -33,29 +34,30 @@
     #   PRDNPR - hosted in the DRP datacenter, serves NON-prod accounts
     ServerTypes = @('PRD', 'DRP', 'PREPRD', 'PRDNPR')
 
-    # Expected admin ACCOUNT per datacenter, 'DOMAIN\samaccount' format (same
-    # writing as whoami). At runtime:
-    #   - declared account == the CURRENTLY logged-on operator -> NO prompt
-    #     (integrated SMB authentication under the session token);
-    #   - declared but different -> Get-Credential PRE-FILLED with that
-    #     account (only the password is typed);
-    #   - datacenter absent from this map -> plain Get-Credential prompt.
-    # If the current account turns out NOT to have rights there, the push
-    # fails with "share unreachable / access denied".
-    DatacenterAccounts = @{
-        # DCA = 'FRANCE\<admin-dca>'
-        # DRP = 'FRANCE\<admin-drp>'
-        # PRE = 'FRANCE\<admin-pre>'
+    # CyberArk/PVWA connection (same flow as the PSM registration): the
+    # operator authenticates to the PVWA at launch (prompt with validation and
+    # retry); the LOCAL admin password of EACH target machine is then
+    # retrieved from the Vault at push time - no per-datacenter accounts, no
+    # manual machine credentials. PRE values prefilled: adjust on another
+    # infra's CPM.
+    Pvwa = @{
+        Url                  = 'https://oneconnection.pre.intra.corp'
+        AuthMethod           = 'CyberArk'      # CyberArk | LDAP | Windows | RADIUS
+        SkipCertificateCheck = $true           # lab only (self-signed certificate)
     }
 
-    # Target inventory. 'Datacenter' is a FREE key that only drives which
-    # credential is used: the script prompts ONE Get-Credential per DISTINCT
-    # datacenter among the selected servers (each datacenter has its own admin
-    # account; PRDNPR machines live in the DRP datacenter -> same 'DRP' key).
+    # Default LOCAL admin account: the SAME account name exists on every
+    # machine and is onboarded in CyberArk (the local-accounts collection: one
+    # Vault account per machine, address = the server). The SMB push then
+    # authenticates as <SERVER>\<LocalAdminUserName>.
+    LocalAdminUserName = ''        # e.g. 'locadm' - REQUIRED
+    LocalAdminSafe     = ''        # optional Safe filter for the Vault lookup
+
+    # Target inventory: machine name + server type (= overlay folder).
     Servers = @(
-        @{ Name = 'FRPRDSRV10013'; Type = 'PREPRD'; Datacenter = 'PRE' }
-        # @{ Name = '<PRD-PSM-1>';  Type = 'PRD';    Datacenter = 'DCA' }
-        # @{ Name = '<DRP-PSM-1>';  Type = 'DRP';    Datacenter = 'DRP' }
-        # @{ Name = '<NPR-PSM-1>';  Type = 'PRDNPR'; Datacenter = 'DRP' }   # DRP DC account
+        @{ Name = 'FRPRDSRV10013'; Type = 'PREPRD' }
+        # @{ Name = '<PRD-PSM-1>';  Type = 'PRD'    }
+        # @{ Name = '<DRP-PSM-1>';  Type = 'DRP'    }
+        # @{ Name = '<NPR-PSM-1>';  Type = 'PRDNPR' }
     )
 }

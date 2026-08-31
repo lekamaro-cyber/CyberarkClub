@@ -10,12 +10,13 @@
          type, hence no single source tree;
       2. pushes it to \\<server>\D$\...\PSM-Deploy with robocopy /MIR,
          PRESERVING the server's local state\ and logs\ folders;
-      3. authenticates with the credential of the server's DATACENTER: one
-         admin account per datacenter, prompted once per datacenter
-         (Get-Credential, never written to disk). DatacenterAccounts declares
-         the expected account per datacenter: when it is the CURRENT session
-         account, no prompt at all (integrated auth); otherwise the prompt
-         comes pre-filled with it.
+      3. authenticates with the machine's LOCAL admin account fetched from
+         CYBERARK: the operator logs on to the PVWA once (same flow as the
+         PSM registration, prompt with validation/retry), then each target's
+         local account password is retrieved from the Vault on the fly
+         (LocalAdminUserName: same account name on every machine, one Vault
+         account per machine with address = the server). SMB logon is
+         <SERVER>\<LocalAdminUserName>; no password ever touches the disk.
     One server's failure does not stop the others (summary + exit code 1).
 
 .PARAMETER Type
@@ -45,7 +46,11 @@
 param(
     [string[]] $Type,
     [string[]] $Server,
-    [switch]   $SkipStaging
+    [switch]   $SkipStaging,
+
+    # PVWA account of the operator. When omitted, requested interactively
+    # (with validation and retry) - same behavior as Deploy-PSM.ps1.
+    [pscredential] $PvwaCredential
 )
 
 Set-StrictMode -Version Latest
@@ -60,14 +65,15 @@ if (-not (Test-Path $commonModule)) {
            "must sit at distribution.psd1 SourceRoot ($($Config.SourceRoot)).")
 }
 Import-Module $commonModule -Force
+Import-Module (Join-Path $Config.SourceRoot 'modules\PSM.Pvwa.psm1') -Force   # PVWA session + Vault lookups (reused)
 Import-Module (Join-Path $PSScriptRoot 'modules\PSM.Distribute.psm1') -Force
 Initialize-PSMLogging -LogDirectory (Join-Path $PSScriptRoot 'logs')
 
 # --- Inventory validation + target selection --------------------------------
 $targets = @($Config.Servers)
 foreach ($s in $targets) {
-    foreach ($k in 'Name', 'Type', 'Datacenter') {
-        if (-not $s[$k]) { throw "distribution.psd1: a Servers entry is missing '$k' (Name/Type/Datacenter are required)." }
+    foreach ($k in 'Name', 'Type') {
+        if (-not $s[$k]) { throw "distribution.psd1: a Servers entry is missing '$k' (Name/Type are required)." }
     }
     if ($s.Type -notin $Config.ServerTypes) {
         throw "distribution.psd1: server '$($s.Name)': type '$($s.Type)' unknown (ServerTypes: $($Config.ServerTypes -join ', '))."
@@ -78,8 +84,13 @@ if ($Server) { $targets = @($targets | Where-Object { $_.Name -in $Server }) }
 if (-not $targets) {
     throw "No target server selected (filters: Type=$($Type -join ',') Server=$($Server -join ',')). Check distribution.psd1."
 }
+$localAdmin = $Config['LocalAdminUserName']
+if (-not $WhatIfPreference -and -not $localAdmin) {
+    throw ("distribution.psd1: LocalAdminUserName not set. Declare the default LOCAL admin account " +
+           "(same name on every machine, onboarded in CyberArk with address = the server).")
+}
 Write-PSMLog -Level INFO -Message ("=== Source distribution | {0} server(s): {1} ===" -f `
-    $targets.Count, (($targets | ForEach-Object { "$($_.Name) [$($_.Type)/$($_.Datacenter)]" }) -join ', '))
+    $targets.Count, (($targets | ForEach-Object { "$($_.Name) [$($_.Type)]" }) -join ', '))
 
 # --- Staging composition (one tree per distinct type) ------------------------
 $neededTypes = @($targets | ForEach-Object { $_.Type } | Sort-Object -Unique)
@@ -103,62 +114,61 @@ foreach ($t in $neededTypes) {
     else          { Write-PSMLog -Level CHANGED -Message "Staging '$t' composed (base + overlay): $staging" }
 }
 
-# --- One credential per DISTINCT datacenter among the targets ----------------
-# DatacenterAccounts declares WHO is supposed to reach each datacenter:
-#   - declared account == the current session -> no prompt, no $credByDc entry
-#     (the push then runs without New-PSDrive, under the operator's own token);
-#   - declared but different -> Get-Credential pre-filled with it;
-#   - not declared -> plain Get-Credential.
-$dcAccounts = $Config['DatacenterAccounts']
-if (-not $dcAccounts) { $dcAccounts = @{} }
-$currentUser = "$env:USERDOMAIN\$env:USERNAME"
-$credByDc = @{}
+# --- CyberArk/PVWA session (same flow as the PSM registration) ---------------
+# One PVWA logon for the whole run; each machine's LOCAL admin password is
+# then retrieved from the Vault at push time. Nothing in WhatIf mode.
+$session = $null
 if (-not $WhatIfPreference) {
-    foreach ($dc in @($targets | ForEach-Object { $_.Datacenter } | Sort-Object -Unique)) {
-        $declared = $dcAccounts[$dc]
-        if ($declared -and ($declared -ieq $currentUser)) {
-            Write-PSMLog -Level INFO -Message "Datacenter '$dc': declared account '$declared' IS the current session - no credential prompt (integrated authentication)."
-            continue
-        }
-        $dcServers = (@($targets | Where-Object { $_.Datacenter -eq $dc } | ForEach-Object { $_.Name })) -join ', '
-        $msg = "Admin account for datacenter '$dc' (SMB admin-share access to: $dcServers)"
-        $cred = if ($declared) { Get-Credential -UserName $declared -Message $msg }
-                else           { Get-Credential -Message $msg }
-        if (-not $cred) { throw "Distribution canceled: no credential provided for datacenter '$dc'." }
-        $credByDc[$dc] = $cred
-    }
+    $logon = Connect-PvwaSessionWithRetry -PvwaUrl $Config.Pvwa.Url `
+                -AuthMethod $Config.Pvwa.AuthMethod -ZoneName 'CPM distribution' `
+                -Credential $PvwaCredential `
+                -SkipCertificateCheck:$Config.Pvwa.SkipCertificateCheck
+    $session = $logon.Session
 }
 
 # --- Push (one server's failure does not stop the others) --------------------
 $results = @()
-foreach ($srv in $targets) {
-    $staging = Join-Path $Config.StagingRoot $srv.Type
-    # D:\PSMSources\PSM-Deploy -> \\<server>\D$\PSMSources\PSM-Deploy
-    $unc = '\\{0}\{1}' -f $srv.Name, ($Config.TargetPath -replace '^([A-Za-z]):\\', '$1$\')
-    if ($WhatIfPreference) {
-        Write-PSMLog -Level INFO -Message "WhatIf: '$staging' would be mirrored to '$unc' (state\ and logs\ preserved)."
-        $status = 'WHATIF'
-    }
-    else {
-        try {
-            $code = Push-PSMSourcesToServer -ServerName $srv.Name -StagingPath $staging `
-                        -TargetUnc $unc -Credential $credByDc[$srv.Datacenter]
-            if ($code -eq 0) { $status = 'OK';      Write-PSMLog -Level OK      -Message "$($srv.Name): already in sync ($unc)." }
-            else             { $status = 'CHANGED'; Write-PSMLog -Level CHANGED -Message "$($srv.Name): sources updated ($unc)." }
+try {
+    foreach ($srv in $targets) {
+        $staging = Join-Path $Config.StagingRoot $srv.Type
+        # D:\PSMSources\PSM-Deploy -> \\<server>\D$\PSMSources\PSM-Deploy
+        $unc = '\\{0}\{1}' -f $srv.Name, ($Config.TargetPath -replace '^([A-Za-z]):\\', '$1$\')
+        if ($WhatIfPreference) {
+            $who = if ($localAdmin) { "$($srv.Name)\$localAdmin" } else { "the machine's local account (LocalAdminUserName to set)" }
+            Write-PSMLog -Level INFO -Message "WhatIf: '$staging' would be mirrored to '$unc' as $who (state\ and logs\ preserved)."
+            $status = 'WHATIF'
         }
-        catch {
-            $status = 'FAILED'
-            Write-PSMLog -Level ERROR -Message "$($srv.Name): push failed - $($_.Exception.Message)"
+        else {
+            try {
+                # This machine's LOCAL account from the Vault (collection of local
+                # accounts: userName = LocalAdminUserName, address = the server).
+                $acct = Get-PvwaAccountPassword -Session $session `
+                            -Safe $Config['LocalAdminSafe'] -UserName $localAdmin -Address $srv.Name
+                # SMB logon must be machine-qualified: <SERVER>\<localuser>.
+                $smbCred = [System.Management.Automation.PSCredential]::new(
+                               "$($srv.Name)\$localAdmin", $acct.Credential.Password)
+                $code = Push-PSMSourcesToServer -ServerName $srv.Name -StagingPath $staging `
+                            -TargetUnc $unc -Credential $smbCred
+                if ($code -eq 0) { $status = 'OK';      Write-PSMLog -Level OK      -Message "$($srv.Name): already in sync ($unc)." }
+                else             { $status = 'CHANGED'; Write-PSMLog -Level CHANGED -Message "$($srv.Name): sources updated ($unc)." }
+            }
+            catch {
+                $status = 'FAILED'
+                Write-PSMLog -Level ERROR -Message "$($srv.Name): push failed - $($_.Exception.Message)"
+            }
         }
+        $results += [pscustomobject]@{ Server = $srv.Name; Type = $srv.Type; Status = $status }
     }
-    $results += [pscustomobject]@{ Server = $srv.Name; Type = $srv.Type; Datacenter = $srv.Datacenter; Status = $status }
+}
+finally {
+    if ($session) { Disconnect-PvwaSession -Session $session }
 }
 
 # --- Summary -----------------------------------------------------------------
 Write-PSMLog -Level INFO -Message '=== Distribution summary ==='
 foreach ($r in $results) {
     $lvl = switch ($r.Status) { 'FAILED' { 'ERROR' } 'CHANGED' { 'CHANGED' } 'OK' { 'OK' } default { 'INFO' } }
-    Write-PSMLog -Level $lvl -Message ("{0,-20} {1,-8} {2,-6} {3}" -f $r.Server, $r.Type, $r.Datacenter, $r.Status)
+    Write-PSMLog -Level $lvl -Message ("{0,-20} {1,-8} {2}" -f $r.Server, $r.Type, $r.Status)
 }
 $failed = @($results | Where-Object { $_.Status -eq 'FAILED' })
 if ($failed) {

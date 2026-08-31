@@ -78,26 +78,27 @@ staging\PREPRD\
 └── installers\chrome\, installers\privateark\   <- from the OVERLAY
 ```
 
-## Per-datacenter credentials
+## Per-machine local accounts from CyberArk
 
-Admin rights are per datacenter: the DC-A account cannot reach the DRP
-machines and vice versa. Each server carries a free `Datacenter` key in
-`config\distribution.psd1`; the script prompts **one `Get-Credential` per
-distinct datacenter** among the selected targets (`PRDNPR` machines live in
-the DRP datacenter → same `DRP` key/credential). Passwords are kept in memory
-only — never written to disk, consistent with the PSM-Deploy doctrine.
+No per-datacenter accounts and no manual machine credentials: the target
+machines' LOCAL admin accounts are onboarded in CyberArk (the local-accounts
+collection — the **same account name on every machine**, one Vault account
+per machine with `address` = the server). At launch:
 
-**Declared accounts per datacenter** (`DatacenterAccounts` in
-distribution.psd1, `'DOMAIN\samaccount'` format — same writing as `whoami`):
+1. the operator logs on to the **PVWA once** (`config\distribution.psd1` →
+   `Pvwa.Url/AuthMethod`; same validated/retried prompt as the deployment's
+   Registration phase, or pass `-PvwaCredential`);
+2. for each target, the script retrieves **that machine's** local account
+   password from the Vault (`userName = LocalAdminUserName`,
+   `address = <server>`, optional `LocalAdminSafe` filter);
+3. the SMB push authenticates as **`<SERVER>\<LocalAdminUserName>`**.
 
-| Situation | Behavior |
-|---|---|
-| declared account **is** the current session | **no prompt** — integrated SMB auth under your own token |
-| declared but you are logged on as someone else | prompt **pre-filled** with the declared account (password only) |
-| datacenter not declared | plain `Get-Credential` prompt |
+Passwords stay in memory only (masked in the logs) — never written to disk,
+consistent with the PSM-Deploy doctrine. If a machine's account is not found
+in the Vault (or the retrieve is refused), only THAT server is FAILED; the
+others continue.
 
-If the current account turns out not to have rights on that datacenter, the
-push fails with "share unreachable / access denied".
+One `LocalAdminUserName` line in the settings is the whole configuration.
 
 ## Usage
 
@@ -123,8 +124,8 @@ push fails with "share unreachable / access denied".
   staging tree — files that no longer exist in the sources are **deleted** on
   the target — EXCEPT `state\` and `logs\`, always preserved (the server's
   deployment progress and history are local).
-- The SMB session is authenticated with `New-PSDrive` + the datacenter
-  credential (no plaintext password on any command line).
+- The SMB session is authenticated with `New-PSDrive` + the machine's local
+  account fetched from the Vault (no plaintext password on any command line).
 - One server's failure does not stop the others: summary at the end, exit
   code 1, and a ready-made `-Server <failed> -SkipStaging` relaunch hint.
 - A type without an overlay folder gets the base tree only (WARN).
@@ -132,6 +133,7 @@ push fails with "share unreachable / access denied".
 ## Filling the inventory
 
 `config\distribution.psd1` → `Servers`: one entry per PSM with `Name`
-(machine name), `Type` (one of the four above) and `Datacenter` (free
-credential key). Placeholders for PRD/DRP/PRDNPR are provided; the PRE
-server is pre-filled.
+(machine name) and `Type` (one of the four above). Placeholders for
+PRD/DRP/PRDNPR are provided; the PRE server is pre-filled. Also set
+`LocalAdminUserName` (the CyberArk-managed local admin account) and the
+`Pvwa` block if the CPM belongs to another infra.
