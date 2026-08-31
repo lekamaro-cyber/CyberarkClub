@@ -78,31 +78,26 @@ staging\PREPRD\
 └── installers\chrome\, installers\privateark\   <- from the OVERLAY
 ```
 
-## Per-machine local accounts from CyberArk
+## Credentials: CyberArk-backed cascade
 
-No per-datacenter accounts and no manual machine credentials: the target
-machines' LOCAL admin accounts are onboarded in CyberArk (the local-accounts
-collection — the **same account name on every machine**, one Vault account
-per machine with `address` = the server). At launch:
+The operator logs on to the **PVWA once** (`config\distribution.psd1` →
+`Pvwa.Url/AuthMethod`, or pass `-PvwaCredential`) — a **concurrent** session
+(your own PVWA portal session does not kill it), re-opened automatically once
+if the Vault drops it mid-run (401/timeout). Then, PER SERVER, three levels
+are tried in order (each attempt is logged, so a denial is diagnosable):
 
-1. the operator logs on to the **PVWA once** (`config\distribution.psd1` →
-   `Pvwa.Url/AuthMethod`; same validated/retried prompt as the deployment's
-   Registration phase, or pass `-PvwaCredential`);
-2. for each target, the script retrieves **that machine's** local account
-   password from the Vault (`userName = LocalAdminUserName`, exact
-   `address` match on the machine — short name or FQDN). The accounts are
-   spread across Safes: **no Safe to declare**;
-3. the SMB push authenticates as **`<SERVER>\<LocalAdminUserName>`**.
+1. **Domain push account** (`PushAccount` block): one Vault account with
+   admin-share access to ALL machines, fetched once and reused everywhere.
+   SMB logon is `LogonName` (e.g. `FRANCE\svcpsmpush`) or `<UserName>@<Address>`.
+2. **Machine local account** (`LocalAdminUserName`): that machine's own local
+   account from the Vault (exact `address` match, short name or FQDN, spread
+   across Safes — no Safe to declare). SMB logon `<SERVER>\<localuser>`.
+   Skipped when empty — local account names are not uniform across the fleet.
+3. **Manual prompt**: supply any account that works for this machine;
+   canceling marks only THAT server FAILED, the others continue.
 
 Passwords stay in memory only (masked in the logs) — never written to disk,
-consistent with the PSM-Deploy doctrine. If a machine's account is not found
-in the Vault (or the retrieve is refused), the script **falls back to a
-manual credential prompt** for that machine (pre-filled with
-`<SERVER>\<LocalAdminUserName>` — supply any account that has admin-share
-access, local or domain); canceling the prompt marks only THAT server FAILED,
-the others continue.
-
-One `LocalAdminUserName` line in the settings is the whole configuration.
+consistent with the PSM-Deploy doctrine.
 
 ## Usage
 

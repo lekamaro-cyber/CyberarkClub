@@ -594,11 +594,14 @@ Describe 'PSM-Distribute (source distribution from the CPM)' {
         Build-PSMStagingTree -BaseRoot $base -StagingPath $stg | Out-Null
         Build-PSMStagingTree -BaseRoot $base -StagingPath $stg | Should -Be 0
     }
-    It 'Carries the CyberArk lookup settings (PVWA + default local admin account)' {
+    It 'Carries the CyberArk credential-cascade settings (PVWA, push account, local fallback)' {
         $c = Import-PowerShellDataFile (Join-Path $distRoot 'config\distribution.psd1')
         $c.Keys            | Should -Contain 'LocalAdminUserName'
         $c.Pvwa.Url        | Should -Not -BeNullOrEmpty
         $c.Pvwa.AuthMethod | Should -BeIn @('CyberArk', 'LDAP', 'Windows', 'RADIUS')
+        foreach ($k in 'UserName', 'Address', 'Safe', 'LogonName') {
+            $c.PushAccount.Keys | Should -Contain $k
+        }
     }
     It 'Get-PvwaAccountPassword accepts an -Address (exact machine match, cross-Safe)' {
         Import-Module (Join-Path $root 'modules\PSM.Pvwa.psm1') -Force

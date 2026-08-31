@@ -46,13 +46,26 @@
         SkipCertificateCheck = $true           # lab only (self-signed certificate)
     }
 
-    # Default LOCAL admin account: the SAME account name exists on every
-    # machine and is onboarded in CyberArk (the local-accounts collection: one
-    # Vault account per machine, address = the server; the accounts are SPREAD
-    # ACROSS Safes - no Safe to declare, the lookup matches on username +
-    # exact machine address, short name or FQDN). The SMB push then
-    # authenticates as <SERVER>\<LocalAdminUserName>.
-    LocalAdminUserName = ''        # e.g. 'locadm' - REQUIRED
+    # DOMAIN push account (PRIMARY): one Vault account with admin-share access
+    # to ALL machines. Fetched once at launch and reused for every server.
+    # Empty UserName = disabled (the per-machine local fallback below is then
+    # tried directly).
+    PushAccount = @{
+        UserName  = ''   # Vault account userName, e.g. 'svcpsmpush'
+        Address   = ''   # its Vault address, e.g. 'france.intra.corp'
+        Safe      = ''   # optional Safe filter for the lookup
+        LogonName = ''   # SMB logon override, e.g. 'FRANCE\svcpsmpush';
+                         # empty -> '<UserName>@<Address>' (UPN)
+    }
+
+    # FALLBACK per machine, when the domain account fails on a server (or is
+    # not configured): the machine's LOCAL admin account from CyberArk (one
+    # Vault account per machine, address = the server, accounts spread across
+    # Safes - lookup on username + exact machine address, short name or FQDN;
+    # SMB logon <SERVER>\<LocalAdminUserName>). WARNING: local account names
+    # are NOT uniform across the fleet - a wrong name here simply pushes that
+    # server down to the manual prompt (last resort of the cascade).
+    LocalAdminUserName = ''        # e.g. 'AdminVal'; empty = skip this level
 
     # Target inventory: machine name + server type (= overlay folder).
     Servers = @(

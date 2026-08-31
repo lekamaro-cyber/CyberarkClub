@@ -10,13 +10,13 @@
          type, hence no single source tree;
       2. pushes it to \\<server>\D$\...\PSM-Deploy with robocopy /MIR,
          PRESERVING the server's local state\ and logs\ folders;
-      3. authenticates with the machine's LOCAL admin account fetched from
-         CYBERARK: the operator logs on to the PVWA once (same flow as the
-         PSM registration, prompt with validation/retry), then each target's
-         local account password is retrieved from the Vault on the fly
-         (LocalAdminUserName: same account name on every machine, one Vault
-         account per machine with address = the server). SMB logon is
-         <SERVER>\<LocalAdminUserName>; no password ever touches the disk.
+      3. authenticates through a CYBERARK-backed credential CASCADE: the
+         operator logs on to the PVWA once (concurrent session, auto-reconnect
+         on 401), then per server tries (a) the DOMAIN push account fetched
+         once from the Vault (PushAccount), (b) the machine's own LOCAL
+         account from the Vault (LocalAdminUserName + exact address match),
+         (c) a manual credential prompt. Each attempt is logged; no password
+         ever touches the disk.
     One server's failure does not stop the others (summary + exit code 1).
 
 .PARAMETER Type
@@ -85,9 +85,10 @@ if (-not $targets) {
     throw "No target server selected (filters: Type=$($Type -join ',') Server=$($Server -join ',')). Check distribution.psd1."
 }
 $localAdmin = $Config['LocalAdminUserName']
-if (-not $WhatIfPreference -and -not $localAdmin) {
-    throw ("distribution.psd1: LocalAdminUserName not set. Declare the default LOCAL admin account " +
-           "(same name on every machine, onboarded in CyberArk with address = the server).")
+$pushUser   = if ($Config['PushAccount']) { $Config['PushAccount']['UserName'] } else { $null }
+if (-not $WhatIfPreference -and -not $localAdmin -and -not $pushUser) {
+    Write-PSMLog -Level WARN -Message ("Neither PushAccount.UserName nor LocalAdminUserName is set in distribution.psd1: " +
+        'EVERY server will fall back to a manual credential prompt.')
 }
 Write-PSMLog -Level INFO -Message ("=== Source distribution | {0} server(s): {1} ===" -f `
     $targets.Count, (($targets | ForEach-Object { "$($_.Name) [$($_.Type)]" }) -join ', '))
@@ -115,18 +116,61 @@ foreach ($t in $neededTypes) {
 }
 
 # --- CyberArk/PVWA session (same flow as the PSM registration) ---------------
-# One PVWA logon for the whole run; each machine's LOCAL admin password is
-# then retrieved from the Vault at push time. Nothing in WhatIf mode.
-$session = $null
+# One CONCURRENT PVWA logon for the whole run: the operator is usually ALSO
+# logged on the PVWA portal from the CPM - without concurrentSession the Vault
+# invalidates one of the two sessions (observed: 401s mid-run). Every Vault
+# call goes through Invoke-PvwaWithReconnect: on a dead session (401/timeout)
+# it reconnects ONCE with the in-memory credential and retries.
+$session  = $null
+$pvwaCred = $null
 if (-not $WhatIfPreference) {
     $logon = Connect-PvwaSessionWithRetry -PvwaUrl $Config.Pvwa.Url `
                 -AuthMethod $Config.Pvwa.AuthMethod -ZoneName 'CPM distribution' `
-                -Credential $PvwaCredential `
+                -Credential $PvwaCredential -ConcurrentSession `
                 -SkipCertificateCheck:$Config.Pvwa.SkipCertificateCheck
-    $session = $logon.Session
+    $session  = $logon.Session
+    $pvwaCred = $logon.Credential
 }
 
-# --- Push (one server's failure does not stop the others) --------------------
+function Invoke-PvwaWithReconnect {
+    # Same pattern as the registration rename retry in Deploy-PSM.ps1: a Vault
+    # call failing on a DEAD SESSION is retried once after a fresh logon (no
+    # secret ever written to disk).
+    param([Parameter(Mandatory)] [scriptblock] $Call)
+    try { return & $Call }
+    catch {
+        if ($_.Exception.Message -notmatch '\(401\)|Unauthorized|timed out|timeout') { throw }
+        Write-PSMLog -Level WARN -Message "PVWA session lost ($($_.Exception.Message)) - reconnecting and retrying once..."
+        $script:session = Connect-PvwaSession -PvwaUrl $Config.Pvwa.Url -Credential $pvwaCred `
+                              -AuthMethod $Config.Pvwa.AuthMethod -ConcurrentSession `
+                              -SkipCertificateCheck:$Config.Pvwa.SkipCertificateCheck
+        return & $Call
+    }
+}
+
+# --- DOMAIN push account (PRIMARY credential, optional) ----------------------
+# One Vault account with admin-share access to ALL machines, fetched once and
+# reused for every server. Empty UserName = disabled (per-machine local
+# accounts are then tried directly).
+$pushCfg    = $Config['PushAccount']
+$domainCred = $null
+if (-not $WhatIfPreference -and $pushCfg -and $pushCfg['UserName']) {
+    $logonName = $pushCfg['LogonName']
+    if (-not $logonName) {
+        if (-not $pushCfg['Address']) {
+            throw "distribution.psd1: PushAccount needs 'LogonName' (e.g. 'FRANCE\svcpsmpush') or 'Address' (to build <UserName>@<Address>)."
+        }
+        $logonName = "$($pushCfg.UserName)@$($pushCfg['Address'])"   # UPN logon
+    }
+    $acct = Invoke-PvwaWithReconnect { Get-PvwaAccountPassword -Session $session `
+                -UserName $pushCfg.UserName -Address $pushCfg['Address'] -Safe $pushCfg['Safe'] }
+    $domainCred = [System.Management.Automation.PSCredential]::new($logonName, $acct.Credential.Password)
+    Write-PSMLog -Level OK -Message "Domain push account retrieved from the Vault: $logonName (primary credential for every server)."
+}
+
+# --- Push: per-server credential CASCADE -------------------------------------
+#   1) domain push account  2) machine local account (Vault)  3) manual prompt
+# One server's failure does not stop the others.
 $results = @()
 try {
     foreach ($srv in $targets) {
@@ -134,34 +178,52 @@ try {
         # D:\PSMSources\PSM-Deploy -> \\<server>\D$\PSMSources\PSM-Deploy
         $unc = '\\{0}\{1}' -f $srv.Name, ($Config.TargetPath -replace '^([A-Za-z]):\\', '$1$\')
         if ($WhatIfPreference) {
-            $who = if ($localAdmin) { "$($srv.Name)\$localAdmin" } else { "the machine's local account (LocalAdminUserName to set)" }
+            $who = if ($pushCfg -and $pushCfg['UserName']) { "the domain push account '$($pushCfg.UserName)'" }
+                   elseif ($localAdmin) { "$($srv.Name)\$localAdmin" }
+                   else { 'a manually prompted account' }
             Write-PSMLog -Level INFO -Message "WhatIf: '$staging' would be mirrored to '$unc' as $who (state\ and logs\ preserved)."
             $status = 'WHATIF'
         }
         else {
             try {
-                try {
-                    # This machine's LOCAL account from the Vault (collection of local
-                    # accounts, spread across Safes: userName = LocalAdminUserName,
-                    # exact address match = the server, short name or FQDN).
-                    $acct = Get-PvwaAccountPassword -Session $session `
-                                -UserName $localAdmin -Address $srv.Name
-                    # SMB logon must be machine-qualified: <SERVER>\<localuser>.
-                    $smbCred = [System.Management.Automation.PSCredential]::new(
-                                   "$($srv.Name)\$localAdmin", $acct.Credential.Password)
+                $code = $null
+                # 1) DOMAIN push account (primary).
+                if ($domainCred) {
+                    try {
+                        $code = Push-PSMSourcesToServer -ServerName $srv.Name -StagingPath $staging `
+                                    -TargetUnc $unc -Credential $domainCred
+                    }
+                    catch {
+                        Write-PSMLog -Level WARN -Message ("$($srv.Name): push with the domain account '$($domainCred.UserName)' failed " +
+                            "($($_.Exception.Message)) - trying the machine's local account...")
+                    }
                 }
-                catch {
-                    # FALLBACK: account not found in CyberArk (or retrieve refused)
-                    # -> manual prompt, the operator supplies whatever account works
-                    # for this machine (local or domain). Cancel = server FAILED.
-                    Write-PSMLog -Level WARN -Message ("$($srv.Name): local account not retrieved from CyberArk " +
-                        "($($_.Exception.Message)) - falling back to a manual credential prompt.")
-                    $smbCred = Get-Credential -UserName "$($srv.Name)\$localAdmin" `
-                                   -Message "Account with admin-share access to \\$($srv.Name) (CyberArk lookup failed)"
-                    if (-not $smbCred) { throw "no credential provided for $($srv.Name) (prompt canceled)." }
+                # 2) Machine LOCAL account from the Vault (accounts spread across
+                #    Safes: userName + exact address match, short name or FQDN).
+                if ($null -eq $code -and $localAdmin) {
+                    try {
+                        $acct = Invoke-PvwaWithReconnect { Get-PvwaAccountPassword -Session $session `
+                                    -UserName $localAdmin -Address $srv.Name }
+                        $smbCred = [System.Management.Automation.PSCredential]::new(
+                                       "$($srv.Name)\$localAdmin", $acct.Credential.Password)
+                        $code = Push-PSMSourcesToServer -ServerName $srv.Name -StagingPath $staging `
+                                    -TargetUnc $unc -Credential $smbCred
+                    }
+                    catch {
+                        Write-PSMLog -Level WARN -Message ("$($srv.Name): local-account push failed " +
+                            "($($_.Exception.Message)) - falling back to a manual credential prompt.")
+                    }
                 }
-                $code = Push-PSMSourcesToServer -ServerName $srv.Name -StagingPath $staging `
-                            -TargetUnc $unc -Credential $smbCred
+                # 3) Manual prompt (last resort): the operator supplies whatever
+                #    account works for this machine. Cancel = server FAILED.
+                if ($null -eq $code) {
+                    $msg = "Account with admin-share access to \\$($srv.Name) (automatic credentials failed)"
+                    $smbCred = if ($localAdmin) { Get-Credential -UserName "$($srv.Name)\$localAdmin" -Message $msg }
+                               else             { Get-Credential -Message $msg }
+                    if (-not $smbCred) { throw "no credential provided (prompt canceled)." }
+                    $code = Push-PSMSourcesToServer -ServerName $srv.Name -StagingPath $staging `
+                                -TargetUnc $unc -Credential $smbCred
+                }
                 if ($code -eq 0) { $status = 'OK';      Write-PSMLog -Level OK      -Message "$($srv.Name): already in sync ($unc)." }
                 else             { $status = 'CHANGED'; Write-PSMLog -Level CHANGED -Message "$($srv.Name): sources updated ($unc)." }
             }
