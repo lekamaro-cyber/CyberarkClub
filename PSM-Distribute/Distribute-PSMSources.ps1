@@ -200,12 +200,14 @@ try {
                 }
                 # 2) Machine LOCAL account from the Vault (accounts spread across
                 #    Safes: userName + exact address match, short name or FQDN).
+                #    LocalAdminUserName may be a WILDCARD pattern (e.g. '*adm*'):
+                #    the SMB logon then uses the REAL name of the matched account.
                 if ($null -eq $code -and $localAdmin) {
                     try {
                         $acct = Invoke-PvwaWithReconnect { Get-PvwaAccountPassword -Session $session `
                                     -UserName $localAdmin -Address $srv.Name }
                         $smbCred = [System.Management.Automation.PSCredential]::new(
-                                       "$($srv.Name)\$localAdmin", $acct.Credential.Password)
+                                       "$($srv.Name)\$($acct.UserName)", $acct.Credential.Password)
                         $code = Push-PSMSourcesToServer -ServerName $srv.Name -StagingPath $staging `
                                     -TargetUnc $unc -Credential $smbCred
                     }
@@ -218,8 +220,10 @@ try {
                 #    account works for this machine. Cancel = server FAILED.
                 if ($null -eq $code) {
                     $msg = "Account with admin-share access to \\$($srv.Name) (automatic credentials failed)"
-                    $smbCred = if ($localAdmin) { Get-Credential -UserName "$($srv.Name)\$localAdmin" -Message $msg }
-                               else             { Get-Credential -Message $msg }
+                    # No prefill when LocalAdminUserName is a wildcard pattern.
+                    $prefill = if ($localAdmin -and $localAdmin.IndexOfAny([char[]]'*?') -lt 0) { "$($srv.Name)\$localAdmin" }
+                    $smbCred = if ($prefill) { Get-Credential -UserName $prefill -Message $msg }
+                               else          { Get-Credential -Message $msg }
                     if (-not $smbCred) { throw "no credential provided (prompt canceled)." }
                     $code = Push-PSMSourcesToServer -ServerName $srv.Name -StagingPath $staging `
                                 -TargetUnc $unc -Credential $smbCred

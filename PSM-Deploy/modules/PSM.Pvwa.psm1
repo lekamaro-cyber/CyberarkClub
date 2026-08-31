@@ -287,7 +287,11 @@ function Find-PvwaAccount {
     )
     $q = @()
     if ($Safe) { $q += "filter=safeName eq $([uri]::EscapeDataString($Safe))" }
-    $terms = @($UserName, $Search, $Address) | Where-Object { $_ }
+    # UserName may be a WILDCARD pattern (e.g. '*adm*'): the PVWA text search
+    # would take it literally, so a wildcard is kept OUT of the search terms
+    # (the address/search narrow the query) and applied on the results below.
+    $userIsPattern = $UserName -and $UserName.IndexOfAny([char[]]'*?') -ge 0
+    $terms = @($(if (-not $userIsPattern) { $UserName }), $Search, $Address) | Where-Object { $_ }
     if ($terms) { $q += "search=$([uri]::EscapeDataString(($terms -join ' ')))" }
 
     $uri = "$($Session.PvwaUrl)/PasswordVault/API/Accounts"
@@ -295,7 +299,8 @@ function Find-PvwaAccount {
 
     $resp  = Invoke-RestMethod -Uri $uri -Method Get -Headers $Session.Headers -TimeoutSec $TimeoutSec -ErrorAction Stop
     $items = @($resp.value)
-    if ($UserName) { $items = @($items | Where-Object { $_.userName -eq $UserName }) }
+    # -like: exact (case-insensitive) match without wildcards, pattern match with.
+    if ($UserName) { $items = @($items | Where-Object { $_.userName -like $UserName }) }
     # Exact address match (the PVWA text search also returns NEIGHBOR machines:
     # searching SRV1001 matches SRV10013 too). Accounts may be onboarded with
     # the short name or the FQDN -> both accepted.
@@ -331,7 +336,9 @@ function Get-PvwaAccountPassword {
             throw "Multiple matching accounts ($(@($found).Count)). Narrow down Safe/UserName. Ids: $ids"
         }
         $AccountId = $found[0].id
-        if (-not $UserName) { $UserName = $found[0].userName }
+        # Report the account's REAL userName (relevant when $UserName was a
+        # wildcard pattern: the caller needs the actual name to log on with).
+        if ($found[0].userName) { $UserName = $found[0].userName }
     }
 
     $body = @{ reason = $Reason } | ConvertTo-Json

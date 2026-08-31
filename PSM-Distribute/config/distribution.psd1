@@ -61,11 +61,14 @@
     # FALLBACK per machine, when the domain account fails on a server (or is
     # not configured): the machine's LOCAL admin account from CyberArk (one
     # Vault account per machine, address = the server, accounts spread across
-    # Safes - lookup on username + exact machine address, short name or FQDN;
-    # SMB logon <SERVER>\<LocalAdminUserName>). WARNING: local account names
-    # are NOT uniform across the fleet - a wrong name here simply pushes that
-    # server down to the manual prompt (last resort of the cascade).
-    LocalAdminUserName = ''        # e.g. 'AdminVal'; empty = skip this level
+    # Safes - lookup on username + exact machine address, short name or FQDN).
+    # Local account names are NOT uniform across the fleet: a WILDCARD pattern
+    # is accepted (e.g. '*adm*' matches AdminVal, admsvc, LocAdm...) - the
+    # Vault is then searched by machine address alone and the usernames are
+    # pattern-filtered; the SMB logon uses the REAL name of the matched
+    # account. Several matches on one machine = ambiguity error for that
+    # server -> manual prompt (last resort of the cascade).
+    LocalAdminUserName = ''        # e.g. 'AdminVal' or '*adm*'; empty = skip this level
 
     # Target inventory: machine name + server type (= overlay folder).
     Servers = @(

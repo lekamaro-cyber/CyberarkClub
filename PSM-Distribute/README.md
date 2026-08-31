@@ -91,8 +91,11 @@ are tried in order (each attempt is logged, so a denial is diagnosable):
    SMB logon is `LogonName` (e.g. `FRANCE\svcpsmpush`) or `<UserName>@<Address>`.
 2. **Machine local account** (`LocalAdminUserName`): that machine's own local
    account from the Vault (exact `address` match, short name or FQDN, spread
-   across Safes — no Safe to declare). SMB logon `<SERVER>\<localuser>`.
-   Skipped when empty — local account names are not uniform across the fleet.
+   across Safes — no Safe to declare). Accepts a **wildcard pattern**
+   (e.g. `'*adm*'`) since local account names are not uniform across the
+   fleet: the SMB logon then uses the real name of the matched account
+   (`<SERVER>\<matched-user>`); several matches on one machine is an
+   ambiguity error → that server falls to the prompt. Skipped when empty.
 3. **Manual prompt**: supply any account that works for this machine;
    canceling marks only THAT server FAILED, the others continue.
 
