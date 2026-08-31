@@ -29,10 +29,54 @@ D:\PSMSources\                      (on the CPM)
 ```
 
 Rules:
-- an overlay file at the same relative path **always wins** over the base file;
-- keep overlays to the **delta only** — everything common stays in the base
-  (one fix in the base benefits every type at the next distribution);
+- **the `Type` value in `distribution.psd1` IS the folder name** under
+  `overlays\` and `staging\`, used verbatim (case-insensitive on Windows):
+
+  ```
+  Servers entry Type = 'PRD'  ->  overlays\PRD\  ->  staging\PRD\
+  ```
+
+  A typo in either side simply means "no overlay found" (WARN, base-only) —
+  the Pester tests guard the mapping for the shipped examples;
+- an overlay file at the same relative path **always wins** over the base file
+  — so an overlay `config\software.psd1` REPLACES the base one entirely:
+  list the type's FULL software set in it, not a delta of the file;
+- keep overlays to the **delta trees only** — everything common stays in the
+  base (one fix in the base benefits every type at the next distribution);
 - `state\`, `logs\` and `.git` are never shipped.
+
+## Worked examples (`overlays-example\`)
+
+Ready-to-copy templates, one per type — bootstrap with:
+`Copy-Item .\overlays-example\* D:\PSMSources\overlays\ -Recurse`, then drop
+the real MSIs over the `DROP-THE-MSI-HERE.txt` placeholders (which name the
+exact expected file).
+
+```
+overlays-example\
+├── PRD\                          # prod: Chrome only, NO test tooling
+│   ├── config\software.psd1
+│   └── installers\chrome\DROP-THE-MSI-HERE.txt
+├── DRP\                          # same set as PRD today, but its OWN folder
+│   ├── config\software.psd1      #   (free to diverge later without touching PRD)
+│   └── installers\chrome\DROP-THE-MSI-HERE.txt
+├── PREPRD\                       # test infra: Chrome + PrivateArk Client
+│   ├── config\software.psd1
+│   └── installers\{chrome,privateark}\DROP-THE-MSI-HERE.txt
+└── PRDNPR\                       # non-prod ACCOUNTS on prod-grade machines: Chrome only
+    ├── config\software.psd1
+    └── installers\chrome\DROP-THE-MSI-HERE.txt
+```
+
+What a PREPRD server ends up with after composition (base + overlay):
+
+```
+staging\PREPRD\
+├── Deploy-PSM.ps1, modules\, media\, ...   <- from the BASE (common)
+├── config\settings.psd1, zones.psd1        <- from the BASE (common)
+├── config\software.psd1                    <- from the OVERLAY (replaced)
+└── installers\chrome\, installers\privateark\   <- from the OVERLAY
+```
 
 ## Per-datacenter credentials
 

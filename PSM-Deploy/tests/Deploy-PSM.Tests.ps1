@@ -595,4 +595,17 @@ Describe 'PSM-Distribute (source distribution from the CPM)' {
         Build-PSMStagingTree -BaseRoot $base -StagingPath $stg | Out-Null
         Build-PSMStagingTree -BaseRoot $base -StagingPath $stg | Should -Be 0
     }
+    It 'overlays-example folders map 1:1 to the declared ServerTypes (Type = folder name)' {
+        $c = Import-PowerShellDataFile (Join-Path $distRoot 'config\distribution.psd1')
+        $examples = Get-ChildItem (Join-Path $distRoot 'overlays-example') -Directory
+        $examples | Should -Not -BeNullOrEmpty
+        foreach ($d in $examples) { $d.Name | Should -BeIn $c.ServerTypes }
+    }
+    It 'Every example overlay software.psd1 parses and its entries are named' {
+        foreach ($f in Get-ChildItem (Join-Path $distRoot 'overlays-example') -Recurse -Filter 'software.psd1') {
+            $s = Import-PowerShellDataFile $f.FullName
+            $s.Applications | Should -Not -BeNullOrEmpty
+            foreach ($app in $s.Applications) { $app['Name'] | Should -Not -BeNullOrEmpty }
+        }
+    }
 }

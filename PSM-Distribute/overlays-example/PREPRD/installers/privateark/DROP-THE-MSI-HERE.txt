@@ -1,0 +1,5 @@
+Drop here: PrivateArk Client.msi
+(from the EPV media, "PrivateArk Client" folder; exact filename expected by
+..\..\config\software.psd1 - if your media ships a setup.exe instead, adjust
+Installer/Arguments in the overlay's software.psd1.)
+This placeholder can be deleted once the MSI is in place.
