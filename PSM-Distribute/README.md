@@ -87,13 +87,17 @@ distinct datacenter** among the selected targets (`PRDNPR` machines live in
 the DRP datacenter → same `DRP` key/credential). Passwords are kept in memory
 only — never written to disk, consistent with the PSM-Deploy doctrine.
 
-**Current session shortcut**: if the account you are logged on with on the CPM
-already has admin rights on a datacenter, list it in
-`CurrentUserDatacenters = @('...')` (distribution.psd1): no prompt for that
-datacenter — the push runs under your own session token (integrated SMB
-authentication). If the assumption is wrong, those servers fail with
-"share unreachable / access denied": remove the datacenter from the list to
-be prompted again.
+**Declared accounts per datacenter** (`DatacenterAccounts` in
+distribution.psd1, `'DOMAIN\samaccount'` format — same writing as `whoami`):
+
+| Situation | Behavior |
+|---|---|
+| declared account **is** the current session | **no prompt** — integrated SMB auth under your own token |
+| declared but you are logged on as someone else | prompt **pre-filled** with the declared account (password only) |
+| datacenter not declared | plain `Get-Credential` prompt |
+
+If the current account turns out not to have rights on that datacenter, the
+push fails with "share unreachable / access denied".
 
 ## Usage
 

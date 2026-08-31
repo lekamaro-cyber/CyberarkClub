@@ -12,9 +12,10 @@
          PRESERVING the server's local state\ and logs\ folders;
       3. authenticates with the credential of the server's DATACENTER: one
          admin account per datacenter, prompted once per datacenter
-         (Get-Credential, never written to disk). Datacenters listed in
-         CurrentUserDatacenters use the CURRENT session account instead
-         (integrated auth, no prompt).
+         (Get-Credential, never written to disk). DatacenterAccounts declares
+         the expected account per datacenter: when it is the CURRENT session
+         account, no prompt at all (integrated auth); otherwise the prompt
+         comes pre-filled with it.
     One server's failure does not stop the others (summary + exit code 1).
 
 .PARAMETER Type
@@ -103,19 +104,26 @@ foreach ($t in $neededTypes) {
 }
 
 # --- One credential per DISTINCT datacenter among the targets ----------------
-# Datacenters listed in CurrentUserDatacenters use the CURRENT session account
-# (integrated SMB auth, no prompt): no $credByDc entry -> the push runs without
-# New-PSDrive, under the operator's own token.
-$currentUserDcs = @($Config['CurrentUserDatacenters'])
+# DatacenterAccounts declares WHO is supposed to reach each datacenter:
+#   - declared account == the current session -> no prompt, no $credByDc entry
+#     (the push then runs without New-PSDrive, under the operator's own token);
+#   - declared but different -> Get-Credential pre-filled with it;
+#   - not declared -> plain Get-Credential.
+$dcAccounts = $Config['DatacenterAccounts']
+if (-not $dcAccounts) { $dcAccounts = @{} }
+$currentUser = "$env:USERDOMAIN\$env:USERNAME"
 $credByDc = @{}
 if (-not $WhatIfPreference) {
     foreach ($dc in @($targets | ForEach-Object { $_.Datacenter } | Sort-Object -Unique)) {
-        if ($dc -in $currentUserDcs) {
-            Write-PSMLog -Level INFO -Message "Datacenter '$dc': using the current session account ($env:USERDOMAIN\$env:USERNAME) - no credential prompt."
+        $declared = $dcAccounts[$dc]
+        if ($declared -and ($declared -ieq $currentUser)) {
+            Write-PSMLog -Level INFO -Message "Datacenter '$dc': declared account '$declared' IS the current session - no credential prompt (integrated authentication)."
             continue
         }
         $dcServers = (@($targets | Where-Object { $_.Datacenter -eq $dc } | ForEach-Object { $_.Name })) -join ', '
-        $cred = Get-Credential -Message "Admin account for datacenter '$dc' (SMB admin-share access to: $dcServers)"
+        $msg = "Admin account for datacenter '$dc' (SMB admin-share access to: $dcServers)"
+        $cred = if ($declared) { Get-Credential -UserName $declared -Message $msg }
+                else           { Get-Credential -Message $msg }
         if (-not $cred) { throw "Distribution canceled: no credential provided for datacenter '$dc'." }
         $credByDc[$dc] = $cred
     }

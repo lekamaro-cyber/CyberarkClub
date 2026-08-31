@@ -33,13 +33,20 @@
     #   PRDNPR - hosted in the DRP datacenter, serves NON-prod accounts
     ServerTypes = @('PRD', 'DRP', 'PREPRD', 'PRDNPR')
 
-    # Datacenters reachable with the CURRENT session account (the operator's
-    # own CPM logon): NO credential prompt for them, integrated SMB
-    # authentication. The other datacenters still get one Get-Credential each.
+    # Expected admin ACCOUNT per datacenter, 'DOMAIN\samaccount' format (same
+    # writing as whoami). At runtime:
+    #   - declared account == the CURRENTLY logged-on operator -> NO prompt
+    #     (integrated SMB authentication under the session token);
+    #   - declared but different -> Get-Credential PRE-FILLED with that
+    #     account (only the password is typed);
+    #   - datacenter absent from this map -> plain Get-Credential prompt.
     # If the current account turns out NOT to have rights there, the push
-    # fails with "share unreachable / access denied": remove the datacenter
-    # from this list to be prompted again.
-    CurrentUserDatacenters = @()     # e.g. @('DC1')
+    # fails with "share unreachable / access denied".
+    DatacenterAccounts = @{
+        # DCA = 'FRANCE\<admin-dca>'
+        # DRP = 'FRANCE\<admin-drp>'
+        # PRE = 'FRANCE\<admin-pre>'
+    }
 
     # Target inventory. 'Datacenter' is a FREE key that only drives which
     # credential is used: the script prompts ONE Get-Credential per DISTINCT

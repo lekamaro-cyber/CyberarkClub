@@ -595,11 +595,14 @@ Describe 'PSM-Distribute (source distribution from the CPM)' {
         Build-PSMStagingTree -BaseRoot $base -StagingPath $stg | Out-Null
         Build-PSMStagingTree -BaseRoot $base -StagingPath $stg | Should -Be 0
     }
-    It 'CurrentUserDatacenters entries, if any, match a Datacenter used by the inventory' {
+    It 'DatacenterAccounts keys, if any, match a Datacenter used by the inventory' {
         $c = Import-PowerShellDataFile (Join-Path $distRoot 'config\distribution.psd1')
-        $c.Keys | Should -Contain 'CurrentUserDatacenters'
+        $c.Keys | Should -Contain 'DatacenterAccounts'
         $usedDcs = @($c.Servers | ForEach-Object { $_['Datacenter'] })
-        foreach ($dc in @($c.CurrentUserDatacenters)) { $dc | Should -BeIn $usedDcs }
+        foreach ($dc in @($c.DatacenterAccounts.Keys)) {
+            $dc | Should -BeIn $usedDcs
+            $c.DatacenterAccounts[$dc] | Should -Not -BeNullOrEmpty
+        }
     }
     It 'overlays-example folders map 1:1 to the declared ServerTypes (Type = folder name)' {
         $c = Import-PowerShellDataFile (Join-Path $distRoot 'config\distribution.psd1')
