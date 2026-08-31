@@ -86,6 +86,10 @@ The operator logs on to the **PVWA once** (`config\distribution.psd1` →
 if the Vault drops it mid-run (401/timeout). Then, PER SERVER, three levels
 are tried in order (each attempt is logged, so a denial is diagnosable):
 
+0. **Current session** (`TryCurrentSession`, default on): integrated SMB auth
+   under the operator's own token — free, no lookup, no prompt; most CPM
+   operators already reach part of the fleet. `$false` to always start at the
+   Vault-backed levels.
 1. **Domain push account** (`PushAccount` block): one Vault account with
    admin-share access to ALL machines, fetched once and reused everywhere.
    SMB logon is `LogonName` (e.g. `FRANCE\svcpsmpush`) or `<UserName>@<Address>`.

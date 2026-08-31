@@ -46,7 +46,13 @@
         SkipCertificateCheck = $true           # lab only (self-signed certificate)
     }
 
-    # DOMAIN push account (PRIMARY): one Vault account with admin-share access
+    # Try the operator's CURRENT session first (integrated SMB auth, free):
+    # most CPM operators already have admin-share access to part of the fleet
+    # - no point fetching/prompting anything for those machines. $false to
+    # always start at the Vault-backed levels below.
+    TryCurrentSession = $true
+
+    # DOMAIN push account (PRIMARY Vault-backed level): one account with admin-share access
     # to ALL machines. Fetched once at launch and reused for every server.
     # Empty UserName = disabled (the per-machine local fallback below is then
     # tried directly).

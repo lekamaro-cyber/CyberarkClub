@@ -602,6 +602,7 @@ Describe 'PSM-Distribute (source distribution from the CPM)' {
         foreach ($k in 'UserName', 'Address', 'Safe', 'LogonName') {
             $c.PushAccount.Keys | Should -Contain $k
         }
+        $c.TryCurrentSession | Should -BeOfType [bool]
     }
     It 'Get-PvwaAccountPassword accepts an -Address (exact machine match, cross-Safe)' {
         Import-Module (Join-Path $root 'modules\PSM.Pvwa.psm1') -Force

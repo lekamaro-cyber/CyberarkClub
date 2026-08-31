@@ -169,8 +169,10 @@ if (-not $WhatIfPreference -and $pushCfg -and $pushCfg['UserName']) {
 }
 
 # --- Push: per-server credential CASCADE -------------------------------------
-#   1) domain push account  2) machine local account (Vault)  3) manual prompt
+#   0) CURRENT session (integrated, free)  1) domain push account (Vault)
+#   2) machine local account (Vault)       3) manual prompt
 # One server's failure does not stop the others.
+$tryCurrent = if ($Config.Keys -contains 'TryCurrentSession') { [bool]$Config['TryCurrentSession'] } else { $true }
 $results = @()
 try {
     foreach ($srv in $targets) {
@@ -178,7 +180,8 @@ try {
         # D:\PSMSources\PSM-Deploy -> \\<server>\D$\PSMSources\PSM-Deploy
         $unc = '\\{0}\{1}' -f $srv.Name, ($Config.TargetPath -replace '^([A-Za-z]):\\', '$1$\')
         if ($WhatIfPreference) {
-            $who = if ($pushCfg -and $pushCfg['UserName']) { "the domain push account '$($pushCfg.UserName)'" }
+            $who = if ($tryCurrent) { "the current session ($env:USERDOMAIN\$env:USERNAME), then the credential cascade" }
+                   elseif ($pushCfg -and $pushCfg['UserName']) { "the domain push account '$($pushCfg.UserName)'" }
                    elseif ($localAdmin) { "$($srv.Name)\$localAdmin" }
                    else { 'a manually prompted account' }
             Write-PSMLog -Level INFO -Message "WhatIf: '$staging' would be mirrored to '$unc' as $who (state\ and logs\ preserved)."
@@ -187,8 +190,21 @@ try {
         else {
             try {
                 $code = $null
-                # 1) DOMAIN push account (primary).
-                if ($domainCred) {
+                # 0) CURRENT session (integrated auth, no credential): free, and
+                #    the operator often already has admin-share access.
+                if ($tryCurrent) {
+                    try {
+                        $code = Push-PSMSourcesToServer -ServerName $srv.Name -StagingPath $staging `
+                                    -TargetUnc $unc
+                        Write-PSMLog -Level INFO -Message "$($srv.Name): pushed with the CURRENT session ($env:USERDOMAIN\$env:USERNAME)."
+                    }
+                    catch {
+                        Write-PSMLog -Level WARN -Message ("$($srv.Name): current session ($env:USERDOMAIN\$env:USERNAME) has no access " +
+                            "($($_.Exception.Message)) - trying the Vault-backed credentials...")
+                    }
+                }
+                # 1) DOMAIN push account (primary Vault-backed level).
+                if ($null -eq $code -and $domainCred) {
                     try {
                         $code = Push-PSMSourcesToServer -ServerName $srv.Name -StagingPath $staging `
                                     -TargetUnc $unc -Credential $domainCred

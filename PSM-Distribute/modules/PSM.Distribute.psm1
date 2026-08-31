@@ -105,6 +105,11 @@ function Push-PSMSourcesToServer {
     $drive = $null
     try {
         if ($Credential) {
+            # A prior CURRENT-SESSION attempt may have left an SMB session to
+            # this share (auth OK but write denied): Windows then refuses a
+            # second logon with different credentials (error 1219 "multiple
+            # connections... more than one user name"). Best-effort cleanup.
+            & net.exe use $shareRoot /delete /y 2>&1 | Out-Null
             # Authenticates the SMB session for this server; no plaintext
             # password on a command line (unlike 'net use').
             $driveName = 'PSMDIST' + ([guid]::NewGuid().ToString('N').Substring(0, 6))
