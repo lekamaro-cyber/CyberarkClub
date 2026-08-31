@@ -33,6 +33,14 @@
     #   PRDNPR - hosted in the DRP datacenter, serves NON-prod accounts
     ServerTypes = @('PRD', 'DRP', 'PREPRD', 'PRDNPR')
 
+    # Datacenters reachable with the CURRENT session account (the operator's
+    # own CPM logon): NO credential prompt for them, integrated SMB
+    # authentication. The other datacenters still get one Get-Credential each.
+    # If the current account turns out NOT to have rights there, the push
+    # fails with "share unreachable / access denied": remove the datacenter
+    # from this list to be prompted again.
+    CurrentUserDatacenters = @()     # e.g. @('DC1')
+
     # Target inventory. 'Datacenter' is a FREE key that only drives which
     # credential is used: the script prompts ONE Get-Credential per DISTINCT
     # datacenter among the selected servers (each datacenter has its own admin

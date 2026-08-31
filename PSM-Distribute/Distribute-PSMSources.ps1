@@ -12,7 +12,9 @@
          PRESERVING the server's local state\ and logs\ folders;
       3. authenticates with the credential of the server's DATACENTER: one
          admin account per datacenter, prompted once per datacenter
-         (Get-Credential, never written to disk).
+         (Get-Credential, never written to disk). Datacenters listed in
+         CurrentUserDatacenters use the CURRENT session account instead
+         (integrated auth, no prompt).
     One server's failure does not stop the others (summary + exit code 1).
 
 .PARAMETER Type
@@ -101,9 +103,17 @@ foreach ($t in $neededTypes) {
 }
 
 # --- One credential per DISTINCT datacenter among the targets ----------------
+# Datacenters listed in CurrentUserDatacenters use the CURRENT session account
+# (integrated SMB auth, no prompt): no $credByDc entry -> the push runs without
+# New-PSDrive, under the operator's own token.
+$currentUserDcs = @($Config['CurrentUserDatacenters'])
 $credByDc = @{}
 if (-not $WhatIfPreference) {
     foreach ($dc in @($targets | ForEach-Object { $_.Datacenter } | Sort-Object -Unique)) {
+        if ($dc -in $currentUserDcs) {
+            Write-PSMLog -Level INFO -Message "Datacenter '$dc': using the current session account ($env:USERDOMAIN\$env:USERNAME) - no credential prompt."
+            continue
+        }
         $dcServers = (@($targets | Where-Object { $_.Datacenter -eq $dc } | ForEach-Object { $_.Name })) -join ', '
         $cred = Get-Credential -Message "Admin account for datacenter '$dc' (SMB admin-share access to: $dcServers)"
         if (-not $cred) { throw "Distribution canceled: no credential provided for datacenter '$dc'." }
