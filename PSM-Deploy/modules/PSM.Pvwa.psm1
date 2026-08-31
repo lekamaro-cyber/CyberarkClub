@@ -285,26 +285,39 @@ function Find-PvwaAccount {
         [string] $Address,
         [int]    $TimeoutSec = 60
     )
-    $q = @()
-    if ($Safe) { $q += "filter=safeName eq $([uri]::EscapeDataString($Safe))" }
-    # UserName may be a WILDCARD pattern (e.g. '*adm*'): the PVWA text search
-    # would take it literally, so a wildcard is kept OUT of the search terms
-    # (the address/search narrow the query) and applied on the results below.
+    # UserName may be a WILDCARD pattern (e.g. '*adm*'). Like typing in the
+    # PVWA search box, its PLAIN CORE ('adm') is sent as a search KEYWORD next
+    # to the address - narrows the query server-side - while the wildcard
+    # itself is applied on the results. The PVWA keyword match is
+    # prefix-based, so 'adm' would HIDE a mid-name match like 'locadm': when
+    # the keyworded query returns nothing, a second, address-only query
+    # catches those.
     $userIsPattern = $UserName -and $UserName.IndexOfAny([char[]]'*?') -ge 0
-    $terms = @($(if (-not $userIsPattern) { $UserName }), $Search, $Address) | Where-Object { $_ }
-    if ($terms) { $q += "search=$([uri]::EscapeDataString(($terms -join ' ')))" }
+    $keyword       = if ($UserName) { $UserName -replace '[*?]', '' } else { $null }
 
-    $uri = "$($Session.PvwaUrl)/PasswordVault/API/Accounts"
-    if ($q) { $uri += '?' + ($q -join '&') }
+    $runQuery = {
+        param($terms)
+        $q = @()
+        if ($Safe) { $q += "filter=safeName eq $([uri]::EscapeDataString($Safe))" }
+        $terms = @($terms | Where-Object { $_ })
+        if ($terms) { $q += "search=$([uri]::EscapeDataString(($terms -join ' ')))" }
+        $uri = "$($Session.PvwaUrl)/PasswordVault/API/Accounts"
+        if ($q) { $uri += '?' + ($q -join '&') }
+        $resp  = Invoke-RestMethod -Uri $uri -Method Get -Headers $Session.Headers -TimeoutSec $TimeoutSec -ErrorAction Stop
+        $items = @($resp.value)
+        # -like: exact (case-insensitive) match without wildcards, pattern match with.
+        if ($UserName) { $items = @($items | Where-Object { $_.userName -like $UserName }) }
+        # Exact address match (the PVWA text search also returns NEIGHBOR machines:
+        # searching SRV1001 matches SRV10013 too). Accounts may be onboarded with
+        # the short name or the FQDN -> both accepted.
+        if ($Address) { $items = @($items | Where-Object { $_.address -ieq $Address -or $_.address -ilike "$Address.*" }) }
+        return ,$items
+    }
 
-    $resp  = Invoke-RestMethod -Uri $uri -Method Get -Headers $Session.Headers -TimeoutSec $TimeoutSec -ErrorAction Stop
-    $items = @($resp.value)
-    # -like: exact (case-insensitive) match without wildcards, pattern match with.
-    if ($UserName) { $items = @($items | Where-Object { $_.userName -like $UserName }) }
-    # Exact address match (the PVWA text search also returns NEIGHBOR machines:
-    # searching SRV1001 matches SRV10013 too). Accounts may be onboarded with
-    # the short name or the FQDN -> both accepted.
-    if ($Address) { $items = @($items | Where-Object { $_.address -ieq $Address -or $_.address -ilike "$Address.*" }) }
+    $items = @(& $runQuery @($keyword, $Search, $Address))
+    if ($userIsPattern -and $items.Count -eq 0 -and $keyword) {
+        $items = @(& $runQuery @($Search, $Address))
+    }
     return $items
 }
 

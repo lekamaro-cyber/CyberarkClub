@@ -69,11 +69,12 @@
     # Vault account per machine, address = the server, accounts spread across
     # Safes - lookup on username + exact machine address, short name or FQDN).
     # Local account names are NOT uniform across the fleet: a WILDCARD pattern
-    # is accepted (e.g. '*adm*' matches AdminVal, admsvc, LocAdm...) - the
-    # Vault is then searched by machine address alone and the usernames are
-    # pattern-filtered; the SMB logon uses the REAL name of the matched
-    # account. Several matches on one machine = ambiguity error for that
-    # server -> manual prompt (last resort of the cascade).
+    # is accepted (e.g. '*adm*' matches AdminVal, admsvc, LocAdm...). Like the
+    # PVWA search box, the pattern's core is sent as a keyword next to the
+    # address ('adm <server>'), the wildcard is applied on the results, and an
+    # address-only retry catches mid-name matches the keyword would hide; the
+    # SMB logon uses the REAL name of the matched account. Several matches on
+    # one machine = ambiguity error -> manual prompt (last resort).
     LocalAdminUserName = ''        # e.g. 'AdminVal' or '*adm*'; empty = skip this level
 
     # Target inventory: machine name + server type (= overlay folder).
