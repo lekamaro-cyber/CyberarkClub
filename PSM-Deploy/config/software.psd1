@@ -1,12 +1,18 @@
 @{
     # =====================================================================
     # Additional software / clients installed AFTER the PSM.
-    # Config-driven list: each entry describes how to install the application
-    # silently + how to detect that it is already there (idempotency).
-    # Installers are to be dropped under sources\installers\.
+    # Config-driven list, two entry shapes (see modules\PSM.Software.psm1):
+    #   - INSTALLER mode: Installer + Arguments (silent MSI/EXE)
+    #   - COPY mode     : Source + Destination (PORTABLE app: no installer,
+    #                     the file/folder is simply copied onto the server)
+    # plus DetectTest (idempotency; optional in copy mode - defaults to the
+    # destination existing) and Optional ($true = skipped with a WARN when the
+    # installer/source is not staged, instead of failing the deployment).
+    # Installers/sources are to be dropped under sources\installers\.
     #
-    # IMPORTANT: any binary added here must also be allowed in the controlled
-    # AppLocker policy (applocker\PSMConfigureAppLocker.xml).
+    # IMPORTANT: any binary added here (installed OR copied) must also be
+    # allowed in the controlled AppLocker policy
+    # (applocker\PSMConfigureAppLocker.xml).
     # =====================================================================
 
     Applications = @(
@@ -48,13 +54,27 @@
             Optional         = $true
         }
 
-        # ---- Example (adapt / duplicate) ---------------------------------
+        # ---- Example, INSTALLER mode (adapt / duplicate) -----------------
         # @{
         #     Name             = 'Example - SSH client'
         #     Installer        = 'installers\putty\putty-installer.msi'   # relative to the sources
         #     Arguments        = '/qn /norestart'
         #     SuccessExitCodes = @(0, 3010)                                # 3010 = reboot required
         #     DetectTest       = '(Test-Path "C:\Program Files\PuTTY\putty.exe")'
+        # }
+
+        # ---- Example, COPY mode: PORTABLE app, no installer --------------
+        # The folder's CONTENT is copied into Destination (created if needed);
+        # a file Source is copied INTO Destination. DetectTest is optional here
+        # (defaults to Test-Path Destination) - give a finer test (e.g. on the
+        # copied .exe) when the destination folder can pre-exist. The copied
+        # binaries must be allowed in the AppLocker policy like any other.
+        # @{
+        #     Name        = 'Example - portable tool'
+        #     Source      = 'installers\tools\mytool'          # file OR folder, relative to the sources
+        #     Destination = 'D:\Tools\MyTool'                  # absolute path on the server
+        #     DetectTest  = '(Test-Path "D:\Tools\MyTool\mytool.exe")'
+        #     Optional    = $true
         # }
 
     )

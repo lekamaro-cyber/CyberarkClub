@@ -422,6 +422,45 @@ Describe 'Software phase (optional entries)' {
         })
         { Invoke-PSMSoftware -SoftwareList $list -SourcesRoot $env:TEMP } | Should -Not -Throw
     }
+    It 'COPY mode: copies a folder content and is idempotent on the second run' {
+        $src = Join-Path $env:TEMP 'psm-test-copy-src'
+        $dst = Join-Path $env:TEMP 'psm-test-copy-dst'
+        Remove-Item $src, $dst -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Path (Join-Path $src 'mytool') -Force | Out-Null
+        Set-Content -Path (Join-Path $src 'mytool\mytool.exe') -Value 'fake'
+        $list = @(@{
+            Name = 'Fake portable'; Source = 'mytool'; Destination = $dst
+            DetectTest = "(Test-Path '" + (Join-Path $dst 'mytool.exe') + "')"
+        })
+        (Invoke-PSMSoftware -SoftwareList $list -SourcesRoot $src) | Should -Be 'CHANGED'
+        Test-Path (Join-Path $dst 'mytool.exe') | Should -BeTrue
+        (Invoke-PSMSoftware -SoftwareList $list -SourcesRoot $src) | Should -Be 'OK'
+    }
+    It 'COPY mode without DetectTest defaults to Test-Path Destination' {
+        $src = Join-Path $env:TEMP 'psm-test-copy2-src'
+        $dst = Join-Path $env:TEMP 'psm-test-copy2-dst'
+        Remove-Item $src, $dst -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Path $src -Force | Out-Null
+        Set-Content -Path (Join-Path $src 'readme.txt') -Value 'x'
+        $list = @(@{ Name = 'Fake portable file'; Source = 'readme.txt'; Destination = $dst })
+        (Invoke-PSMSoftware -SoftwareList $list -SourcesRoot $src) | Should -Be 'CHANGED'
+        Test-Path (Join-Path $dst 'readme.txt') | Should -BeTrue
+        (Invoke-PSMSoftware -SoftwareList $list -SourcesRoot $src) | Should -Be 'OK'
+    }
+    It 'An optional COPY entry whose source is not staged is skipped without error' {
+        $list = @(@{
+            Name = 'Fake portable missing'; Source = 'nope\missing'
+            Destination = (Join-Path $env:TEMP 'psm-test-copy-never'); Optional = $true
+        })
+        { Invoke-PSMSoftware -SoftwareList $list -SourcesRoot $env:TEMP } | Should -Not -Throw
+    }
+    It 'An entry declaring both Installer and Source is rejected' {
+        $list = @(@{
+            Name = 'Bad entry'; Installer = 'a.msi'; Source = 'b'
+            Destination = 'C:\x'; DetectTest = '$false'
+        })
+        { Invoke-PSMSoftware -SoftwareList $list -SourcesRoot $env:TEMP } | Should -Throw '*EITHER*'
+    }
 }
 
 Describe 'Existing component Vault user (Overwrite / password-sync policy)' {
