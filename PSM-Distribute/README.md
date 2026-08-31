@@ -95,8 +95,11 @@ per machine with `address` = the server). At launch:
 
 Passwords stay in memory only (masked in the logs) — never written to disk,
 consistent with the PSM-Deploy doctrine. If a machine's account is not found
-in the Vault (or the retrieve is refused), only THAT server is FAILED; the
-others continue.
+in the Vault (or the retrieve is refused), the script **falls back to a
+manual credential prompt** for that machine (pre-filled with
+`<SERVER>\<LocalAdminUserName>` — supply any account that has admin-share
+access, local or domain); canceling the prompt marks only THAT server FAILED,
+the others continue.
 
 One `LocalAdminUserName` line in the settings is the whole configuration.
 

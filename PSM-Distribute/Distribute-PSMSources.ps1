@@ -140,13 +140,25 @@ try {
         }
         else {
             try {
-                # This machine's LOCAL account from the Vault (collection of local
-                # accounts: userName = LocalAdminUserName, address = the server).
-                $acct = Get-PvwaAccountPassword -Session $session `
-                            -Safe $Config['LocalAdminSafe'] -UserName $localAdmin -Address $srv.Name
-                # SMB logon must be machine-qualified: <SERVER>\<localuser>.
-                $smbCred = [System.Management.Automation.PSCredential]::new(
-                               "$($srv.Name)\$localAdmin", $acct.Credential.Password)
+                try {
+                    # This machine's LOCAL account from the Vault (collection of local
+                    # accounts: userName = LocalAdminUserName, address = the server).
+                    $acct = Get-PvwaAccountPassword -Session $session `
+                                -Safe $Config['LocalAdminSafe'] -UserName $localAdmin -Address $srv.Name
+                    # SMB logon must be machine-qualified: <SERVER>\<localuser>.
+                    $smbCred = [System.Management.Automation.PSCredential]::new(
+                                   "$($srv.Name)\$localAdmin", $acct.Credential.Password)
+                }
+                catch {
+                    # FALLBACK: account not found in CyberArk (or retrieve refused)
+                    # -> manual prompt, the operator supplies whatever account works
+                    # for this machine (local or domain). Cancel = server FAILED.
+                    Write-PSMLog -Level WARN -Message ("$($srv.Name): local account not retrieved from CyberArk " +
+                        "($($_.Exception.Message)) - falling back to a manual credential prompt.")
+                    $smbCred = Get-Credential -UserName "$($srv.Name)\$localAdmin" `
+                                   -Message "Account with admin-share access to \\$($srv.Name) (CyberArk lookup failed)"
+                    if (-not $smbCred) { throw "no credential provided for $($srv.Name) (prompt canceled)." }
+                }
                 $code = Push-PSMSourcesToServer -ServerName $srv.Name -StagingPath $staging `
                             -TargetUnc $unc -Credential $smbCred
                 if ($code -eq 0) { $status = 'OK';      Write-PSMLog -Level OK      -Message "$($srv.Name): already in sync ($unc)." }
