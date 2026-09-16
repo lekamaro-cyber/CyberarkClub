@@ -109,7 +109,12 @@ function Push-PSMSourcesToServer {
             # this share (auth OK but write denied): Windows then refuses a
             # second logon with different credentials (error 1219 "multiple
             # connections... more than one user name"). Best-effort cleanup.
-            & net.exe use $shareRoot /delete /y 2>&1 | Out-Null
+            # NOTE: cmd.exe swallows both streams ON PURPOSE - under this
+            # module's $ErrorActionPreference='Stop', PowerShell 5.1 turns a
+            # redirected native stderr line ("The network connection could not
+            # be found." when there is nothing to delete, the NORMAL case)
+            # into a TERMINATING error that would kill the push.
+            try { $null = & cmd.exe /c "net use ""$shareRoot"" /delete /y >nul 2>&1" } catch { }
             # Authenticates the SMB session for this server; no plaintext
             # password on a command line (unlike 'net use').
             $driveName = 'PSMDIST' + ([guid]::NewGuid().ToString('N').Substring(0, 6))

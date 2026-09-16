@@ -609,6 +609,25 @@ Describe 'PSM-Distribute (source distribution from the CPM)' {
         (Get-Command Get-PvwaAccountPassword).Parameters.Keys | Should -Contain 'Address'
         (Get-Command Find-PvwaAccount).Parameters.Keys        | Should -Contain 'Address'
     }
+    It 'Authenticated push does not die on the 1219 pre-cleanup (PS 5.1 stderr trap regression)' {
+        # Regression for 662c3d7: 'net use /delete' on a non-existent connection
+        # writes "The network connection could not be found." to stderr; under
+        # EAP=Stop + 2>&1 that became a terminating error killing every
+        # credentialed push BEFORE New-PSDrive. The failure below must come
+        # from the unreachable share, never from the cleanup itself.
+        $stg = Join-Path $env:TEMP 'psm-test-push-stg'
+        New-Item -ItemType Directory -Path $stg -Force | Out-Null
+        $dummy = [System.Management.Automation.PSCredential]::new(
+                     'x\dummy', (ConvertTo-SecureString 'x' -AsPlainText -Force))
+        $err = $null
+        try {
+            Push-PSMSourcesToServer -ServerName 'localhost' -StagingPath $stg `
+                -TargetUnc '\\localhost\psmtest-nonexistent$\x' -Credential $dummy | Out-Null
+        }
+        catch { $err = $_.Exception.Message }
+        $err | Should -Not -BeNullOrEmpty
+        $err | Should -Not -Match 'network connection could not be found'
+    }
     It 'overlays-example folders map 1:1 to the declared ServerTypes (Type = folder name)' {
         $c = Import-PowerShellDataFile (Join-Path $distRoot 'config\distribution.psd1')
         $examples = Get-ChildItem (Join-Path $distRoot 'overlays-example') -Directory
