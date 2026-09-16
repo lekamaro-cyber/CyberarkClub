@@ -599,8 +599,14 @@ Describe 'PSM-Distribute (source distribution from the CPM)' {
         $c.Keys            | Should -Contain 'LocalAdminUserName'
         $c.Pvwa.Url        | Should -Not -BeNullOrEmpty
         $c.Pvwa.AuthMethod | Should -BeIn @('CyberArk', 'LDAP', 'Windows', 'RADIUS')
-        foreach ($k in 'UserName', 'Address', 'Safe', 'LogonName') {
-            $c.PushAccount.Keys | Should -Contain $k
+        $c.Keys | Should -Contain 'PushAccounts'
+        foreach ($lot in @($c.PushAccounts.Keys)) {
+            foreach ($k in 'UserName', 'Address', 'Safe', 'LogonName') {
+                $c.PushAccounts[$lot].Keys | Should -Contain $k
+            }
+        }
+        foreach ($s in $c.Servers) {
+            if ($s['Push']) { $c.PushAccounts.Keys | Should -Contain $s['Push'] }
         }
         $c.TryCurrentSession | Should -BeOfType [bool]
         $c.PushExcludeFiles  | Should -Contain 'autorun.inf'   # EDR/read-only trap (robocopy ERROR 5)

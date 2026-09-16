@@ -12,11 +12,11 @@
          PRESERVING the server's local state\ and logs\ folders;
       3. authenticates through a CYBERARK-backed credential CASCADE: the
          operator logs on to the PVWA once (concurrent session, auto-reconnect
-         on 401), then per server tries (a) the DOMAIN push account fetched
-         once from the Vault (PushAccount), (b) the machine's own LOCAL
-         account from the Vault (LocalAdminUserName + exact address match),
-         (c) a manual credential prompt. Each attempt is logged; no password
-         ever touches the disk.
+         on 401), then per server tries (a) the DOMAIN account of the server's
+         ACCESS LOT (Servers.Push -> PushAccounts, fetched from the Vault once
+         per lot), (b) the machine's own LOCAL account from the Vault
+         (LocalAdminUserName + exact address match), (c) a manual credential
+         prompt. Each attempt is logged; no password ever touches the disk.
     One server's failure does not stop the others (summary + exit code 1).
 
 .PARAMETER Type
@@ -78,17 +78,25 @@ foreach ($s in $targets) {
     if ($s.Type -notin $Config.ServerTypes) {
         throw "distribution.psd1: server '$($s.Name)': type '$($s.Type)' unknown (ServerTypes: $($Config.ServerTypes -join ', '))."
     }
+    $pushKey = $s['Push']
+    if ($pushKey) {
+        $pa = $Config['PushAccounts']
+        if (-not $pa -or -not $pa.ContainsKey($pushKey)) {
+            $avail = if ($pa) { $pa.Keys -join ', ' } else { '(none)' }
+            throw "distribution.psd1: server '$($s.Name)': Push='$pushKey' has no PushAccounts entry (available: $avail)."
+        }
+    }
 }
 if ($Type)   { $targets = @($targets | Where-Object { $_.Type -in $Type }) }
 if ($Server) { $targets = @($targets | Where-Object { $_.Name -in $Server }) }
 if (-not $targets) {
     throw "No target server selected (filters: Type=$($Type -join ',') Server=$($Server -join ',')). Check distribution.psd1."
 }
-$localAdmin = $Config['LocalAdminUserName']
-$pushUser   = if ($Config['PushAccount']) { $Config['PushAccount']['UserName'] } else { $null }
-if (-not $WhatIfPreference -and -not $localAdmin -and -not $pushUser) {
-    Write-PSMLog -Level WARN -Message ("Neither PushAccount.UserName nor LocalAdminUserName is set in distribution.psd1: " +
-        'EVERY server will fall back to a manual credential prompt.')
+$localAdmin      = $Config['LocalAdminUserName']
+$hasPushAccounts = [bool]($Config['PushAccounts'] -and $Config['PushAccounts'].Keys.Count -gt 0)
+if (-not $WhatIfPreference -and -not $localAdmin -and -not $hasPushAccounts) {
+    Write-PSMLog -Level WARN -Message ("Neither PushAccounts nor LocalAdminUserName is set in distribution.psd1: " +
+        'servers the current session cannot reach will fall back to a manual credential prompt.')
 }
 Write-PSMLog -Level INFO -Message ("=== Source distribution | {0} server(s): {1} ===" -f `
     $targets.Count, (($targets | ForEach-Object { "$($_.Name) [$($_.Type)]" }) -join ', '))
@@ -148,24 +156,34 @@ function Invoke-PvwaWithReconnect {
     }
 }
 
-# --- DOMAIN push account (PRIMARY credential, optional) ----------------------
-# One Vault account with admin-share access to ALL machines, fetched once and
-# reused for every server. Empty UserName = disabled (per-machine local
-# accounts are then tried directly).
-$pushCfg    = $Config['PushAccount']
-$domainCred = $null
-if (-not $WhatIfPreference -and $pushCfg -and $pushCfg['UserName']) {
-    $logonName = $pushCfg['LogonName']
+# --- DOMAIN push accounts: one per ACCESS LOT, resolved LAZILY ---------------
+# Rights are granted per scope (PRD France, DRP France, Benelux/NL...): each
+# server points at its lot (Servers.Push -> PushAccounts key, 'Default'
+# fallback). A lot's Vault account is fetched ONCE, on the first server that
+# actually needs it, then cached for the run (in memory only).
+$pushAccounts  = $Config['PushAccounts']
+if (-not $pushAccounts) { $pushAccounts = @{} }
+$pushCredCache = @{}
+function Resolve-PushCredential {
+    param([Parameter(Mandatory)] [string] $ScopeKey)
+    if ($pushCredCache.ContainsKey($ScopeKey)) { return $pushCredCache[$ScopeKey] }
+    $cfg = $pushAccounts[$ScopeKey]
+    if (-not $cfg['UserName']) {
+        throw "distribution.psd1: PushAccounts.$ScopeKey has no 'UserName' (the lot's Vault account name)."
+    }
+    $logonName = $cfg['LogonName']
     if (-not $logonName) {
-        if (-not $pushCfg['Address']) {
-            throw "distribution.psd1: PushAccount needs 'LogonName' (e.g. 'FRANCE\svcpsmpush') or 'Address' (to build <UserName>@<Address>)."
+        if (-not $cfg['Address']) {
+            throw "distribution.psd1: PushAccounts.$ScopeKey needs 'LogonName' (e.g. 'FRANCE\svc-push') or 'Address' (to build <UserName>@<Address>)."
         }
-        $logonName = "$($pushCfg.UserName)@$($pushCfg['Address'])"   # UPN logon
+        $logonName = "$($cfg.UserName)@$($cfg['Address'])"   # UPN logon
     }
     $acct = Invoke-PvwaWithReconnect { Get-PvwaAccountPassword -Session $session `
-                -UserName $pushCfg.UserName -Address $pushCfg['Address'] -Safe $pushCfg['Safe'] }
-    $domainCred = [System.Management.Automation.PSCredential]::new($logonName, $acct.Credential.Password)
-    Write-PSMLog -Level OK -Message "Domain push account retrieved from the Vault: $logonName (primary credential for every server)."
+                -UserName $cfg.UserName -Address $cfg['Address'] -Safe $cfg['Safe'] }
+    $cred = [System.Management.Automation.PSCredential]::new($logonName, $acct.Credential.Password)
+    Write-PSMLog -Level OK -Message "Push account of lot '$ScopeKey' retrieved from the Vault: $logonName."
+    $pushCredCache[$ScopeKey] = $cred
+    return $cred
 }
 
 # --- Push: per-server credential CASCADE -------------------------------------
@@ -182,7 +200,7 @@ try {
         $unc = '\\{0}\{1}' -f $srv.Name, ($Config.TargetPath -replace '^([A-Za-z]):\\', '$1$\')
         if ($WhatIfPreference) {
             $who = if ($tryCurrent) { "the current session ($env:USERDOMAIN\$env:USERNAME), then the credential cascade" }
-                   elseif ($pushCfg -and $pushCfg['UserName']) { "the domain push account '$($pushCfg.UserName)'" }
+                   elseif ($srv['Push']) { "the '$($srv['Push'])' lot account" }
                    elseif ($localAdmin) { "$($srv.Name)\$localAdmin" }
                    else { 'a manually prompted account' }
             Write-PSMLog -Level INFO -Message "WhatIf: '$staging' would be mirrored to '$unc' as $who (state\ and logs\ preserved)."
@@ -204,14 +222,18 @@ try {
                             "($($_.Exception.Message)) - trying the Vault-backed credentials...")
                     }
                 }
-                # 1) DOMAIN push account (primary Vault-backed level).
-                if ($null -eq $code -and $domainCred) {
+                # 1) The server's ACCESS-LOT domain account (Servers.Push ->
+                #    PushAccounts, 'Default' fallback), fetched lazily from the Vault.
+                $scopeKey = $srv['Push']
+                if (-not $scopeKey -and $pushAccounts.ContainsKey('Default')) { $scopeKey = 'Default' }
+                if ($null -eq $code -and $scopeKey) {
                     try {
+                        $domainCred = Resolve-PushCredential -ScopeKey $scopeKey
                         $code = Push-PSMSourcesToServer -ServerName $srv.Name -StagingPath $staging `
                                     -TargetUnc $unc -Credential $domainCred -ExcludeFiles $excludeFiles
                     }
                     catch {
-                        Write-PSMLog -Level WARN -Message ("$($srv.Name): push with the domain account '$($domainCred.UserName)' failed " +
+                        Write-PSMLog -Level WARN -Message ("$($srv.Name): push with the '$scopeKey' lot account failed " +
                             "($($_.Exception.Message)) - trying the machine's local account...")
                     }
                 }

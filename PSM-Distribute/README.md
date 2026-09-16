@@ -90,9 +90,13 @@ are tried in order (each attempt is logged, so a denial is diagnosable):
    under the operator's own token — free, no lookup, no prompt; most CPM
    operators already reach part of the fleet. `$false` to always start at the
    Vault-backed levels.
-1. **Domain push account** (`PushAccount` block): one Vault account with
-   admin-share access to ALL machines, fetched once and reused everywhere.
-   SMB logon is `LogonName` (e.g. `FRANCE\svcpsmpush`) or `<UserName>@<Address>`.
+1. **Access-lot domain account** (`PushAccounts` map): admin rights come in
+   LOTS (PRD France, DRP France, Benelux/NL...) — declare one Vault-managed
+   domain account per lot and point each server at its lot with
+   `Push = '<key>'` in the inventory (`Default` entry = fallback for servers
+   that declare none; no lot at all = level skipped). Each lot's account is
+   fetched from the Vault **once per run, lazily** (only lots actually used).
+   SMB logon is `LogonName` (e.g. `FRANCE\svc-push-drp`) or `<UserName>@<Address>`.
 2. **Machine local account** (`LocalAdminUserName`): that machine's own local
    account from the Vault (exact `address` match, short name or FQDN, spread
    across Safes — no Safe to declare). Accepts a **wildcard pattern**

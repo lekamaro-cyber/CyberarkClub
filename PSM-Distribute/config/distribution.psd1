@@ -59,16 +59,19 @@
     # always start at the Vault-backed levels below.
     TryCurrentSession = $true
 
-    # DOMAIN push account (PRIMARY Vault-backed level): one account with admin-share access
-    # to ALL machines. Fetched once at launch and reused for every server.
-    # Empty UserName = disabled (the per-machine local fallback below is then
-    # tried directly).
-    PushAccount = @{
-        UserName  = ''   # Vault account userName, e.g. 'svcpsmpush'
-        Address   = ''   # its Vault address, e.g. 'france.intra.corp'
-        Safe      = ''   # optional Safe filter for the lookup
-        LogonName = ''   # SMB logon override, e.g. 'FRANCE\svcpsmpush';
-                         # empty -> '<UserName>@<Address>' (UPN)
+    # DOMAIN push accounts, one per ACCESS LOT - admin rights are granted per
+    # scope (PRD France, DRP France, Benelux/NL...), a single account cannot
+    # cover the fleet. Vault-managed DOMAIN accounts, fetched once per run and
+    # per scope actually used by the selected servers. Each server points at
+    # its lot via its 'Push' key below; a 'Default' entry, if present, serves
+    # the servers that declare none (otherwise this cascade level is skipped
+    # for them - level 0, the operator's own session, often suffices on their
+    # own datacenter).
+    PushAccounts = @{
+        # PRDFR = @{ UserName = 'svc-push-prd'; Address = 'france.intra.corp';  Safe = ''; LogonName = 'FRANCE\svc-push-prd' }
+        # DRPFR = @{ UserName = 'svc-push-drp'; Address = 'france.intra.corp';  Safe = ''; LogonName = 'FRANCE\svc-push-drp' }
+        # NL    = @{ UserName = 'svc-push-nl';  Address = 'benelux.intra.corp'; Safe = ''; LogonName = 'BENELUX\svc-push-nl' }
+        # LogonName empty -> '<UserName>@<Address>' (UPN) is used for the SMB logon.
     }
 
     # FALLBACK per machine, when the domain account fails on a server (or is
@@ -84,11 +87,12 @@
     # one machine = ambiguity error -> manual prompt (last resort).
     LocalAdminUserName = ''        # e.g. 'AdminVal' or '*adm*'; empty = skip this level
 
-    # Target inventory: machine name + server type (= overlay folder).
+    # Target inventory: machine name + server type (= overlay folder) +
+    # optional Push = key of the PushAccounts lot that covers the machine.
     Servers = @(
-        @{ Name = 'FRPRDSRV10013'; Type = 'PREPRD' }
-        # @{ Name = '<PRD-PSM-1>';  Type = 'PRD'    }
-        # @{ Name = '<DRP-PSM-1>';  Type = 'DRP'    }
-        # @{ Name = '<NPR-PSM-1>';  Type = 'PRDNPR' }
+        @{ Name = 'FRPRDSRV10013'; Type = 'PREPRD' }                    # operator's own DC: level 0 usually suffices
+        # @{ Name = 'FRDRPSRV10017'; Type = 'PREPRD'; Push = 'DRPFR' }  # other DC: pushed with that lot's account
+        # @{ Name = '<PRD-PSM-1>';   Type = 'PRD';    Push = 'PRDFR' }
+        # @{ Name = '<NL-PSM-1>';    Type = 'PRDNPR'; Push = 'NL'    }
     )
 }
