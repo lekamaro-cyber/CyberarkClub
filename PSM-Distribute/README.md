@@ -136,9 +136,12 @@ consistent with the PSM-Deploy doctrine.
   AV/EDR and read-only attributes routinely deny overwriting `autorun.inf`
   over SMB (robocopy ERROR 5), and the install never reads it.
 - A machine-LOCAL account refused on an admin share **with the right
-  password** is remote UAC token filtering: set
-  `LocalAccountTokenFilterPolicy=1` on the target or use the built-in
-  Administrator / a domain admin — the error message spells this out.
+  password**: for an ordinary local admin it is remote UAC token filtering
+  (`LocalAccountTokenFilterPolicy=1` fixes it); for a RENAMED built-in
+  Administrator (RID 500, exempt from that filtering) look at "Deny access
+  to this computer from the network" policies or the account being
+  disabled. A wrong password shows as "user name or password is incorrect"
+  instead — the error message spells all of this out.
 - One server's failure does not stop the others: summary at the end, exit
   code 1, and a ready-made `-Server <failed> -SkipStaging` relaunch hint.
 - A type without an overlay folder gets the base tree only (WARN).

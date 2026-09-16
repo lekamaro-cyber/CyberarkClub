@@ -127,11 +127,20 @@ function Push-PSMSourcesToServer {
                 $msg = $_.Exception.Message
                 if ($msg -match 'Access is denied' -and $Credential.UserName -like "$ServerName\*") {
                     # Machine-LOCAL account refused on an admin share with the RIGHT
-                    # password: remote UAC filters local-account tokens.
-                    throw ("SMB logon as '$($Credential.UserName)' denied ($msg): a LOCAL account gets a " +
-                           'UAC-FILTERED token over the network, so admin shares are refused even with the ' +
-                           'correct password - set LocalAccountTokenFilterPolicy=1 on the target (HKLM\SOFTWARE\' +
-                           'Microsoft\Windows\CurrentVersion\Policies\System) or use the built-in Administrator/a domain admin.')
+                    # password. Likely causes, in order:
+                    #  - ordinary local admin: remote UAC token filtering
+                    #    (LocalAccountTokenFilterPolicy=0, the default);
+                    #  - RENAMED built-in Administrator (RID 500, exempt from that
+                    #    filtering): a "Deny access to this computer from the
+                    #    network" policy (security baselines deny local accounts,
+                    #    S-1-5-113/114) or the account being disabled.
+                    throw ("SMB logon as '$($Credential.UserName)' denied ($msg). With the CORRECT password this " +
+                           'usually means: ordinary local admin -> remote UAC token filtering (set ' +
+                           'LocalAccountTokenFilterPolicy=1 under HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\' +
+                           'Policies\System); renamed built-in Administrator (RID 500, exempt from that filtering) -> ' +
+                           'check "Deny access to this computer from the network" policies (baselines deny local ' +
+                           'accounts) or whether the account is disabled. A wrong password shows as ' +
+                           '"user name or password is incorrect" instead.')
                 }
                 throw
             }
