@@ -93,7 +93,8 @@ function Push-PSMSourcesToServer {
         [Parameter(Mandatory)] [string] $ServerName,
         [Parameter(Mandatory)] [string] $StagingPath,
         [Parameter(Mandatory)] [string] $TargetUnc,       # \\server\D$\PSMSources\PSM-Deploy
-        [pscredential] $Credential
+        [pscredential] $Credential,
+        [string[]] $ExcludeFiles = @()   # never pushed (robocopy /XF), e.g. autorun.inf
     )
     if (-not (Test-Path $StagingPath)) {
         throw "Push-PSMSourcesToServer: staging tree not found: $StagingPath (compose it first - run without -SkipStaging)."
@@ -118,15 +119,31 @@ function Push-PSMSourcesToServer {
             # Authenticates the SMB session for this server; no plaintext
             # password on a command line (unlike 'net use').
             $driveName = 'PSMDIST' + ([guid]::NewGuid().ToString('N').Substring(0, 6))
-            $drive = New-PSDrive -Name $driveName -PSProvider FileSystem -Root $shareRoot `
-                        -Credential $Credential -Scope Local -ErrorAction Stop
+            try {
+                $drive = New-PSDrive -Name $driveName -PSProvider FileSystem -Root $shareRoot `
+                            -Credential $Credential -Scope Local -ErrorAction Stop
+            }
+            catch {
+                $msg = $_.Exception.Message
+                if ($msg -match 'Access is denied' -and $Credential.UserName -like "$ServerName\*") {
+                    # Machine-LOCAL account refused on an admin share with the RIGHT
+                    # password: remote UAC filters local-account tokens.
+                    throw ("SMB logon as '$($Credential.UserName)' denied ($msg): a LOCAL account gets a " +
+                           'UAC-FILTERED token over the network, so admin shares are refused even with the ' +
+                           'correct password - set LocalAccountTokenFilterPolicy=1 on the target (HKLM\SOFTWARE\' +
+                           'Microsoft\Windows\CurrentVersion\Policies\System) or use the built-in Administrator/a domain admin.')
+                }
+                throw
+            }
         }
         if (-not (Test-Path $shareRoot)) {
             throw "share unreachable: $shareRoot (445 flow / account rights on this datacenter?)"
         }
-        return Invoke-PSMRobocopy -Source $StagingPath -Destination $TargetUnc `
-                   -Options @('/MIR', '/XD', 'state', 'logs',
-                              '/R:2', '/W:5', '/MT:16', '/NP', '/NFL', '/NDL', '/NJH', '/NJS')
+        $opts = @('/MIR', '/XD', 'state', 'logs',
+                  '/R:2', '/W:5', '/MT:16', '/NP', '/NFL', '/NDL', '/NJH', '/NJS')
+        $ExcludeFiles = @($ExcludeFiles | Where-Object { $_ })
+        if ($ExcludeFiles) { $opts += @('/XF') + $ExcludeFiles }
+        return Invoke-PSMRobocopy -Source $StagingPath -Destination $TargetUnc -Options $opts
     }
     finally {
         if ($drive) { Remove-PSDrive -Name $drive.Name -Force -ErrorAction SilentlyContinue }

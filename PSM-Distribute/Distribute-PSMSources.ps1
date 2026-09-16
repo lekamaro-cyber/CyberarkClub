@@ -172,7 +172,8 @@ if (-not $WhatIfPreference -and $pushCfg -and $pushCfg['UserName']) {
 #   0) CURRENT session (integrated, free)  1) domain push account (Vault)
 #   2) machine local account (Vault)       3) manual prompt
 # One server's failure does not stop the others.
-$tryCurrent = if ($Config.Keys -contains 'TryCurrentSession') { [bool]$Config['TryCurrentSession'] } else { $true }
+$tryCurrent   = if ($Config.Keys -contains 'TryCurrentSession') { [bool]$Config['TryCurrentSession'] } else { $true }
+$excludeFiles = @($Config['PushExcludeFiles'] | Where-Object { $_ })   # e.g. autorun.inf (see distribution.psd1)
 $results = @()
 try {
     foreach ($srv in $targets) {
@@ -195,7 +196,7 @@ try {
                 if ($tryCurrent) {
                     try {
                         $code = Push-PSMSourcesToServer -ServerName $srv.Name -StagingPath $staging `
-                                    -TargetUnc $unc
+                                    -TargetUnc $unc -ExcludeFiles $excludeFiles
                         Write-PSMLog -Level INFO -Message "$($srv.Name): pushed with the CURRENT session ($env:USERDOMAIN\$env:USERNAME)."
                     }
                     catch {
@@ -207,7 +208,7 @@ try {
                 if ($null -eq $code -and $domainCred) {
                     try {
                         $code = Push-PSMSourcesToServer -ServerName $srv.Name -StagingPath $staging `
-                                    -TargetUnc $unc -Credential $domainCred
+                                    -TargetUnc $unc -Credential $domainCred -ExcludeFiles $excludeFiles
                     }
                     catch {
                         Write-PSMLog -Level WARN -Message ("$($srv.Name): push with the domain account '$($domainCred.UserName)' failed " +
@@ -225,7 +226,7 @@ try {
                         $smbCred = [System.Management.Automation.PSCredential]::new(
                                        "$($srv.Name)\$($acct.UserName)", $acct.Credential.Password)
                         $code = Push-PSMSourcesToServer -ServerName $srv.Name -StagingPath $staging `
-                                    -TargetUnc $unc -Credential $smbCred
+                                    -TargetUnc $unc -Credential $smbCred -ExcludeFiles $excludeFiles
                     }
                     catch {
                         Write-PSMLog -Level WARN -Message ("$($srv.Name): local-account push failed " +

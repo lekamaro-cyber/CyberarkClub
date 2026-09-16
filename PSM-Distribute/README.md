@@ -130,8 +130,15 @@ consistent with the PSM-Deploy doctrine.
   staging tree — files that no longer exist in the sources are **deleted** on
   the target — EXCEPT `state\` and `logs\`, always preserved (the server's
   deployment progress and history are local).
-- The SMB session is authenticated with `New-PSDrive` + the machine's local
-  account fetched from the Vault (no plaintext password on any command line).
+- The SMB session is authenticated with `New-PSDrive` + the cascade's
+  credential (no plaintext password on any command line).
+- `PushExcludeFiles` (default `autorun.inf`) lists files never pushed:
+  AV/EDR and read-only attributes routinely deny overwriting `autorun.inf`
+  over SMB (robocopy ERROR 5), and the install never reads it.
+- A machine-LOCAL account refused on an admin share **with the right
+  password** is remote UAC token filtering: set
+  `LocalAccountTokenFilterPolicy=1` on the target or use the built-in
+  Administrator / a domain admin — the error message spells this out.
 - One server's failure does not stop the others: summary at the end, exit
   code 1, and a ready-made `-Server <failed> -SkipStaging` relaunch hint.
 - A type without an overlay folder gets the base tree only (WARN).

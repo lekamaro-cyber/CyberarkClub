@@ -603,6 +603,8 @@ Describe 'PSM-Distribute (source distribution from the CPM)' {
             $c.PushAccount.Keys | Should -Contain $k
         }
         $c.TryCurrentSession | Should -BeOfType [bool]
+        $c.PushExcludeFiles  | Should -Contain 'autorun.inf'   # EDR/read-only trap (robocopy ERROR 5)
+        (Get-Command Push-PSMSourcesToServer).Parameters.Keys | Should -Contain 'ExcludeFiles'
     }
     It 'Get-PvwaAccountPassword accepts an -Address (exact machine match, cross-Safe)' {
         Import-Module (Join-Path $root 'modules\PSM.Pvwa.psm1') -Force
