@@ -4,3 +4,4 @@ root;anthill;Password set;Online;NO;NO;;YES;;;;YES
 apache;anthill;Password locked;Online;NO;NO;;NO;;;;NO
 oracle;awx02dev;Password set;Offline;YES;NO;dba;NO;;;;NO
 admJava-ssh;calc01;Alternate authentication;Online;YES;NO;;NO;;;;YES-SSH
+svc-batch;anthill;Password not set;Online;YES;NO;;YES;;;;NO

@@ -62,6 +62,23 @@ Le script lit alors `CA_Candidate` et **qualifie** chaque compte non embarqué :
 - `CA_Candidate = NO` et non embarqué → **Normal** (pas de privilège / serveur hors ligne).
 - `CA_Candidate = CHECK-INVENTORY` → **À vérifier** (statut inventaire inconnu).
 
+**Nuance importante (comptes privilégiés sans mot de passe)** : `extractSudoRootV0.7.ps1`
+met `CA_Candidate = NO` aussi pour les comptes **privilégiés mais sans mot de passe**
+(`Password not set` / `Password locked`). Dans ce projet, ces comptes doivent
+**quand même être alertés** s'ils ne sont pas embarqués. Le script regarde donc les
+colonnes de privilège (`$PrivilegeColumns`, par défaut `Sudo`, `RootEquivalent`,
+`PrivGroup`) : si l'une indique un privilège alors que `CA_Candidate = NO` et que le
+compte n'est pas embarqué → **ALERTE** (au lieu de « Normal »).
+
+Résumé du verdict `OnboardingAssessment` pour un compte **non embarqué** :
+
+| Situation | Verdict |
+|-----------|---------|
+| `CA_Candidate` = YES/YES-SSH | `ANOMALY - CyberArk candidate not onboarded` |
+| `CA_Candidate` = NO **mais** privilégié (Sudo/Root/PrivGroup) | `ALERT - privileged account not onboarded (...)` |
+| `CA_Candidate` = NO **et** non privilégié | `Normal - not a candidate` |
+| `CA_Candidate` = CHECK-INVENTORY | `TO CHECK - unknown inventory status` |
+
 Pour ce pipeline, mettez simplement dans la section CONFIGURATION :
 `$CsvPath = "$PSScriptRoot\Input\Audit_Privileges_Unix_2026-06.csv"`
 (la sortie de `extractSudoRootV0.7.ps1`), puis lancez le script.
@@ -119,6 +136,7 @@ $SkipCertificateCheck = $false
 | `$DefaultSafeGroupPatterns` | Motifs (wildcards) de groupes par défaut org (`*_PAM_Auth_*`, `PAM_CyberArk_*`...). |
 | `$UsernameColumn` / `$HostColumn` | Colonnes (`'Auto'` = détection).                         |
 | `$CandidateColumn`     | Colonne de candidature CyberArk (`CA_Candidate`).                    |
+| `$PrivilegeColumns`    | Colonnes de privilège (`Sudo`, `RootEquivalent`, `PrivGroup`) : ALERTE si privilégié + `CA_Candidate=NO` + non embarqué. |
 | `$CsvDelimiter`        | `'Auto'` (détecte `,`/`;`), sinon `','` ou `';'`.                    |
 | `$SkipADLookup`        | `$true` = désactive la partie Active Directory.                     |
 | `$SkipIPCheck`         | `$true` = désactive le repli par IP (voir ci-dessous).             |

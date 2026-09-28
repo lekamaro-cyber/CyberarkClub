@@ -67,6 +67,13 @@ $HostColumn      = 'Auto'          # e.g. 'Server' / 'host' / 'address'
 $CandidateColumn = 'CA_Candidate'  # CyberArk candidacy column (extractSudoRoot)
 $CsvDelimiter    = 'Auto'          # 'Auto' (detects , or ;), otherwise ',' or ';'
 
+# Privilege columns (from extractSudoRoot). Nuance: extractSudoRoot sets
+# CA_Candidate = NO for privileged accounts that have NO password. In THIS project
+# such an account STILL must be flagged if it is not onboarded. So even when
+# CA_Candidate = NO, if any of these columns shows a privilege, a non-onboarded
+# account is reported as an ALERT (not "Normal").
+$PrivilegeColumns = @('Sudo', 'RootEquivalent', 'PrivGroup')
+
 # --- host <-> CyberArk address matching ---
 $AddressMatch = 'Hostname'         # 'Hostname' (short name) | 'Exact' | 'Contains'
 
@@ -392,6 +399,19 @@ function Test-AddressMatch {
     return $false
 }
 
+function Test-RowPrivileged {
+    <#  True if the CSV row shows a privilege (Sudo / RootEquivalent / PrivGroup...),
+        i.e. any privilege column holds a non-empty, non-negative value.  #>
+    param($Row, [string[]]$Cols)
+    foreach ($c in $Cols) {
+        if ($Row.PSObject.Properties.Name -contains $c) {
+            $v = "$($Row.$c)".Trim()
+            if ($v -and $v -notmatch '^(?i)(no|0|false|n/?a|none|-)$') { return $true }
+        }
+    }
+    return $false
+}
+
 function Test-IsDefaultGroup {
     <#  True if the safe member is a default group (exact name or matching pattern).  #>
     param([string]$Name)
@@ -701,11 +721,24 @@ try {
         if (-not $match) {
             if ($DebugMode) { Write-Host "[DEBUG]   -> NOT ONBOARDED (no address match)" -ForegroundColor DarkYellow }
             $rec.Notes = 'Account not onboarded (no username+address match, by name or IP)'
+            $isPriv = Test-RowPrivileged -Row $row -Cols $PrivilegeColumns
             switch -Regex ($candidate) {
                 '^(?i)YES'             { $rec.OnboardingAssessment = 'ANOMALY - CyberArk candidate not onboarded' }
                 '^(?i)CHECK-INVENTORY' { $rec.OnboardingAssessment = 'TO CHECK - unknown inventory status' }
-                '^(?i)NO$'             { $rec.OnboardingAssessment = 'Normal - not a candidate (no privilege / offline)' }
-                default                { $rec.OnboardingAssessment = if ($HasCandidate) { 'Not a candidate (empty CA_Candidate)' } else { 'Not assessed (no CA_Candidate column)' } }
+                default {
+                    # CA_Candidate = NO / empty. Nuance: extractSudoRoot marks NO for
+                    # privileged accounts WITHOUT a password too. Such accounts must
+                    # still be flagged here if they are privileged and not onboarded.
+                    if ($isPriv) {
+                        $rec.OnboardingAssessment = 'ALERT - privileged account not onboarded (not a CA candidate, e.g. no password)'
+                    }
+                    elseif ($HasCandidate) {
+                        $rec.OnboardingAssessment = 'Normal - not a candidate (no privilege / offline)'
+                    }
+                    else {
+                        $rec.OnboardingAssessment = 'Not assessed (no CA_Candidate column)'
+                    }
+                }
             }
             continue
         }
@@ -867,6 +900,7 @@ $final | Export-Csv -LiteralPath $DestPath -NoTypeInformation -Encoding UTF8 -De
 
 $onb = ($final | Where-Object { $_.Onboarded -eq 'Yes' }).Count
 $anomalies = ($final | Where-Object { $_.OnboardingAssessment -like 'ANOMALY*' }).Count
+$alerts = ($final | Where-Object { $_.OnboardingAssessment -like 'ALERT*' }).Count
 $normalMissing = ($final | Where-Object { $_.OnboardingAssessment -like 'Normal*' }).Count
 $elapsed = (Get-Date) - $scriptStart
 Write-Host ""
@@ -874,9 +908,10 @@ Write-Host "===== Summary =====" -ForegroundColor Yellow
 Write-Host "Rows processed                : $($final.Count)"
 Write-Host "Onboarded accounts            : $onb"
 Write-Host "Not onboarded                 : $($final.Count - $onb)"
+Write-Host "  -> ANOMALIES (candidate not onboarded)         : $anomalies" -ForegroundColor Red
+Write-Host "  -> ALERTS (privileged, no password, not onbd.) : $alerts" -ForegroundColor Red
 if ($HasCandidate) {
-    Write-Host "  -> ANOMALIES (candidate not onboarded) : $anomalies" -ForegroundColor Red
-    Write-Host "  -> Normal (not a candidate)            : $normalMissing" -ForegroundColor Gray
+    Write-Host "  -> Normal (not a candidate)                    : $normalMissing" -ForegroundColor Gray
 }
 Write-Host "Unique safes queried          : $($safeMembersCache.Count)"
 if ($GroupsOU) { Write-Host "Groups in OU map              : $($script:GroupMap.Count)" }
