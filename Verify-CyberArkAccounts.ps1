@@ -50,7 +50,12 @@ $PvwaPassword = ''                               # empty = prompt at runtime
 # Input CSV: account/server pairs (columns inventory,host,username...).
 # Can also be the output of extractSudoRootV0.7.ps1 (UserSam,Server,...,CA_Candidate):
 # columns and delimiter are auto-detected.
-$CsvPath    = "$PSScriptRoot\Input\accounts.csv"
+# $CsvPath may be:
+#   - a file:     ...\Audit_Privileges_Unix_2026-06.csv
+#   - a folder:   ...\Input           (the most recent *.csv in it is picked)
+#   - a wildcard: ...\Input\Audit_Privileges_Unix_*.csv  (most recent match is picked)
+# So just drop the extractSudoRoot output next to the script; no renaming needed.
+$CsvPath    = "$PSScriptRoot\Input\Audit_Privileges_Unix_*.csv"
 # Output: leave EMPTY to add the analysis columns to the input file itself (no new
 # file, same rows, 1:1). Set a path only if you want a separate results file.
 $OutputPath = ''
@@ -399,6 +404,25 @@ function Test-AddressMatch {
     return $false
 }
 
+function Resolve-InputFile {
+    <#  Resolve $CsvPath to an actual file. Accepts a file, a folder (newest *.csv in
+        it), or a wildcard (newest matching file). Returns the full path or $null.  #>
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
+    if (Test-Path -LiteralPath $Path -PathType Leaf) { return (Resolve-Path -LiteralPath $Path).Path }
+    if (Test-Path -LiteralPath $Path -PathType Container) {
+        $f = Get-ChildItem -LiteralPath $Path -Filter '*.csv' -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        return $(if ($f) { $f.FullName } else { $null })
+    }
+    if ($Path -match '[\*\?]') {
+        $f = Get-ChildItem -Path $Path -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        return $(if ($f) { $f.FullName } else { $null })
+    }
+    return $null
+}
+
 function Test-RowPrivileged {
     <#  True if the CSV row shows a privilege (Sudo / RootEquivalent / PrivGroup...),
         i.e. any privilege column holds a non-empty, non-negative value.  #>
@@ -540,7 +564,11 @@ function Resolve-DomainGroupAndManager {
 #endregion
 
 #region ----------------------------------------------------------- Main program
-if (-not (Test-Path -LiteralPath $CsvPath)) { throw "CSV file not found: $CsvPath" }
+# Resolve the input (file, folder, or wildcard -> newest match)
+$resolvedCsv = Resolve-InputFile -Path $CsvPath
+if (-not $resolvedCsv) { throw "No input CSV found for: $CsvPath" }
+$CsvPath = $resolvedCsv
+Write-Host "Input file: $CsvPath" -ForegroundColor DarkCyan
 
 # Build credentials from the CONFIGURATION section (prompt if password left empty)
 if (-not $Credential) {

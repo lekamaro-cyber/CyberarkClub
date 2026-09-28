@@ -41,6 +41,12 @@ dossier `Input\` :
   `extractSudoRootV0.7.ps1` (`UserSam;Server;...;CA_Candidate`), pour exploiter
   la qualification `CA_Candidate`.
 
+**Repérage automatique du fichier de `extractSudoRoot`** : tu n'as pas besoin de
+renommer ni de reconstruire le fichier. `$CsvPath` accepte un **dossier** ou un
+**motif** — le script prend alors le **fichier le plus récent** qui correspond.
+Dépose simplement la sortie mensuelle de `extractSudoRoot` dans le dossier `Input\`
+et laisse par ex. `$CsvPath = "$PSScriptRoot\Input\Audit_Privileges_Unix_*.csv"`.
+
 Remplacez `Input\accounts.csv` par votre fichier réel (ou changez `$CsvPath`).
 
 | inventory | host       | username   | home dir         | shell     | ... |
@@ -98,7 +104,7 @@ $AuthType = 'LDAP'                               # CyberArk | LDAP | RADIUS
 $PvwaUsername = ''                               # vide = saisie à l'exécution
 $PvwaPassword = ''                               # vide = saisie sécurisée (recommandé)
 
-$CsvPath    = "$PSScriptRoot\Input\Audit_Privileges_Unix.csv"
+$CsvPath    = "$PSScriptRoot\Input\Audit_Privileges_Unix_*.csv"   # fichier, dossier, ou motif (prend le plus récent)
 $OutputPath = ''                                 # vide = ajoute les colonnes au fichier d'entrée (pas de nouveau fichier)
 
 $UsernameColumn  = 'Auto'          # 'Auto' = détection automatique
@@ -123,7 +129,7 @@ $SkipCertificateCheck = $false
 | `$PvwaUrl`             | URL du PVWA.                                                          |
 | `$AuthType`            | `CyberArk` / `LDAP` / `RADIUS`.                                      |
 | `$PvwaUsername` / `$PvwaPassword` | Identifiants (laisser le mot de passe vide = saisie sécurisée). |
-| `$CsvPath`             | CSV source (peut être la sortie de `extractSudoRootV0.7.ps1`).       |
+| `$CsvPath`             | CSV source (sortie de `extractSudoRootV0.7.ps1`). Accepte un **fichier**, un **dossier** (prend le `*.csv` le plus récent) ou un **motif** `...\Audit_Privileges_Unix_*.csv` (plus récent). |
 | `$OutputPath`          | **Vide = ajoute les colonnes au fichier d'entrée** (mêmes lignes, 1:1, pas de nouveau fichier). Mettre un chemin uniquement pour un fichier séparé. |
 | `$AccountsExtractPath` | Fichier où l'extrait de tous les comptes CyberArk est sauvegardé.   |
 | `$AddressMatch`        | `Hostname` (défaut), `Exact`, `Contains`.                            |
