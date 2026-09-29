@@ -372,7 +372,6 @@ function Search-GroupInDomain {
     catch { Write-Verbose "Group search failed in domain '$Domain' for $Name : $($_.Exception.Message)" }
     return $null
 }
-}
 
 function Get-CachedDomainGroup {
     <#  Resolve-DomainGroupAndManager with a cache keyed by group name, so a group
