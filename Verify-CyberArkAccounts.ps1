@@ -47,36 +47,33 @@ $PvwaUsername = ''                               # e.g. 'svc_cyberark_admin' (em
 $PvwaPassword = ''                               # empty = prompt at runtime
 
 # --- Files ---
-# Input CSV: account/server pairs (columns inventory,host,username...).
-# Can also be the output of extractSudoRootV0.7.ps1 (UserSam,Server,...,CA_Candidate):
-# columns and delimiter are auto-detected.
-# $CsvPath may be:
-#   - a file:     ...\Audit_Privileges_Unix_2026-06.csv
-#   - a folder:   ...\Input           (the most recent *.csv in it is picked)
-#   - a wildcard: ...\Input\Audit_Privileges_Unix_*.csv  (most recent match is picked)
-# So just drop the extractSudoRoot output next to the script; no renaming needed.
-$CsvPath    = "$PSScriptRoot\Input\Audit_Privileges_Unix_*.csv"
-# Output: leave EMPTY to add the analysis columns to the input file itself (no new
-# file, same rows, 1:1). Set a path only if you want a separate results file.
-$OutputPath = ''
+# MAIN input: the list of accounts to verify (host/username). This file is the one
+# the script always runs on; it is NEVER modified. Each run writes a NEW result file.
+# $CsvPath may be a file, a folder (newest *.csv), or a wildcard (newest match).
+$CsvPath = "$PSScriptRoot\Input\accounts.csv"
 
-# --- CyberArk accounts source ---
-# The script ALWAYS downloads all accounts once (extraction), saves them to the
-# file below, then closes the session before processing (matching + AD), which
-# runs offline.
+# Result of each run (a new/different file each time). Directory created if needed.
+$OutputPath = "$PSScriptRoot\Output\Verification_$(Get-Date -Format 'yyyy-MM-dd_HHmmss').csv"
+
+# ANNEX (reference only) = output of extractSudoRootV0.7.ps1. Used solely as a LOOKUP
+# to know, per account, its CyberArk candidacy (CA_Candidate) and privileges
+# (Sudo / RootEquivalent / PrivGroup). It is NOT the main input and is never written.
+# Leave empty ('') to run without it. Accepts a file, folder, or wildcard (newest).
+$CandidateFile = "$PSScriptRoot\Input\Audit_Privileges_Unix_*.csv"
+
+# CyberArk accounts extract (downloaded once from the PVWA, saved for traceability).
 $AccountsExtractPath = "$PSScriptRoot\Input\cyberark_accounts.csv"
 
-# --- Input CSV columns (leave 'Auto' for auto-detection) ---
-$UsernameColumn  = 'Auto'          # e.g. 'UserSam' / 'username' / 'userName'
-$HostColumn      = 'Auto'          # e.g. 'Server' / 'host' / 'address'
-$CandidateColumn = 'CA_Candidate'  # CyberArk candidacy column (extractSudoRoot)
+# --- Column names (leave 'Auto' for auto-detection) ---
+$UsernameColumn  = 'Auto'          # main input: e.g. 'username' / 'UserSam' / 'userName'
+$HostColumn      = 'Auto'          # main input: e.g. 'host' / 'Server' / 'address'
+$CandidateColumn = 'CA_Candidate'  # candidacy column inside the annex (extractSudoRoot)
 $CsvDelimiter    = 'Auto'          # 'Auto' (detects , or ;), otherwise ',' or ';'
 
-# Privilege columns (from extractSudoRoot). Nuance: extractSudoRoot sets
-# CA_Candidate = NO for privileged accounts that have NO password. In THIS project
-# such an account STILL must be flagged if it is not onboarded. So even when
-# CA_Candidate = NO, if any of these columns shows a privilege, a non-onboarded
-# account is reported as an ALERT (not "Normal").
+# Privilege columns (inside the annex). Nuance: extractSudoRoot sets CA_Candidate = NO
+# for privileged accounts that have NO password. In THIS project such an account STILL
+# must be flagged if it is not onboarded. So even when CA_Candidate = NO, if any of
+# these columns shows a privilege, a non-onboarded account is reported as an ALERT.
 $PrivilegeColumns = @('Sudo', 'RootEquivalent', 'PrivGroup')
 
 # --- host <-> CyberArk address matching ---
@@ -436,6 +433,41 @@ function Test-RowPrivileged {
     return $false
 }
 
+function Build-CandidateAnnex {
+    <#  Load the extractSudoRoot annex into a lookup map keyed by "user|server" and
+        "user|shorthost". Each value: { Candidate; Privileged }. Reference only.  #>
+    param([string]$Path)
+    $map = @{}
+    if ([string]::IsNullOrWhiteSpace($Path)) { Write-Host "No annex file configured (\$CandidateFile empty)." -ForegroundColor Yellow; return $map }
+    $file = Resolve-InputFile -Path $Path
+    if (-not $file) { Write-Warning "Annex (extractSudoRoot) not found: $Path -> running without candidacy info."; return $map }
+
+    $delim = ','
+    $hdr = Get-Content -LiteralPath $file -TotalCount 1
+    if ($hdr -match ';') { $delim = ';' }
+    $arows = @(Import-Csv -LiteralPath $file -Delimiter $delim)
+    if ($arows.Count -eq 0) { Write-Warning "Annex is empty: $file"; return $map }
+    $acols = $arows[0].PSObject.Properties.Name
+    $uCol = Resolve-Column -Requested 'Auto' -Fallbacks @('UserSam', 'username', 'userName', 'user') -Available $acols
+    $sCol = Resolve-Column -Requested 'Auto' -Fallbacks @('Server', 'host', 'address', 'NAME_SERVER', 'Adresse') -Available $acols
+    if (-not $uCol -or -not $sCol) { Write-Warning "Annex user/server columns not found in $file"; return $map }
+
+    foreach ($r in $arows) {
+        $u = "$($r.$uCol)".ToLower().Trim()
+        $s = "$($r.$sCol)".ToLower().Trim()
+        if (-not $u -or -not $s) { continue }
+        $entry = [pscustomobject]@{
+            Candidate  = if ($acols -contains $CandidateColumn) { "$($r.$CandidateColumn)".Trim() } else { $null }
+            Privileged = (Test-RowPrivileged -Row $r -Cols $PrivilegeColumns)
+        }
+        $map["$u|$s"] = $entry
+        $short = $s.Split('.')[0]
+        if ($short -and $short -ne $s) { $map["$u|$short"] = $entry }
+    }
+    Write-Host "Annex (extractSudoRoot): $($arows.Count) row(s) loaded from $file" -ForegroundColor DarkCyan
+    return $map
+}
+
 function Test-IsDefaultGroup {
     <#  True if the safe member is a default group (exact name or matching pattern).  #>
     param([string]$Name)
@@ -620,18 +652,23 @@ $HostColumn = Resolve-Column -Requested $HostColumn -Fallbacks @('host', 'Server
 if (-not $UsernameColumn -or -not $HostColumn) {
     throw "Cannot find the username/host columns in the CSV. Columns found: $($cols -join ', ')"
 }
-$HasCandidate = ($cols -contains $CandidateColumn)
-# Destination: empty $OutputPath => enrich the input file in place (no new file)
+
+# Load the extractSudoRoot annex (reference lookup: CA_Candidate + privileges)
+$annexMap = Build-CandidateAnnex -Path $CandidateFile
+$HasAnnex = ($annexMap.Count -gt 0)
+
+# Destination: a NEW result file each run (the main input file is never modified)
 $DestPath = if ([string]::IsNullOrWhiteSpace($OutputPath)) { $CsvPath } else { $OutputPath }
 $OutDir = Split-Path -Parent $DestPath
 if ($OutDir -and -not (Test-Path -LiteralPath $OutDir)) {
     New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 }
-Write-Host "Columns used: username='$UsernameColumn', host='$HostColumn'$(if ($HasCandidate) { ", candidate='$CandidateColumn'" })" -ForegroundColor DarkCyan
+Write-Host "Columns used: username='$UsernameColumn', host='$HostColumn'$(if ($HasAnnex) { ", annex candidacy=$($annexMap.Count) entries" })" -ForegroundColor DarkCyan
 if ($DebugMode) {
     Write-Host "[DEBUG] ===== Configuration =====" -ForegroundColor Magenta
     Write-Host "[DEBUG] PVWA=$PvwaUrl | AuthType=$AuthType | User=$($Credential.UserName)" -ForegroundColor DarkGray
     Write-Host "[DEBUG] CSV=$CsvPath (delim='$CsvDelimiter') | Output=$DestPath" -ForegroundColor DarkGray
+    Write-Host "[DEBUG] Annex=$CandidateFile | annex entries=$($annexMap.Count)" -ForegroundColor DarkGray
     Write-Host "[DEBUG] AddressMatch=$AddressMatch | SuffixLen=$SafeGroupSuffixLength | SkipAD=$SkipADLookup | SkipIP=$SkipIPCheck" -ForegroundColor DarkGray
     Write-Host "[DEBUG] MaxAccounts=$MaxAccounts (rows to process=$($rows.Count))" -ForegroundColor DarkGray
 }
@@ -686,18 +723,27 @@ try {
         $i++
         $username = "$($row.$UsernameColumn)".Trim()
         $hostName = "$($row.$HostColumn)".Trim()
-        $candidate = if ($HasCandidate) { "$($row.$CandidateColumn)".Trim() } else { $null }
+        # Look the account up in the extractSudoRoot annex (by user|host, then user|shorthost)
+        $annex = $null
+        if ($HasAnnex -and $username -and $hostName) {
+            $uk = $username.ToLower()
+            $annex = $annexMap["$uk|$($hostName.ToLower())"]
+            if (-not $annex) { $annex = $annexMap["$uk|$($hostName.ToLower().Split('.')[0])"] }
+        }
+        $candidate = if ($annex) { $annex.Candidate } else { $null }
+        $isPriv = if ($annex) { $annex.Privileged } else { $false }
         Write-Progress -Activity "Matching CyberArk" -Status "$i/$($rows.Count): $username@$hostName" -PercentComplete (($i / $rows.Count) * 100)
 
         # Start from the original row (keep ALL its columns), then add/refresh the
         # analysis columns. This guarantees one output row per input row (no extra rows).
         $rec = [ordered]@{}
         foreach ($p in $row.PSObject.Properties) { $rec[$p.Name] = $p.Value }
-        foreach ($c in 'Onboarded', 'OnboardingAssessment', 'MatchType', 'ResolvedIP',
+        foreach ($c in 'CA_Candidate', 'Onboarded', 'OnboardingAssessment', 'MatchType', 'ResolvedIP',
             'AccountName', 'AccountAddress', 'PlatformId', 'SafeName', 'AllSafeGroups',
             'ExternalDomainGroup', 'GroupSafeSimilarity', 'GroupManager', 'GroupManagerEmail', 'Notes') {
             $rec[$c] = $null
         }
+        $rec['CA_Candidate'] = $candidate      # taken from the annex (reference)
         $rec['Onboarded'] = 'No'
         $results.Add($rec)
 
@@ -749,22 +795,22 @@ try {
         if (-not $match) {
             if ($DebugMode) { Write-Host "[DEBUG]   -> NOT ONBOARDED (no address match)" -ForegroundColor DarkYellow }
             $rec.Notes = 'Account not onboarded (no username+address match, by name or IP)'
-            $isPriv = Test-RowPrivileged -Row $row -Cols $PrivilegeColumns
+            # $candidate / $isPriv come from the extractSudoRoot annex (looked up above)
             switch -Regex ($candidate) {
                 '^(?i)YES'             { $rec.OnboardingAssessment = 'ANOMALY - CyberArk candidate not onboarded' }
                 '^(?i)CHECK-INVENTORY' { $rec.OnboardingAssessment = 'TO CHECK - unknown inventory status' }
                 default {
-                    # CA_Candidate = NO / empty. Nuance: extractSudoRoot marks NO for
+                    # CA_Candidate = NO / unknown. Nuance: extractSudoRoot marks NO for
                     # privileged accounts WITHOUT a password too. Such accounts must
                     # still be flagged here if they are privileged and not onboarded.
                     if ($isPriv) {
                         $rec.OnboardingAssessment = 'ALERT - privileged account not onboarded (not a CA candidate, e.g. no password)'
                     }
-                    elseif ($HasCandidate) {
+                    elseif ($annex) {
                         $rec.OnboardingAssessment = 'Normal - not a candidate (no privilege / offline)'
                     }
                     else {
-                        $rec.OnboardingAssessment = 'Not assessed (no CA_Candidate column)'
+                        $rec.OnboardingAssessment = 'Not assessed (account not found in annex)'
                     }
                 }
             }
@@ -938,7 +984,7 @@ Write-Host "Onboarded accounts            : $onb"
 Write-Host "Not onboarded                 : $($final.Count - $onb)"
 Write-Host "  -> ANOMALIES (candidate not onboarded)         : $anomalies" -ForegroundColor Red
 Write-Host "  -> ALERTS (privileged, no password, not onbd.) : $alerts" -ForegroundColor Red
-if ($HasCandidate) {
+if ($HasAnnex) {
     Write-Host "  -> Normal (not a candidate)                    : $normalMissing" -ForegroundColor Gray
 }
 Write-Host "Unique safes queried          : $($safeMembersCache.Count)"

@@ -12,9 +12,18 @@ d'un CSV listant des couples **compte / serveur**, vérifie pour chacun :
 5. **Manager** : on lit ce groupe dans l'Active Directory et on récupère son
    manager via l'attribut `ManagedBy`.
 
-Par défaut, le script **n'ajoute aucune ligne** : il **enrichit le fichier d'entrée
-avec des colonnes** d'analyse (mêmes lignes, correspondance 1:1). Mettez un
-`$OutputPath` seulement si vous préférez un fichier séparé.
+## Fichiers : entrée principale, annexe, sortie
+
+- **Fichier principal (`$CsvPath`)** — la liste des comptes à vérifier (`host` / `username`).
+  C'est **toujours ce fichier** qui est exécuté ; il n'est **jamais modifié**.
+- **Annexe (`$CandidateFile`)** — la sortie de `extractSudoRootV0.7.ps1`, utilisée
+  **uniquement en référence (lookup)** pour connaître, par compte, sa **candidature
+  CyberArk** (`CA_Candidate`) et ses **privilèges** (`Sudo`, `RootEquivalent`, `PrivGroup`).
+  Elle n'est jamais écrite. Laisser vide pour tourner sans.
+- **Sortie (`$OutputPath`)** — un **nouveau fichier à chaque exécution** (horodaté par
+  défaut) : ce sont les lignes du fichier principal **enrichies** des colonnes d'analyse.
+
+Chaque ligne de sortie correspond à une ligne du fichier principal (1:1, aucune ligne ajoutée).
 
 ## Pré-requis
 
@@ -54,15 +63,17 @@ Remplacez `Input\accounts.csv` par votre fichier réel (ou changez `$CsvPath`).
 | dev       | anthill    | adminunx   | /home/adminunx   | /bin/bash | ... |
 | dev       | awx01dev   | root       | /root            | /bin/bash | ... |
 
-### Enchaînement avec `extractSudoRootV0.7.ps1` (CA_Candidate)
+### Annexe `extractSudoRootV0.7.ps1` (CA_Candidate) — en référence
 
 Le script `extractSudoRootV0.7.ps1` (branche `claude/review-code-improvements-eZpQ5`)
 produit un audit mensuel `Audit_Privileges_Unix_AAAA-MM.csv` (séparateur `;`) qui
 contient, pour chaque couple `UserSam`/`Server`, une colonne **`CA_Candidate`**
-(`YES` / `YES-SSH` / `NO` / `CHECK-INVENTORY`).
+(`YES` / `YES-SSH` / `NO` / `CHECK-INVENTORY`) et les colonnes de privilège.
 
-Vous pouvez passer **directement ce fichier** en entrée de `Verify-CyberArkAccounts.ps1`.
-Le script lit alors `CA_Candidate` et **qualifie** chaque compte non embarqué :
+Ce fichier est utilisé **comme annexe** (`$CandidateFile`), **pas** comme fichier
+principal : le script y **cherche** chaque compte du fichier principal (par
+`user|serveur`) pour récupérer sa candidature et ses privilèges, puis **qualifie**
+chaque compte non embarqué :
 
 - `CA_Candidate = YES`/`YES-SSH` mais non embarqué → **ANOMALIE** (devrait être dans CyberArk).
 - `CA_Candidate = NO` et non embarqué → **Normal** (pas de privilège / serveur hors ligne).
@@ -85,9 +96,10 @@ Résumé du verdict `OnboardingAssessment` pour un compte **non embarqué** :
 | `CA_Candidate` = NO **et** non privilégié | `Normal - not a candidate` |
 | `CA_Candidate` = CHECK-INVENTORY | `TO CHECK - unknown inventory status` |
 
-Pour ce pipeline, mettez simplement dans la section CONFIGURATION :
-`$CsvPath = "$PSScriptRoot\Input\Audit_Privileges_Unix_2026-06.csv"`
-(la sortie de `extractSudoRootV0.7.ps1`), puis lancez le script.
+Pour ce pipeline, laissez `$CsvPath` sur votre liste de comptes à vérifier et
+pointez l'**annexe** sur la sortie de `extractSudoRoot` :
+`$CandidateFile = "$PSScriptRoot\Input\Audit_Privileges_Unix_*.csv"` (prend la plus
+récente), puis lancez le script.
 
 ## Utilisation
 
@@ -104,12 +116,13 @@ $AuthType = 'LDAP'                               # CyberArk | LDAP | RADIUS
 $PvwaUsername = ''                               # vide = saisie à l'exécution
 $PvwaPassword = ''                               # vide = saisie sécurisée (recommandé)
 
-$CsvPath    = "$PSScriptRoot\Input\Audit_Privileges_Unix_*.csv"   # fichier, dossier, ou motif (prend le plus récent)
-$OutputPath = ''                                 # vide = ajoute les colonnes au fichier d'entrée (pas de nouveau fichier)
+$CsvPath       = "$PSScriptRoot\Input\accounts.csv"    # fichier principal (host/username), jamais modifié
+$OutputPath    = "$PSScriptRoot\Output\Verification_$(Get-Date -Format 'yyyy-MM-dd_HHmmss').csv"  # nouveau fichier à chaque run
+$CandidateFile = "$PSScriptRoot\Input\Audit_Privileges_Unix_*.csv"   # ANNEXE extractSudoRoot (référence) ; vide = sans
 
 $UsernameColumn  = 'Auto'          # 'Auto' = détection automatique
 $HostColumn      = 'Auto'
-$CandidateColumn = 'CA_Candidate'
+$CandidateColumn = 'CA_Candidate'  # colonne de candidature DANS l'annexe
 $CsvDelimiter    = 'Auto'          # 'Auto' détecte , ou ;
 
 $AddressMatch = 'Hostname'         # Hostname | Exact | Contains
@@ -129,8 +142,9 @@ $SkipCertificateCheck = $false
 | `$PvwaUrl`             | URL du PVWA.                                                          |
 | `$AuthType`            | `CyberArk` / `LDAP` / `RADIUS`.                                      |
 | `$PvwaUsername` / `$PvwaPassword` | Identifiants (laisser le mot de passe vide = saisie sécurisée). |
-| `$CsvPath`             | CSV source (sortie de `extractSudoRootV0.7.ps1`). Accepte un **fichier**, un **dossier** (prend le `*.csv` le plus récent) ou un **motif** `...\Audit_Privileges_Unix_*.csv` (plus récent). |
-| `$OutputPath`          | **Vide = ajoute les colonnes au fichier d'entrée** (mêmes lignes, 1:1, pas de nouveau fichier). Mettre un chemin uniquement pour un fichier séparé. |
+| `$CsvPath`             | **Fichier principal** (comptes à vérifier, host/username). Jamais modifié. Accepte fichier / dossier / motif (plus récent). |
+| `$OutputPath`          | **Fichier résultat, différent à chaque run** (horodaté par défaut) : lignes du principal + colonnes d'analyse. |
+| `$CandidateFile`       | **Annexe** = sortie de `extractSudoRootV0.7.ps1` (référence lookup : `CA_Candidate` + privilèges). Vide = sans. Fichier / dossier / motif (plus récent). |
 | `$AccountsExtractPath` | Fichier où l'extrait de tous les comptes CyberArk est sauvegardé.   |
 | `$AddressMatch`        | `Hostname` (défaut), `Exact`, `Contains`.                            |
 | `$AdServer`            | DC AD à cibler (optionnel, réduit la latence). Vide = automatique.   |
@@ -141,7 +155,7 @@ $SkipCertificateCheck = $false
 | `$DefaultSafeGroups`   | Groupes par défaut à exclure (noms exacts).                          |
 | `$DefaultSafeGroupPatterns` | Motifs (wildcards) de groupes par défaut org (`*_PAM_Auth_*`, `PAM_CyberArk_*`...). |
 | `$UsernameColumn` / `$HostColumn` | Colonnes (`'Auto'` = détection).                         |
-| `$CandidateColumn`     | Colonne de candidature CyberArk (`CA_Candidate`).                    |
+| `$CandidateColumn`     | Nom de la colonne de candidature **dans l'annexe** (`CA_Candidate`). |
 | `$PrivilegeColumns`    | Colonnes de privilège (`Sudo`, `RootEquivalent`, `PrivGroup`) : ALERTE si privilégié + `CA_Candidate=NO` + non embarqué. |
 | `$CsvDelimiter`        | `'Auto'` (détecte `,`/`;`), sinon `','` ou `';'`.                    |
 | `$SkipADLookup`        | `$true` = désactive la partie Active Directory.                     |
