@@ -92,11 +92,13 @@ are tried in order (each attempt is logged, so a denial is diagnosable):
    Vault-backed levels.
 1. **Access-lot domain account** (`PushAccounts` map): admin rights come in
    LOTS (PRD France, DRP France, Benelux/NL...) — declare one Vault-managed
-   domain account per lot and point each server at its lot with
-   `Push = '<key>'` in the inventory (`Default` entry = fallback for servers
-   that declare none; no lot at all = level skipped). Each lot's account is
-   fetched from the Vault **once per run, lazily** (only lots actually used).
-   SMB logon is `LogonName` (e.g. `FRANCE\svc-push-drp`) or `<UserName>@<Address>`.
+   domain account per lot. **The lot is picked from the server's NAME**: each
+   lot can carry a `Match` wildcard (`FRPRD*` → PRDFR, `FRDRP*` → DRPFR,
+   `NLHOU*` → NL — the naming convention carries the datacenter), with
+   `Push = '<key>'` on a server as explicit override and a `Default` entry as
+   last resort (no lot at all = level skipped). Each lot's account is fetched
+   from the Vault **once per run, lazily** (only lots actually used). SMB
+   logon is `LogonName` (e.g. `FRANCE\svc-push-drp`) or `<UserName>@<Address>`.
 2. **Machine local account** (`LocalAdminUserName`): that machine's own local
    account from the Vault (exact `address` match, short name or FQDN, spread
    across Safes — no Safe to declare). Accepts a **wildcard pattern**

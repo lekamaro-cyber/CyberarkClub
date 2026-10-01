@@ -196,6 +196,22 @@ function Resolve-PushCredential {
     $pushCredCache[$ScopeKey] = $cred
     return $cred
 }
+function Resolve-PushScope {
+    # Which PushAccounts lot covers this server:
+    #   1. explicit Servers.Push (always wins);
+    #   2. first lot (alphabetical) whose 'Match' WILDCARD fits the server
+    #      NAME - the naming convention carries the datacenter (FRPRDSRV* =
+    #      PRD France, FRDRPSRV* = DRP France, NLHOUSRV* = Benelux...);
+    #   3. 'Default' entry;  4. $null = level skipped.
+    param([Parameter(Mandatory)] $Server)
+    if ($Server['Push']) { return $Server['Push'] }
+    foreach ($k in @($pushAccounts.Keys | Where-Object { $_ -ne 'Default' } | Sort-Object)) {
+        $m = $pushAccounts[$k]['Match']
+        if ($m -and $Server.Name -like $m) { return $k }
+    }
+    if ($pushAccounts.ContainsKey('Default')) { return 'Default' }
+    return $null
+}
 
 # --- Push: per-server credential CASCADE -------------------------------------
 #   0) CURRENT session (integrated, free)  1) domain push account (Vault)
@@ -209,8 +225,9 @@ try {
         # D:\PSMSources\PSM-Deploy -> \\<server>\D$\PSMSources\PSM-Deploy
         $unc = '\\{0}\{1}' -f $srv.Name, ($Config.TargetPath -replace '^([A-Za-z]):\\', '$1$\')
         if ($WhatIfPreference) {
+            $lot = Resolve-PushScope -Server $srv
             $who = if ($tryCurrent) { "the current session ($env:USERDOMAIN\$env:USERNAME), then the credential cascade" }
-                   elseif ($srv['Push']) { "the '$($srv['Push'])' lot account" }
+                   elseif ($lot) { "the '$lot' lot account" }
                    elseif ($localAdmin) { "$($srv.Name)\$localAdmin" }
                    else { 'a manually prompted account' }
             Write-PSMLog -Level INFO -Message "WhatIf: '$staging' would be mirrored to '$unc' as $who (state\ and logs\ preserved)."
@@ -232,10 +249,10 @@ try {
                             "($($_.Exception.Message)) - trying the Vault-backed credentials...")
                     }
                 }
-                # 1) The server's ACCESS-LOT domain account (Servers.Push ->
-                #    PushAccounts, 'Default' fallback), fetched lazily from the Vault.
-                $scopeKey = $srv['Push']
-                if (-not $scopeKey -and $pushAccounts.ContainsKey('Default')) { $scopeKey = 'Default' }
+                # 1) The server's ACCESS-LOT domain account, fetched lazily from
+                #    the Vault. Lot picked by explicit Servers.Push, else by the
+                #    lots' 'Match' pattern on the server NAME, else 'Default'.
+                $scopeKey = Resolve-PushScope -Server $srv
                 if ($null -eq $code -and $scopeKey) {
                     try {
                         $domainCred = Resolve-PushCredential -ScopeKey $scopeKey

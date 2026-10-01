@@ -59,15 +59,19 @@
     # DOMAIN push accounts, one per ACCESS LOT - admin rights are granted per
     # scope (PRD France, DRP France, Benelux/NL...), a single account cannot
     # cover the fleet. Vault-managed DOMAIN accounts, fetched once per run and
-    # per scope actually used by the selected servers. Each server points at
-    # its lot via its 'Push' key below; a 'Default' entry, if present, serves
-    # the servers that declare none (otherwise this cascade level is skipped
-    # for them - level 0, the operator's own session, often suffices on their
-    # own datacenter).
+    # per scope actually used by the selected servers.
+    # WHICH LOT COVERS A SERVER - resolution order:
+    #   1. an explicit Push = '<key>' on the Servers entry (always wins);
+    #   2. the first lot (alphabetical) whose 'Match' WILDCARD fits the SERVER
+    #      NAME - the naming convention carries the datacenter: FRPRDSRV* =
+    #      PRD France, FRDRPSRV* = DRP France, NLHOUSRV* = Benelux...;
+    #   3. a 'Default' entry, if present;
+    #   4. none -> this cascade level is skipped (level 0, the operator's own
+    #      session, often suffices on their own datacenter).
     PushAccounts = @{
-        # PRDFR = @{ UserName = 'svc-push-prd'; Address = 'france.intra.corp';  Safe = ''; LogonName = 'FRANCE\svc-push-prd' }
-        # DRPFR = @{ UserName = 'svc-push-drp'; Address = 'france.intra.corp';  Safe = ''; LogonName = 'FRANCE\svc-push-drp' }
-        # NL    = @{ UserName = 'svc-push-nl';  Address = 'benelux.intra.corp'; Safe = ''; LogonName = 'BENELUX\svc-push-nl' }
+        # PRDFR = @{ Match = 'FRPRD*'; UserName = 'svc-push-prd'; Address = 'france.intra.corp';  Safe = ''; LogonName = 'FRANCE\svc-push-prd' }
+        # DRPFR = @{ Match = 'FRDRP*'; UserName = 'svc-push-drp'; Address = 'france.intra.corp';  Safe = ''; LogonName = 'FRANCE\svc-push-drp' }
+        # NL    = @{ Match = 'NLHOU*'; UserName = 'svc-push-nl';  Address = 'benelux.intra.corp'; Safe = ''; LogonName = 'BENELUX\svc-push-nl' }
         # LogonName empty -> '<UserName>@<Address>' (UPN) is used for the SMB logon.
     }
 
@@ -84,15 +88,15 @@
     # one machine = ambiguity error -> manual prompt (last resort).
     LocalAdminUserName = '*adm*'   # matches the fleet's renamed local admins (e.g. adminval); empty = skip this level
 
-    # Target inventory: machine name + server type (= overlay folder) +
-    # optional Push = key of the PushAccounts lot that covers the machine
-    # (FRDRP* machines are in the OTHER datacenter: level 0 fails there from
-    # a PRD-side session - give them a lot, or answer the manual prompt).
+    # Target inventory: machine name + server type (= overlay folder).
+    # No Push key needed when the PushAccounts lots carry a 'Match' pattern:
+    # the lot is picked from the machine's NAME (FRDRP* -> DRPFR, etc.);
+    # Push = '<key>' stays available as a per-server override.
     Servers = @(
         @{ Name = 'FRPRDSRV10013'; Type = 'PREPRD' }
-        @{ Name = 'FRDRPSRV10017'; Type = 'PREPRD' }   # + Push = 'DRPFR' once the lot is declared above
-        @{ Name = 'FRDRPSRV10018'; Type = 'PREPRD' }   # + Push = 'DRPFR' once the lot is declared above
+        @{ Name = 'FRDRPSRV10017'; Type = 'PREPRD' }
+        @{ Name = 'FRDRPSRV10018'; Type = 'PREPRD' }
         @{ Name = 'FRPRDSRV10012'; Type = 'PREPRD' }
-        # @{ Name = '<PRD-PSM-1>'; Type = 'PRD'; Push = 'PRDFR' }
+        # @{ Name = '<PRD-PSM-1>'; Type = 'PRD' }
     )
 }
