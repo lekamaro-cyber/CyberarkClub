@@ -136,9 +136,11 @@ consistent with the PSM-Deploy doctrine.
   deployment progress and history are local).
 - The SMB session is authenticated with `New-PSDrive` + the cascade's
   credential (no plaintext password on any command line).
-- `PushExcludeFiles` (default `autorun.inf`) lists files never pushed:
-  AV/EDR and read-only attributes routinely deny overwriting `autorun.inf`
-  over SMB (robocopy ERROR 5), and the install never reads it.
+- The push is a **pure mirror** — no file exclusions. If the EDR/CSIRT
+  blocks a file on the targets (seen with the media's `autorun.inf`,
+  CD-autorun cruft the install never reads: robocopy ERROR 5), **remove it
+  from the base tree on the CPM** — `/MIR` then deletes it from every
+  target too. Re-remove it after dropping a new CyberArk media.
 - A machine-LOCAL account refused on an admin share **with the right
   password**: for an ordinary local admin it is remote UAC token filtering
   (`LocalAccountTokenFilterPolicy=1` fixes it); for a RENAMED built-in

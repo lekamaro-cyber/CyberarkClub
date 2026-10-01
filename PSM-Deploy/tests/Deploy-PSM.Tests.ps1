@@ -564,7 +564,7 @@ Describe 'PSM-Distribute (source distribution from the CPM)' {
     It 'The repository distribution.psd1 carries every key the drift check expects' {
         $c = Import-PowerShellDataFile (Join-Path $distRoot 'config\distribution.psd1')
         foreach ($k in 'SourceRoot', 'OverlayRoot', 'StagingRoot', 'TargetPath', 'ServerTypes', 'Servers',
-                       'Pvwa', 'PushAccounts', 'LocalAdminUserName', 'TryCurrentSession', 'PushExcludeFiles') {
+                       'Pvwa', 'PushAccounts', 'LocalAdminUserName', 'TryCurrentSession') {
             $c.Keys | Should -Contain $k
         }
     }
@@ -616,8 +616,6 @@ Describe 'PSM-Distribute (source distribution from the CPM)' {
             if ($s['Push']) { $c.PushAccounts.Keys | Should -Contain $s['Push'] }
         }
         $c.TryCurrentSession | Should -BeOfType [bool]
-        $c.PushExcludeFiles  | Should -Contain 'autorun.inf'   # EDR/read-only trap (robocopy ERROR 5)
-        (Get-Command Push-PSMSourcesToServer).Parameters.Keys | Should -Contain 'ExcludeFiles'
     }
     It 'Get-PvwaAccountPassword accepts an -Address (exact machine match, cross-Safe)' {
         Import-Module (Join-Path $root 'modules\PSM.Pvwa.psm1') -Force

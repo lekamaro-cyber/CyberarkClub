@@ -71,11 +71,9 @@ Initialize-PSMLogging -LogDirectory (Join-Path $PSScriptRoot 'logs')
 
 # --- Config drift check (same philosophy as PSM-Deploy's Test-PSMSettingsDrift)
 # The config is copied/hand-merged by the team: a key missing compared to THIS
-# version of the tool = a feature silently inactive (e.g. PushExcludeFiles
-# absent -> autorun.inf pushed again and blocked by the EDR/CSIRT). WARN only,
-# never blocks.
+# version of the tool = a feature silently inactive. WARN only, never blocks.
 $expectedKeys = @('SourceRoot', 'OverlayRoot', 'StagingRoot', 'TargetPath', 'ServerTypes', 'Servers',
-                  'Pvwa', 'PushAccounts', 'LocalAdminUserName', 'TryCurrentSession', 'PushExcludeFiles')
+                  'Pvwa', 'PushAccounts', 'LocalAdminUserName', 'TryCurrentSession')
 $missingKeys = @($expectedKeys | Where-Object { $Config.Keys -notcontains $_ })
 if ($missingKeys) {
     Write-PSMLog -Level WARN -Message ("distribution.psd1 is MISSING the key(s): $($missingKeys -join ', ') - " +
@@ -203,8 +201,7 @@ function Resolve-PushCredential {
 #   0) CURRENT session (integrated, free)  1) domain push account (Vault)
 #   2) machine local account (Vault)       3) manual prompt
 # One server's failure does not stop the others.
-$tryCurrent   = if ($Config.Keys -contains 'TryCurrentSession') { [bool]$Config['TryCurrentSession'] } else { $true }
-$excludeFiles = @($Config['PushExcludeFiles'] | Where-Object { $_ })   # e.g. autorun.inf (see distribution.psd1)
+$tryCurrent = if ($Config.Keys -contains 'TryCurrentSession') { [bool]$Config['TryCurrentSession'] } else { $true }
 $results = @()
 try {
     foreach ($srv in $targets) {
@@ -227,7 +224,7 @@ try {
                 if ($tryCurrent) {
                     try {
                         $code = Push-PSMSourcesToServer -ServerName $srv.Name -StagingPath $staging `
-                                    -TargetUnc $unc -ExcludeFiles $excludeFiles
+                                    -TargetUnc $unc
                         Write-PSMLog -Level INFO -Message "$($srv.Name): pushed with the CURRENT session ($env:USERDOMAIN\$env:USERNAME)."
                     }
                     catch {
@@ -243,7 +240,7 @@ try {
                     try {
                         $domainCred = Resolve-PushCredential -ScopeKey $scopeKey
                         $code = Push-PSMSourcesToServer -ServerName $srv.Name -StagingPath $staging `
-                                    -TargetUnc $unc -Credential $domainCred -ExcludeFiles $excludeFiles
+                                    -TargetUnc $unc -Credential $domainCred
                     }
                     catch {
                         Write-PSMLog -Level WARN -Message ("$($srv.Name): push with the '$scopeKey' lot account failed " +
@@ -261,7 +258,7 @@ try {
                         $smbCred = [System.Management.Automation.PSCredential]::new(
                                        "$($srv.Name)\$($acct.UserName)", $acct.Credential.Password)
                         $code = Push-PSMSourcesToServer -ServerName $srv.Name -StagingPath $staging `
-                                    -TargetUnc $unc -Credential $smbCred -ExcludeFiles $excludeFiles
+                                    -TargetUnc $unc -Credential $smbCred
                     }
                     catch {
                         Write-PSMLog -Level WARN -Message ("$($srv.Name): local-account push failed " +

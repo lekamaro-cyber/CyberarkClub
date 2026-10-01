@@ -93,8 +93,7 @@ function Push-PSMSourcesToServer {
         [Parameter(Mandatory)] [string] $ServerName,
         [Parameter(Mandatory)] [string] $StagingPath,
         [Parameter(Mandatory)] [string] $TargetUnc,       # \\server\D$\PSMSources\PSM-Deploy
-        [pscredential] $Credential,
-        [string[]] $ExcludeFiles = @()   # never pushed (robocopy /XF), e.g. autorun.inf
+        [pscredential] $Credential
     )
     if (-not (Test-Path $StagingPath)) {
         throw "Push-PSMSourcesToServer: staging tree not found: $StagingPath (compose it first - run without -SkipStaging)."
@@ -150,8 +149,6 @@ function Push-PSMSourcesToServer {
         }
         $opts = @('/MIR', '/XD', 'state', 'logs',
                   '/R:2', '/W:5', '/MT:16', '/NP', '/NFL', '/NDL', '/NJH', '/NJS')
-        $ExcludeFiles = @($ExcludeFiles | Where-Object { $_ })
-        if ($ExcludeFiles) { $opts += @('/XF') + $ExcludeFiles }
         return Invoke-PSMRobocopy -Source $StagingPath -Destination $TargetUnc -Options $opts
     }
     finally {

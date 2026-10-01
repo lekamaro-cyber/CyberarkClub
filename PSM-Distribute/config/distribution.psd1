@@ -27,12 +27,11 @@
     # ALWAYS preserved (a server's deployment progress is local).
     TargetPath  = 'D:\PSMSources\PSM-Deploy'
 
-    # Files NEVER pushed to the targets (robocopy /XF). 'autorun.inf' is
-    # CD-autorun cruft shipped in the CyberArk media: AV/EDR and read-only/
-    # hidden/system attributes routinely DENY overwriting it over SMB
-    # (observed: robocopy ERROR 5 on media\PSM\autorun.inf killing the whole
-    # push), and the installation never reads it.
-    PushExcludeFiles = @('autorun.inf')
+    # NOTE: the push is a PURE MIRROR (no file exclusions). If a file is
+    # blocked on the targets by the EDR/CSIRT (seen with the media's
+    # 'autorun.inf', CD-autorun cruft the install never reads), remove it
+    # from the BASE tree on the CPM: /MIR then deletes it from every target
+    # too. Re-remove it after dropping a new CyberArk media.
 
     # Server types = folder names under overlays\ :
     #   PRD    - pure production, main datacenter
