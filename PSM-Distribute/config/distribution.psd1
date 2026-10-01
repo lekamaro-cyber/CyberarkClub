@@ -42,14 +42,12 @@
 
     # CyberArk/PVWA connection (same flow as the PSM registration): the
     # operator authenticates to the PVWA at launch (prompt with validation and
-    # retry); the LOCAL admin password of EACH target machine is then
-    # retrieved from the Vault at push time - no per-datacenter accounts, no
-    # manual machine credentials. PRE values prefilled: adjust on another
-    # infra's CPM.
+    # retry); the push credentials are then retrieved from the Vault at run
+    # time - nothing stored on disk. REAL CPM values prefilled.
     Pvwa = @{
-        Url                  = 'https://oneconnection.pre.intra.corp'
+        Url                  = 'https://oneconnection.intra.corp'
         AuthMethod           = 'CyberArk'      # CyberArk | LDAP | Windows | RADIUS
-        SkipCertificateCheck = $true           # lab only (self-signed certificate)
+        SkipCertificateCheck = $true           # self-signed certificate tolerated
     }
 
     # Try the operator's CURRENT session first (integrated SMB auth, free):
@@ -84,14 +82,17 @@
     # address-only retry catches mid-name matches the keyword would hide; the
     # SMB logon uses the REAL name of the matched account. Several matches on
     # one machine = ambiguity error -> manual prompt (last resort).
-    LocalAdminUserName = ''        # e.g. 'AdminVal' or '*adm*'; empty = skip this level
+    LocalAdminUserName = '*adm*'   # matches the fleet's renamed local admins (e.g. adminval); empty = skip this level
 
     # Target inventory: machine name + server type (= overlay folder) +
-    # optional Push = key of the PushAccounts lot that covers the machine.
+    # optional Push = key of the PushAccounts lot that covers the machine
+    # (FRDRP* machines are in the OTHER datacenter: level 0 fails there from
+    # a PRD-side session - give them a lot, or answer the manual prompt).
     Servers = @(
-        @{ Name = 'FRPRDSRV10013'; Type = 'PREPRD' }                    # operator's own DC: level 0 usually suffices
-        # @{ Name = 'FRDRPSRV10017'; Type = 'PREPRD'; Push = 'DRPFR' }  # other DC: pushed with that lot's account
-        # @{ Name = '<PRD-PSM-1>';   Type = 'PRD';    Push = 'PRDFR' }
-        # @{ Name = '<NL-PSM-1>';    Type = 'PRDNPR'; Push = 'NL'    }
+        @{ Name = 'FRPRDSRV10013'; Type = 'PREPRD' }
+        @{ Name = 'FRDRPSRV10017'; Type = 'PREPRD' }   # + Push = 'DRPFR' once the lot is declared above
+        @{ Name = 'FRDRPSRV10018'; Type = 'PREPRD' }   # + Push = 'DRPFR' once the lot is declared above
+        @{ Name = 'FRPRDSRV10012'; Type = 'PREPRD' }
+        # @{ Name = '<PRD-PSM-1>'; Type = 'PRD'; Push = 'PRDFR' }
     )
 }
