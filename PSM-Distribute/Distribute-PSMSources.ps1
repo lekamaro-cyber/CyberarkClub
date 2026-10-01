@@ -69,6 +69,19 @@ Import-Module (Join-Path $Config.SourceRoot 'modules\PSM.Pvwa.psm1') -Force   # 
 Import-Module (Join-Path $PSScriptRoot 'modules\PSM.Distribute.psm1') -Force
 Initialize-PSMLogging -LogDirectory (Join-Path $PSScriptRoot 'logs')
 
+# --- Config drift check (same philosophy as PSM-Deploy's Test-PSMSettingsDrift)
+# The config is copied/hand-merged by the team: a key missing compared to THIS
+# version of the tool = a feature silently inactive (e.g. PushExcludeFiles
+# absent -> autorun.inf pushed again and blocked by the EDR/CSIRT). WARN only,
+# never blocks.
+$expectedKeys = @('SourceRoot', 'OverlayRoot', 'StagingRoot', 'TargetPath', 'ServerTypes', 'Servers',
+                  'Pvwa', 'PushAccounts', 'LocalAdminUserName', 'TryCurrentSession', 'PushExcludeFiles')
+$missingKeys = @($expectedKeys | Where-Object { $Config.Keys -notcontains $_ })
+if ($missingKeys) {
+    Write-PSMLog -Level WARN -Message ("distribution.psd1 is MISSING the key(s): $($missingKeys -join ', ') - " +
+        'the matching features are silently inactive. Merge the latest config\distribution.psd1 from the repository.')
+}
+
 # --- Inventory validation + target selection --------------------------------
 $targets = @($Config.Servers)
 foreach ($s in $targets) {

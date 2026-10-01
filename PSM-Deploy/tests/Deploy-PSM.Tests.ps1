@@ -561,6 +561,13 @@ Describe 'PSM-Distribute (source distribution from the CPM)' {
         Test-Path (Join-Path $distRoot 'config\distribution.psd1')          | Should -BeTrue
         Test-Path (Join-Path $distRoot 'modules\PSM.Distribute.psm1')       | Should -BeTrue
     }
+    It 'The repository distribution.psd1 carries every key the drift check expects' {
+        $c = Import-PowerShellDataFile (Join-Path $distRoot 'config\distribution.psd1')
+        foreach ($k in 'SourceRoot', 'OverlayRoot', 'StagingRoot', 'TargetPath', 'ServerTypes', 'Servers',
+                       'Pvwa', 'PushAccounts', 'LocalAdminUserName', 'TryCurrentSession', 'PushExcludeFiles') {
+            $c.Keys | Should -Contain $k
+        }
+    }
     It 'distribution.psd1 parses and every server entry is complete' {
         $c = Import-PowerShellDataFile (Join-Path $distRoot 'config\distribution.psd1')
         $c.ServerTypes | Should -Not -BeNullOrEmpty
