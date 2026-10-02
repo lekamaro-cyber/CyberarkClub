@@ -314,14 +314,31 @@ function Rename-PSMComponentAccounts {
     if (-not $PSCmdlet.ShouldProcess("$($targets[0].OldName) -> $appNew ; $($targets[1].OldName) -> $gwNew",
                                      'Rename the PSM component accounts')) { return $false }
 
-    # Service stopped during the operation (it authenticates with the cred files).
-    $svc = Get-Service -Name 'Cyberark Privileged Session Manager' -ErrorAction SilentlyContinue
-    $wasRunning = $svc -and $svc.Status -eq 'Running'
-    if ($wasRunning) {
-        Write-PSMLog -Level INFO -Message 'Stopping the PSM service for the component account rename...'
-        Stop-Service -Name 'Cyberark Privileged Session Manager' -Force
+    # Service stopped during the operation, WHATEVER its state: RegisterComponent
+    # starts it at the end of the registration, so it is often still
+    # 'StartPending' here. A component logged on to the Vault keeps the rename
+    # from being applied (observed: PUT accepted, user NOT renamed, cred files
+    # rewritten -> ITATS004E at the next start). Wait for a pending transition
+    # to settle, stop, then give the Vault time to close the component sessions.
+    $svcName = 'Cyberark Privileged Session Manager'
+    $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+    $wasRunning   = $false
+    $restartError = $null
+    if ($svc) {
+        $deadline = (Get-Date).AddSeconds(180)
+        while ($svc.Status -in 'StartPending', 'StopPending', 'ContinuePending', 'PausePending' -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 5
+            $svc.Refresh()
+        }
+        if ($svc.Status -ne 'Stopped') {
+            $wasRunning = $true
+            Write-PSMLog -Level INFO -Message "Stopping the PSM service (state: $($svc.Status)) for the component account rename..."
+            Stop-Service -Name $svcName -Force
+            Start-Sleep -Seconds 15
+        }
     }
 
+    try {
     foreach ($t in $targets) {
         if ($t.OldName -cne $t.NewName) {
             # 0) The target name may ALREADY exist on the Vault side (leftover from
@@ -334,7 +351,22 @@ function Rename-PSMComponentAccounts {
             if (-not $handled) {
                 # 1) Vault side (PVWA API).
                 Rename-PvwaUser -Session $Session -UserName $t.OldName -NewUserName $t.NewName | Out-Null
-                Write-PSMLog -Level INFO -Message "Vault: user '$($t.OldName)' renamed to '$($t.NewName)'."
+                # VERIFY before touching the cred file: the PVWA may accept the
+                # PUT without applying it. Cred file rewritten only when the
+                # Vault really carries the new name - otherwise nothing local
+                # changes and the service keeps working under the old name.
+                $renamed = $false
+                for ($i = 1; $i -le 3 -and -not $renamed; $i++) {
+                    $renamed = [bool]@(Find-PvwaUser -Session $Session -Search $t.NewName |
+                                       Where-Object { $_.username -eq $t.NewName }).Count
+                    if (-not $renamed) { Start-Sleep -Seconds 5 }
+                }
+                if (-not $renamed) {
+                    throw ("Vault rename of '$($t.OldName)' to '$($t.NewName)' was accepted by the PVWA but NOT applied " +
+                           "(user still '$($t.OldName)'). Cred file left untouched. Rename the user in PVWA/PrivateArk " +
+                           'with the PSM service stopped, then relaunch.')
+                }
+                Write-PSMLog -Level INFO -Message "Vault: user '$($t.OldName)' renamed to '$($t.NewName)' (verified)."
                 # 2) Cred file: Username= line (password unchanged), .orig backup.
                 $backup = "$($t.CredPath).orig"
                 if (-not (Test-Path $backup)) { Copy-Item -Path $t.CredPath -Destination $backup -Force }
@@ -366,36 +398,24 @@ function Rename-PSMComponentAccounts {
             "(Registration.RenameServerIds=false): they stay aligned with the PSM server object in PVWA Options.")
     }
 
-    if ($wasRunning) {
-        # The PSM service's FIRST start after a registration is slow (Vault
-        # logon with the new cred files, AppLocker rebuild): Start-Service's
-        # ~30s SCM wait expires while the service is still legitimately
-        # starting, which used to fail the deployment here although the start
-        # completed in the background moments later. Initiate the start, then
-        # poll; still pending after the timeout = WARN (the SCM keeps going),
-        # only a reversion to 'Stopped' is a real failure.
-        Write-PSMLog -Level INFO -Message 'Restarting the PSM service (first start after a registration can take a few minutes)...'
-        try { Start-Service -Name 'Cyberark Privileged Session Manager' -ErrorAction Stop }
-        catch {
-            Write-PSMLog -Level WARN -Message "Start-Service did not confirm within the SCM wait ($($_.Exception.Message)) - polling the service state..."
-        }
-        $deadline = (Get-Date).AddSeconds(180)
-        do {
-            $state = (Get-Service -Name 'Cyberark Privileged Session Manager').Status
-            if ($state -eq 'Running') { break }
-            Start-Sleep -Seconds 5
-        } while ((Get-Date) -lt $deadline)
-        if ($state -eq 'Running') {
-            Write-PSMLog -Level INFO -Message 'PSM service restarted.'
-        }
-        elseif ($state -eq 'StartPending') {
-            Write-PSMLog -Level WARN -Message ('PSM service still starting after 180s - continuing (the SCM finishes the start in the ' +
-                'background; check PSMConsole.log if it never reaches Running).')
-        }
-        else {
-            throw "PSM service failed to start after the component rename (state: $state). Check PSMConsole.log."
+    }
+    finally {
+        # Each target is always left consistent (Vault + cred file both renamed,
+        # or both untouched), so the service can be restarted even on failure.
+        if ($wasRunning) {
+            try {
+                Start-Service -Name $svcName -ErrorAction Stop
+                Write-PSMLog -Level INFO -Message 'PSM service restarted.'
+            }
+            catch {
+                # Logged here so it never masks an exception already propagating;
+                # re-raised below on the success path (fail-fast as before).
+                $restartError = $_.Exception.Message
+                Write-PSMLog -Level ERROR -Message "PSM service failed to restart: $restartError - check PSMConsole.log."
+            }
         }
     }
+    if ($restartError) { throw "PSM service failed to restart after the component rename: $restartError" }
     Write-PSMLog -Level OK -Message "Component accounts renamed: $appNew / $gwNew."
     return $true
 }
