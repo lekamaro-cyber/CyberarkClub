@@ -81,6 +81,15 @@
         VaultAddressXPath     = "//Step[@Name='RegisterPsm']/Parameters/Parameter[@Name='vaultip']"
         VaultAddressAttribute = 'Value'                          # attribute to write (empty = node's InnerText)
 
+        # The 'vaultuser' of RegistrationConfig.xml is ALSO injected dynamically
+        # with the name of the install account actually used (zones.psd1
+        # InstallAccountSafe/UserName when filled, otherwise the admin connected
+        # to the PVWA): the media ships vaultuser="administrator", and a
+        # username/password mismatch aborts the registration with
+        # "ITATS004E Authentication failure for User administrator".
+        VaultUserXPath        = "//Step[@Name='RegisterPsm']/Parameters/Parameter[@Name='vaultuser']"
+        VaultUserAttribute    = 'Value'
+
         # --- Component account naming convention -------------------------
         # RegisterComponent.exe generates random names (PSMApp_<hex>/PSMGw_<hex>)
         # with NO naming option for PSM. After the registration, the script renames

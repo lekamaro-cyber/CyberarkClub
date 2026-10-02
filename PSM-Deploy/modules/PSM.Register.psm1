@@ -27,21 +27,38 @@ function Invoke-PSMRegister {
         [pscredential] $InstallCredential,   # password injected via -spwdObj
         [string] $VaultAddress               # "clusterIp,drIp" (from zones.psd1)
     )
-    # Vault address driven by the zone: DYNAMIC injection into a patched copy of
-    # RegistrationConfig.xml (media intact), through the generic stage engine.
-    # The field's location in the XML is configurable (settings.psd1 Registration.*).
-    $extra = $null
+    # Vault address AND vault user driven by the deployment: DYNAMIC injection
+    # into a patched copy of RegistrationConfig.xml (media intact), through the
+    # generic stage engine. The vaultuser injection keeps the XML's username
+    # ALIGNED with the account whose password goes through -spwdObj (the media
+    # ships vaultuser="administrator": mismatch = ITATS004E Authentication
+    # failure for User administrator). Field locations are configurable
+    # (settings.psd1 Registration.*).
+    $extra = @{}
     if ($VaultAddress) {
         $xpath = $Settings.Registration.VaultAddressXPath
         $attr  = $Settings.Registration.VaultAddressAttribute
         if (-not $xpath) {
             throw "settings.psd1: Registration.VaultAddressXPath not set."
         }
-        $extra = @{ $xpath = @{ Attribute = $attr; Value = $VaultAddress } }
+        $extra[$xpath] = @{ Attribute = $attr; Value = $VaultAddress }
     }
     else {
         Write-PSMLog -Level WARN -Message "No zone Vault address (VaultAddress): using the media's RegistrationConfig.xml as-is."
     }
+    if ($InstallCredential) {
+        $userXpath = Get-PSMConfigValue -Config $Settings.Registration -Key 'VaultUserXPath'
+        if ($userXpath) {
+            $userAttr = Get-PSMConfigValue -Config $Settings.Registration -Key 'VaultUserAttribute'
+            $extra[$userXpath] = @{ Attribute = $userAttr; Value = $InstallCredential.UserName }
+            Write-PSMLog -Level INFO -Message "Registration: vaultuser injected = '$($InstallCredential.UserName)' (aligned with the retrieved password)."
+        }
+        else {
+            Write-PSMLog -Level WARN -Message ("settings.psd1: Registration.VaultUserXPath not set - the media's own 'vaultuser' value is used " +
+                "and MUST match the install account ('$($InstallCredential.UserName)'), otherwise the Vault logon fails (ITATS004E).")
+        }
+    }
+    if ($extra.Keys.Count -eq 0) { $extra = $null }
 
     $stage = Resolve-PSMStageConfig -Settings $Settings -SourcesRoot $SourcesRoot `
                 -StageKey 'Registration' -ExtraInjections $extra
