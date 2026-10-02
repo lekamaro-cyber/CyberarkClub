@@ -367,8 +367,34 @@ function Rename-PSMComponentAccounts {
     }
 
     if ($wasRunning) {
-        Start-Service -Name 'Cyberark Privileged Session Manager'
-        Write-PSMLog -Level INFO -Message 'PSM service restarted.'
+        # The PSM service's FIRST start after a registration is slow (Vault
+        # logon with the new cred files, AppLocker rebuild): Start-Service's
+        # ~30s SCM wait expires while the service is still legitimately
+        # starting, which used to fail the deployment here although the start
+        # completed in the background moments later. Initiate the start, then
+        # poll; still pending after the timeout = WARN (the SCM keeps going),
+        # only a reversion to 'Stopped' is a real failure.
+        Write-PSMLog -Level INFO -Message 'Restarting the PSM service (first start after a registration can take a few minutes)...'
+        try { Start-Service -Name 'Cyberark Privileged Session Manager' -ErrorAction Stop }
+        catch {
+            Write-PSMLog -Level WARN -Message "Start-Service did not confirm within the SCM wait ($($_.Exception.Message)) - polling the service state..."
+        }
+        $deadline = (Get-Date).AddSeconds(180)
+        do {
+            $state = (Get-Service -Name 'Cyberark Privileged Session Manager').Status
+            if ($state -eq 'Running') { break }
+            Start-Sleep -Seconds 5
+        } while ((Get-Date) -lt $deadline)
+        if ($state -eq 'Running') {
+            Write-PSMLog -Level INFO -Message 'PSM service restarted.'
+        }
+        elseif ($state -eq 'StartPending') {
+            Write-PSMLog -Level WARN -Message ('PSM service still starting after 180s - continuing (the SCM finishes the start in the ' +
+                'background; check PSMConsole.log if it never reaches Running).')
+        }
+        else {
+            throw "PSM service failed to start after the component rename (state: $state). Check PSMConsole.log."
+        }
     }
     Write-PSMLog -Level OK -Message "Component accounts renamed: $appNew / $gwNew."
     return $true
