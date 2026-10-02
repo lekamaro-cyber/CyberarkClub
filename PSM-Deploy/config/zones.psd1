@@ -14,6 +14,11 @@
     #                  uses it for the registration (media's registration automation).
     #   - empty     -> the script directly reuses the account of the admin
     #                  connected to the PVWA as the install account.
+    #   WARNING: the install account must be a NATIVE CyberArk Vault user
+    #   (RegisterComponent only does native authentication on port 1858): a
+    #   DOMAIN/LDAP account passes the PVWA logon but aborts the registration
+    #   with "ITATS004E Authentication failure". PreFlight-checked at the
+    #   Registration phase when the user's auth source is readable.
     #
     # SkipCertificateCheck: $true ONLY in the lab (PVWA with a self-signed certificate).
     #

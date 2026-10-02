@@ -318,6 +318,28 @@ try {
                         $installCred = $pvwaCred
                     }
 
+                    # 2b) FAIL-FAST: RegisterComponent only supports NATIVE
+                    #     CyberArk authentication on the Vault (port 1858) - a
+                    #     DOMAIN/LDAP account passes the PVWA logon but aborts
+                    #     the registration with "ITATS004E Authentication
+                    #     failure" after minutes of stage work. Checked via the
+                    #     Vault user's 'source' property when it is readable.
+                    try {
+                        $vu = @(Find-PvwaUser -Session $session -Search $installCred.UserName |
+                                Where-Object { $_.username -ieq $installCred.UserName })
+                        if ($vu.Count -eq 1 -and $vu[0].PSObject.Properties.Name -contains 'source' `
+                            -and $vu[0].source -and $vu[0].source -ne 'CyberArk') {
+                            throw ("Install account '$($installCred.UserName)' is a $($vu[0].source) (domain) user: " +
+                                   "RegisterComponent only supports NATIVE CyberArk authentication. Use a native " +
+                                   "install account - fill zones.psd1 InstallAccountSafe/InstallAccountUserName " +
+                                   "(e.g. a dedicated svc-install, or administrator) or log on to the PVWA with a native admin.")
+                        }
+                    }
+                    catch {
+                        if ($_.Exception.Message -match 'RegisterComponent only supports') { throw }
+                        Write-PSMLog -Level WARN -Message "Could not verify the install account's auth source ($($_.Exception.Message)) - continuing."
+                    }
+
                     # 3) CyberArk Registration stage: the Vault address (cluster,DR) comes
                     #    from zones.psd1 and is injected into a copy of RegistrationConfig.xml
                     #    (the media is not modified). Password injected via -spwdObj.
