@@ -96,8 +96,8 @@
         # RegisterComponent.exe generates random names (PSMApp_<hex>/PSMGw_<hex>)
         # with NO naming option for PSM. After the registration, the script renames
         # them automatically (as previously done by hand on the existing PSMs):
-        # Vault user via the PVWA API + Username= line of the cred files (password
-        # unchanged, .orig backup) + PSMServerId/PSMServerAdminId of basic_psm.ini,
+        # Vault user via the PVWA API (verified) + new password and cred files
+        # regenerated with CreateCredFile (.orig backup) + PSMServerId/PSMServerAdminId of basic_psm.ini,
         # PSM service stopped/restarted during the operation. {HOSTNAME} = machine
         # name in UPPERCASE. Set RenameComponents = $false to disable.
         RenameComponents = $true

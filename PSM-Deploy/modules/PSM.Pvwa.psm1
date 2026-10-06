@@ -70,9 +70,15 @@ function Connect-PvwaSession {
     } | ConvertTo-Json
 
     $uri = "$base/PasswordVault/API/Auth/$AuthMethod/Logon"
+    # The PVWA URL may be a load-balanced VIP over several PVWA nodes: a token
+    # is only known by the node that issued it (observed: CASSM005E "No session
+    # instance was found for this token" -> random 401s). The web session keeps
+    # the load balancer's affinity cookie so every later call of this session
+    # lands on the same node - it is passed to ALL calls via $Session.WebSession.
     try {
         $token = Invoke-RestMethod -Uri $uri -Method Post -Body $body `
-                    -ContentType 'application/json' -TimeoutSec $TimeoutSec -ErrorAction Stop
+                    -ContentType 'application/json' -TimeoutSec $TimeoutSec `
+                    -SessionVariable 'pvwaWebSession' -ErrorAction Stop
     }
     catch {
         throw "PVWA logon failed ($AuthMethod) on $base : $($_.Exception.Message)"
@@ -80,9 +86,10 @@ function Connect-PvwaSession {
 
     $clean = ($token | Out-String).Trim().Trim('"')
     return [pscustomobject]@{
-        PvwaUrl = $base
-        Token   = $clean
-        Headers = @{ Authorization = $clean }
+        PvwaUrl    = $base
+        Token      = $clean
+        Headers    = @{ Authorization = $clean }
+        WebSession = $pvwaWebSession   # load-balancer affinity (see above)
     }
 }
 
@@ -143,7 +150,7 @@ function Disconnect-PvwaSession {
     param([Parameter(Mandatory)] $Session)
     try {
         Invoke-RestMethod -Uri "$($Session.PvwaUrl)/PasswordVault/API/Auth/Logoff" `
-            -Method Post -Headers $Session.Headers -TimeoutSec 30 -ErrorAction Stop | Out-Null
+            -Method Post -Headers $Session.Headers -WebSession $Session.WebSession -TimeoutSec 30 -ErrorAction Stop | Out-Null
     }
     catch {
         if (Get-Command Write-PSMLog -ErrorAction SilentlyContinue) {
@@ -161,7 +168,7 @@ function Find-PvwaUser {
         [int] $TimeoutSec = 60
     )
     $uri  = "$($Session.PvwaUrl)/PasswordVault/API/Users?search=$([uri]::EscapeDataString($Search))"
-    $resp = Invoke-RestMethod -Uri $uri -Method Get -Headers $Session.Headers -TimeoutSec $TimeoutSec -ErrorAction Stop
+    $resp = Invoke-RestMethod -Uri $uri -Method Get -Headers $Session.Headers -WebSession $Session.WebSession -TimeoutSec $TimeoutSec -ErrorAction Stop
     if ($resp.PSObject.Properties.Name -contains 'Users') { return @($resp.Users) }
     return @()
 }
@@ -188,10 +195,10 @@ function Rename-PvwaUser {
     if (-not $PSCmdlet.ShouldProcess($UserName, "Rename to '$NewUserName' (PVWA API)")) { return $null }
 
     $userUri = "$($Session.PvwaUrl)/PasswordVault/API/Users/$id"
-    $user    = Invoke-RestMethod -Uri $userUri -Method Get -Headers $Session.Headers -TimeoutSec $TimeoutSec -ErrorAction Stop
+    $user    = Invoke-RestMethod -Uri $userUri -Method Get -Headers $Session.Headers -WebSession $Session.WebSession -TimeoutSec $TimeoutSec -ErrorAction Stop
     $user.username = $NewUserName
     try {
-        return Invoke-RestMethod -Uri $userUri -Method Put -Headers $Session.Headers `
+        return Invoke-RestMethod -Uri $userUri -Method Put -Headers $Session.Headers -WebSession $Session.WebSession `
                 -Body ($user | ConvertTo-Json -Depth 8) -ContentType 'application/json' `
                 -TimeoutSec $TimeoutSec -ErrorAction Stop
     }
@@ -223,7 +230,7 @@ function Remove-PvwaUser {
     if (-not $PSCmdlet.ShouldProcess($UserName, 'Delete the Vault user (PVWA API)')) { return $false }
     try {
         Invoke-RestMethod -Uri "$($Session.PvwaUrl)/PasswordVault/API/Users/$id" `
-            -Method Delete -Headers $Session.Headers -TimeoutSec $TimeoutSec -ErrorAction Stop | Out-Null
+            -Method Delete -Headers $Session.Headers -WebSession $Session.WebSession -TimeoutSec $TimeoutSec -ErrorAction Stop | Out-Null
         return $true
     }
     catch {
@@ -259,7 +266,7 @@ function Reset-PvwaUserPassword {
     $body = @{ id = $id; newPassword = $plain } | ConvertTo-Json
     try {
         Invoke-RestMethod -Uri "$($Session.PvwaUrl)/PasswordVault/API/Users/$id/ResetPassword" `
-            -Method Post -Headers $Session.Headers -Body $body -ContentType 'application/json' `
+            -Method Post -Headers $Session.Headers -WebSession $Session.WebSession -Body $body -ContentType 'application/json' `
             -TimeoutSec $TimeoutSec -ErrorAction Stop | Out-Null
         return $true
     }
@@ -303,7 +310,7 @@ function Find-PvwaAccount {
         if ($terms) { $q += "search=$([uri]::EscapeDataString(($terms -join ' ')))" }
         $uri = "$($Session.PvwaUrl)/PasswordVault/API/Accounts"
         if ($q) { $uri += '?' + ($q -join '&') }
-        $resp  = Invoke-RestMethod -Uri $uri -Method Get -Headers $Session.Headers -TimeoutSec $TimeoutSec -ErrorAction Stop
+        $resp  = Invoke-RestMethod -Uri $uri -Method Get -Headers $Session.Headers -WebSession $Session.WebSession -TimeoutSec $TimeoutSec -ErrorAction Stop
         $items = @($resp.value)
         # -like: exact (case-insensitive) match without wildcards, pattern match with.
         if ($UserName) { $items = @($items | Where-Object { $_.userName -like $UserName }) }
@@ -357,7 +364,7 @@ function Get-PvwaAccountPassword {
     $body = @{ reason = $Reason } | ConvertTo-Json
     $uri  = "$($Session.PvwaUrl)/PasswordVault/API/Accounts/$AccountId/Password/Retrieve"
     try {
-        $pw = Invoke-RestMethod -Uri $uri -Method Post -Headers $Session.Headers `
+        $pw = Invoke-RestMethod -Uri $uri -Method Post -Headers $Session.Headers -WebSession $Session.WebSession `
                 -Body $body -ContentType 'application/json' -TimeoutSec $TimeoutSec -ErrorAction Stop
     }
     catch {
