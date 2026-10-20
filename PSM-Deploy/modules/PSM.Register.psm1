@@ -119,8 +119,24 @@ function Update-PSMCredFile {
     $backup = "$CredPath.orig"
     if (-not (Test-Path $backup)) { Copy-Item -Path $CredPath -Destination $backup -Force }
 
-    Write-PSMLog -Level INFO -Message ("CreateCredFile: `"$exe`" `"$CredPath`" Password /Username $UserName /Password *** " + ($extra -join ' '))
-    $out = & $exe $CredPath Password /Username $UserName /Password $Password @extra 2>&1
+    # Run FROM the cred file's folder with the bare file name, exactly like the
+    # manual procedure that works (cd <PsmDir>\Vault; .\CreateCredFile.exe
+    # psmapp.cred ...): launched from another folder with a full path, the
+    # regenerated file did not authenticate.
+    $credDir  = Split-Path -Path $CredPath -Parent
+    $credName = Split-Path -Path $CredPath -Leaf
+    Write-PSMLog -Level INFO -Message ("CreateCredFile (in $credDir): `"$exe`" $credName Password /Username $UserName /Password *** " + ($extra -join ' '))
+    Push-Location -Path $credDir
+    try {
+        # Native stderr redirected under the module's EAP=Stop would become a
+        # terminating error in PowerShell 5.1: relax it for this call only.
+        $ErrorActionPreference = 'Continue'
+        $out = & $exe $credName Password /Username $UserName /Password $Password @extra 2>&1
+    }
+    finally {
+        $ErrorActionPreference = 'Stop'
+        Pop-Location
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "CreateCredFile.exe failed (exit code $LASTEXITCODE): $out"
     }
