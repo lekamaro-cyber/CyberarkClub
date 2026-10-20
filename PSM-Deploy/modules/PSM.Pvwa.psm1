@@ -268,7 +268,6 @@ function Reset-PvwaUserPassword {
         Invoke-RestMethod -Uri "$($Session.PvwaUrl)/PasswordVault/API/Users/$id/ResetPassword" `
             -Method Post -Headers $Session.Headers -WebSession $Session.WebSession -Body $body -ContentType 'application/json' `
             -TimeoutSec $TimeoutSec -ErrorAction Stop | Out-Null
-        return $true
     }
     catch {
         $msg = $_.Exception.Message
@@ -279,6 +278,25 @@ function Reset-PvwaUserPassword {
         }
         throw "PVWA password reset of '$UserName' failed: $msg"
     }
+
+    # The call answered OK: re-read the user and REPORT any state that keeps a
+    # component from logging on with the new password (no automatic fix).
+    $user = Invoke-RestMethod -Uri "$($Session.PvwaUrl)/PasswordVault/API/Users/$id" -Method Get `
+                -Headers $Session.Headers -WebSession $Session.WebSession -TimeoutSec $TimeoutSec -ErrorAction Stop
+    $props    = $user.PSObject.Properties.Name
+    $problems = @()
+    if ($props -contains 'suspended'             -and $user.suspended)             { $problems += 'suspended' }
+    if ($props -contains 'enableUser'            -and -not $user.enableUser)       { $problems += 'disabled' }
+    if ($props -contains 'changePassOnNextLogon' -and $user.changePassOnNextLogon) { $problems += 'must change password at next logon' }
+    if ($problems) {
+        throw ("PVWA password reset of '$UserName' answered OK, but the user is now: $($problems -join ', '). " +
+               'The PSM service cannot log on in this state - fix the user in PVWA > Administration > Users, ' +
+               'then relaunch.')
+    }
+    if (Get-Command Write-PSMLog -ErrorAction SilentlyContinue) {
+        Write-PSMLog -Level INFO -Message "PVWA: password reset of '$UserName' applied (user active, no forced change at next logon)."
+    }
+    return $true
 }
 
 function Find-PvwaAccount {
