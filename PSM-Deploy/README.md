@@ -192,9 +192,12 @@ The resume is **interactive** (the PVWA `Get-Credential` prompts work) and
     (`PSMApp_<hex>`/`PSMGw_<hex>`) **with no naming option** for PSM. After
     registration, the script automatically renames them per the convention
     (`PSM-<HOSTNAME>` / `PSMA<HOSTNAME>`, configurable patterns): Vault user via
-    the PVWA API (verified), then CyberArk's documented procedure: new password for
-    the renamed user + cred files regenerated with `CreateCredFile` (`.orig` backup),
-    with the PSM service stopped/restarted during the operation. Idempotent (does
+    the PVWA API (verified), then, step by step with pauses and a check at each step:
+    service stopped (verified) → rename (verified) → timestamped backup of the cred
+    file + `.entropy` → new cred file with `CreateCredFile` → Vault password reset →
+    service started and checked to stay up (no `ITATS` error in `PSMConsole.log`).
+    A failure at the cred-file or reset step restores the backup and rolls the rename
+    back, so cred file and Vault keep matching. Idempotent (does
     nothing if already compliant). `PSMServerId`/`PSMServerAdminId` in `basic_psm.ini`
     are **opt-in** (`Registration.RenameServerIds`, off by default): they must stay
     aligned with the "PSM Server" object in PVWA Options — enable only if you **also

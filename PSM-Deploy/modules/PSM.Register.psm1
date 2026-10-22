@@ -96,8 +96,8 @@ function Update-PSMCredFile {
     <#
         Regenerates a CyberArk cred file with CreateCredFile.exe (<PsmDir>\Vault):
           CreateCredFile.exe <cred> Password /Username <u> /Password <p> /EntropyFile
-        '.orig' backup made only once.
-        Used after a component rename and by the password-sync flow.
+        VERIFIED: exit code 0, file really rewritten, Username= line as expected.
+        The backup is taken by the caller (Sync-PSMComponentCredential).
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -116,8 +116,7 @@ function Update-PSMCredFile {
     $extra = @('/EntropyFile')
 
     if (-not $PSCmdlet.ShouldProcess($CredPath, "Regenerate the cred file (Username=$UserName)")) { return $false }
-    $backup = "$CredPath.orig"
-    if (-not (Test-Path $backup)) { Copy-Item -Path $CredPath -Destination $backup -Force }
+    $writtenBefore = (Get-Item -Path $CredPath).LastWriteTime
 
     # Run FROM the cred file's folder with the bare file name, exactly like the
     # manual procedure that works (cd <PsmDir>\Vault; .\CreateCredFile.exe
@@ -140,12 +139,148 @@ function Update-PSMCredFile {
     if ($LASTEXITCODE -ne 0) {
         throw "CreateCredFile.exe failed (exit code $LASTEXITCODE): $out"
     }
-    # Sanity check: the regenerated file must carry the expected user.
+    # Checks: the file was really rewritten and carries the expected user.
+    if ((Get-Item -Path $CredPath).LastWriteTime -le $writtenBefore) {
+        throw "Update-PSMCredFile: '$CredPath' was NOT rewritten by CreateCredFile (exit code 0). Output: $out"
+    }
     if ((Get-Content -Path $CredPath -Raw) -notmatch ('(?im)^\s*Username\s*=\s*' + [regex]::Escape($UserName) + '\s*$')) {
         throw "Update-PSMCredFile: '$CredPath' does not carry Username=$UserName after regeneration. CreateCredFile output: $out"
     }
-    Write-PSMLog -Level INFO -Message "Cred file regenerated: $CredPath (Username=$UserName, password synced with the Vault)."
+    $entropy = Get-Item -Path "$CredPath.entropy" -ErrorAction SilentlyContinue
+    $entropyInfo = if ($entropy) { "entropy file written $($entropy.LastWriteTime)" } else { 'NO entropy file next to it' }
+    Write-PSMLog -Level INFO -Message "Cred file regenerated: $CredPath (Username=$UserName; $entropyInfo)."
     return $true
+}
+
+function New-PSMSyncError {
+    # Exception carrying whether the LOCAL cred file is back in its pre-sync
+    # state (backup failed or restored) - the caller then knows whether the
+    # Vault-side rename can be rolled back to match it.
+    param([string] $Message, [bool] $LocalUnchanged)
+    $e = [System.InvalidOperationException]::new($Message)
+    $e.Data['LocalUnchanged'] = $LocalUnchanged
+    return $e
+}
+
+function Sync-PSMComponentCredential {
+    <#
+        Gives a component Vault user a NEW password, in this order, each step
+        verified, with a pause between steps (the PSM service is stopped by the
+        caller):
+          1. backup of the cred file and its .entropy (timestamped copies);
+          2. CreateCredFile with the new password (Update-PSMCredFile);
+          3. Vault password reset through the PVWA API (Reset-PvwaUserPassword).
+        Cred file first, Vault second (CyberArk's own order): if step 2 or the
+        reset call fails, the backup is restored and the Vault still has the old
+        password, so the old pair stays consistent. If the reset is applied but
+        leaves the user unusable (suspended, disabled...), the NEW cred file is
+        kept - it matches the new Vault password.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] $Settings,
+        [Parameter(Mandatory)] $Session,
+        [Parameter(Mandatory)] [string] $CredPath,
+        [Parameter(Mandatory)] [string] $UserName,
+        [int] $StepDelaySec = 5
+    )
+    $stamp   = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $entropy = "$CredPath.entropy"
+    $bakCred = "$CredPath.bak-$stamp"
+    $bakEnt  = "$entropy.bak-$stamp"
+
+    # 1. Backup (verified).
+    try {
+        Copy-Item -Path $CredPath -Destination $bakCred -Force
+        if (Test-Path $entropy) { Copy-Item -Path $entropy -Destination $bakEnt -Force } else { $bakEnt = $null }
+    }
+    catch { throw (New-PSMSyncError "Backup of '$CredPath' failed: $($_.Exception.Message)" $true) }
+    if (-not (Test-Path $bakCred) -or ($bakEnt -and -not (Test-Path $bakEnt))) {
+        throw (New-PSMSyncError "Backup of '$CredPath' could not be verified - nothing changed." $true)
+    }
+    Write-PSMLog -Level INFO -Message ("Backup: $bakCred" + $(if ($bakEnt) { " + $bakEnt" } else { ' (no entropy file)' }))
+    Start-Sleep -Seconds $StepDelaySec
+
+    $restore = {
+        Copy-Item -Path $bakCred -Destination $CredPath -Force
+        if ($bakEnt) { Copy-Item -Path $bakEnt -Destination $entropy -Force }
+        Write-PSMLog -Level WARN -Message "Cred file restored from backup: $CredPath (Vault password unchanged)."
+    }
+
+    # 2. New cred file (verified by Update-PSMCredFile).
+    $newPwd = New-PSMComponentPassword
+    try {
+        Update-PSMCredFile -Settings $Settings -CredPath $CredPath -UserName $UserName -Password $newPwd | Out-Null
+    }
+    catch {
+        $msg = $_.Exception.Message
+        & $restore
+        throw (New-PSMSyncError "CreateCredFile step failed for '$UserName': $msg" $true)
+    }
+    Start-Sleep -Seconds $StepDelaySec
+
+    # 3. Vault password (verified by Reset-PvwaUserPassword: call result + user state).
+    try {
+        Reset-PvwaUserPassword -Session $Session -UserName $UserName `
+            -NewPassword (ConvertTo-SecureString $newPwd -AsPlainText -Force) | Out-Null
+    }
+    catch {
+        $msg = $_.Exception.Message
+        if ($msg -match 'answered OK, but the user is now') {
+            # Password APPLIED in the Vault: the new cred file matches it - keep it.
+            throw (New-PSMSyncError "$msg The new cred file was KEPT (it matches the new Vault password)." $false)
+        }
+        & $restore
+        throw (New-PSMSyncError "Vault password reset failed for '$UserName': $msg" $true)
+    }
+    Write-PSMLog -Level INFO -Message "Vault: new password set for '$UserName' (cred file and Vault in sync)."
+    Start-Sleep -Seconds $StepDelaySec
+}
+
+function Start-PSMServiceVerified {
+    <#
+        Starts the PSM service and VERIFIES it really stays up: waits for
+        'Running', lets it settle, then checks it is still running and that
+        PSMConsole.log got no authentication/termination error since the start
+        (the service can reach Running then die on ITATS004E a few seconds later).
+    #>
+    param(
+        [Parameter(Mandatory)] [string] $Name,
+        [Parameter(Mandatory)] [string] $ConsoleLog,
+        [int] $StartTimeoutSec = 180,
+        [int] $StabilizeSec    = 60
+    )
+    $linesBefore = if (Test-Path $ConsoleLog) { @(Get-Content -Path $ConsoleLog).Count } else { 0 }
+    $newConsoleLines = {
+        if (-not (Test-Path $ConsoleLog)) { return @() }
+        $all = @(Get-Content -Path $ConsoleLog)
+        if ($all.Count -ge $linesBefore) { return @($all | Select-Object -Skip $linesBefore) }
+        return $all   # log rotated: read it all
+    }
+    Write-PSMLog -Level INFO -Message 'Starting the PSM service...'
+    try { Start-Service -Name $Name -ErrorAction Stop }
+    catch { Write-PSMLog -Level WARN -Message "Start-Service: $($_.Exception.Message) - checking the service state..." }
+
+    $svc = Get-Service -Name $Name
+    $deadline = (Get-Date).AddSeconds($StartTimeoutSec)
+    while ($svc.Status -ne 'Running' -and (Get-Date) -lt $deadline) {
+        if ($svc.Status -eq 'Stopped') { break }
+        Start-Sleep -Seconds 5
+        $svc.Refresh()
+    }
+    if ($svc.Status -ne 'Running') {
+        $detail = @(& $newConsoleLines | Select-Object -Last 5) -join ' | '
+        throw "PSM service did not start (state: $($svc.Status)). PSMConsole.log: $(if ($detail) { $detail } else { 'no new line' })"
+    }
+    Write-PSMLog -Level INFO -Message "PSM service Running - checking it stays up for $StabilizeSec s..."
+    Start-Sleep -Seconds $StabilizeSec
+    $svc.Refresh()
+    $errors = @(& $newConsoleLines | Where-Object { $_ -match 'ITATS\d+E|PSMSR037E|terminated' })
+    if ($svc.Status -ne 'Running' -or $errors.Count -gt 0) {
+        $detail = if ($errors.Count -gt 0) { $errors -join ' | ' } else { 'no new line' }
+        throw "PSM service did not stay up (state: $($svc.Status)). PSMConsole.log: $detail"
+    }
+    Write-PSMLog -Level OK -Message "PSM service running and stable ($StabilizeSec s), no authentication error in PSMConsole.log."
 }
 
 function Resolve-PSMExistingComponentUser {
@@ -217,11 +352,9 @@ function Resolve-PSMExistingComponentUser {
             return $false   # way clear for the normal rename
         }
         'ResetPassword' {
-            $newPwd = New-PSMComponentPassword
-            $secure = ConvertTo-SecureString $newPwd -AsPlainText -Force
-            Reset-PvwaUserPassword -Session $Session -UserName $Target.NewName -NewPassword $secure | Out-Null
-            Write-PSMLog -Level INFO -Message "Vault: password of the kept user '$($Target.NewName)' reset."
-            Update-PSMCredFile -Settings $Settings -CredPath $Target.CredPath -UserName $Target.NewName -Password $newPwd | Out-Null
+            # Same verified sequence as after a rename: backup, CreateCredFile, then Vault reset.
+            Sync-PSMComponentCredential -Settings $Settings -Session $Session `
+                -CredPath $Target.CredPath -UserName $Target.NewName
             try {
                 Remove-PvwaUser -Session $Session -UserName $Target.OldName | Out-Null
                 Write-PSMLog -Level INFO -Message "Vault: freshly registered orphan '$($Target.OldName)' deleted."
@@ -250,13 +383,17 @@ function Rename-PSMComponentAccounts {
           - "App" user PSMApp_<hex>  -> PSM-<HOSTNAME>   (configurable pattern)
           - "Gw"  user PSMGw_<hex>   -> PSMA<HOSTNAME>
         RegisterComponent.exe offers NO naming parameter for PSM: the rename
-        therefore happens AFTER the registration, in 4 steps:
-          1. rename of the Vault users (PVWA API), VERIFIED by re-reading the user;
-          2. CyberArk's documented post-rename procedure: new password for the
-             renamed user (PVWA API) + cred file regenerated with CreateCredFile
-             (/EntropyFile; .orig backup);
-          3. update of basic_psm.ini (PSMServerId / PSMServerAdminId);
-          4. PSM service stopped during the operation then restarted if it was running.
+        therefore happens AFTER the registration, step by step, each step
+        verified, with pauses in between:
+          1. stop the PSM service (verified stopped), then let the Vault settle;
+          per account:
+          2. rename of the Vault user (PVWA API), verified by re-reading it;
+          3. backup of the cred file and its .entropy (timestamped copies);
+          4. new cred file with CreateCredFile and a new password (verified);
+          5. Vault password reset through the PVWA API (verified);
+             a failure at 4/5 restores the backup and rolls the rename back;
+          6. start the PSM service and verify it stays up (no ITATS error).
+        basic_psm.ini PSMServerId / PSMServerAdminId: opt-in (RenameServerIds).
 
         Driven by settings.psd1 Registration.RenameComponents ($true/$false).
         Idempotent: when the cred files already carry the target names, does nothing.
@@ -326,16 +463,17 @@ function Rename-PSMComponentAccounts {
     if (-not $PSCmdlet.ShouldProcess("$($targets[0].OldName) -> $appNew ; $($targets[1].OldName) -> $gwNew",
                                      'Rename the PSM component accounts')) { return $false }
 
-    # Service stopped during the operation, WHATEVER its state: RegisterComponent
-    # starts it at the end of the registration, so it is often still
-    # 'StartPending' here. A component logged on to the Vault keeps the rename
-    # from being applied (observed: PUT accepted, user NOT renamed, cred files
-    # rewritten -> ITATS004E at the next start). Wait for a pending transition
-    # to settle, stop, then give the Vault time to close the component sessions.
-    $svcName = 'Cyberark Privileged Session Manager'
+    # Pauses between the steps, to leave the Vault and the service time to settle.
+    $stepDelaySec   = 5    # between two steps
+    $vaultSettleSec = 15   # after the stop, for the Vault to close the component sessions
+    $svcName    = 'Cyberark Privileged Session Manager'
+    $consoleLog = Join-Path (Get-PSMInstallPaths -Settings $Settings).PsmDir 'Logs\PSMConsole.log'
+
+    # 1. STOP the service, whatever its state (RegisterComponent starts it at the
+    #    end of the registration, so it is often still 'StartPending' here: a
+    #    component logged on to the Vault keeps the rename from being applied),
+    #    and VERIFY it is stopped before touching anything.
     $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
-    $wasRunning   = $false
-    $restartError = $null
     if ($svc) {
         $deadline = (Get-Date).AddSeconds(180)
         while ($svc.Status -in 'StartPending', 'StopPending', 'ContinuePending', 'PausePending' -and (Get-Date) -lt $deadline) {
@@ -343,95 +481,110 @@ function Rename-PSMComponentAccounts {
             $svc.Refresh()
         }
         if ($svc.Status -ne 'Stopped') {
-            $wasRunning = $true
             Write-PSMLog -Level INFO -Message "Stopping the PSM service (state: $($svc.Status)) for the component account rename..."
             Stop-Service -Name $svcName -Force
-            Start-Sleep -Seconds 15
+            $deadline = (Get-Date).AddSeconds(120)
+            do { Start-Sleep -Seconds 2; $svc.Refresh() } while ($svc.Status -ne 'Stopped' -and (Get-Date) -lt $deadline)
+            if ($svc.Status -ne 'Stopped') { throw "PSM service did not stop (state: $($svc.Status)) - nothing was changed." }
         }
+        Write-PSMLog -Level INFO -Message "PSM service stopped (verified) - waiting $vaultSettleSec s for the Vault to close its sessions..."
+        Start-Sleep -Seconds $vaultSettleSec
     }
 
+    $failure = $null
     try {
-    foreach ($t in $targets) {
-        if ($t.OldName -cne $t.NewName) {
-            # 0) The target name may ALREADY exist on the Vault side (leftover from
-            #    a previous installation of the SAME server: wiping the machine does
-            #    not remove the Vault users). Resolved per the configured policy:
-            #    delete it (Overwrite) or keep it and re-sync its password with the
-            #    local cred file (ResetPassword) - see Resolve-PSMExistingComponentUser.
-            $handled = Resolve-PSMExistingComponentUser -Settings $Settings -Session $Session `
-                          -Target $t -Action $existingAction -NonInteractive:$NonInteractive
-            if (-not $handled) {
-                # 1) Vault side (PVWA API).
-                Rename-PvwaUser -Session $Session -UserName $t.OldName -NewUserName $t.NewName | Out-Null
-                # VERIFY before touching the cred file: the PVWA may accept the
-                # PUT without applying it. Cred file rewritten only when the
-                # Vault really carries the new name - otherwise nothing local
-                # changes and the service keeps working under the old name.
-                $renamed = $false
-                for ($i = 1; $i -le 3 -and -not $renamed; $i++) {
-                    $renamed = [bool]@(Find-PvwaUser -Session $Session -Search $t.NewName |
-                                       Where-Object { $_.username -eq $t.NewName }).Count
-                    if (-not $renamed) { Start-Sleep -Seconds 5 }
-                }
-                if (-not $renamed) {
-                    throw ("Vault rename of '$($t.OldName)' to '$($t.NewName)' was accepted by the PVWA but NOT applied " +
-                           "(user still '$($t.OldName)'). Cred file left untouched. Rename the user in PVWA/PrivateArk " +
-                           'with the PSM service stopped, then relaunch.')
-                }
-                Write-PSMLog -Level INFO -Message "Vault: user '$($t.OldName)' renamed to '$($t.NewName)' (verified)."
-                # 2) CyberArk's documented procedure after a component rename: give
-                #    the renamed user a NEW password, then regenerate the cred file
-                #    with CreateCredFile. Only editing the Username= line keeps a
-                #    secret that no longer authenticates (observed: ITATS004E for
-                #    the renamed user at the next service start).
-                $newPwd = New-PSMComponentPassword
-                Reset-PvwaUserPassword -Session $Session -UserName $t.NewName `
-                    -NewPassword (ConvertTo-SecureString $newPwd -AsPlainText -Force) | Out-Null
-                Write-PSMLog -Level INFO -Message "Vault: new password set for '$($t.NewName)'."
-                Update-PSMCredFile -Settings $Settings -CredPath $t.CredPath -UserName $t.NewName `
-                    -Password $newPwd | Out-Null
-            }
-        }
-        # 3) basic_psm.ini: matching ID (OPT-IN, see RenameServerIds above).
-        if ($renameIds) {
-            if ($ini -notmatch ('(?im)^\s*' + $t.IniKey + '\s*=\s*"')) {
-                throw "Rename-PSMComponentAccounts: key '$($t.IniKey)' not found in $iniPath."
-            }
-            $ini = ([regex]('(?im)^(\s*' + $t.IniKey + '\s*=\s*")[^"]*(")')).Replace($ini, ('${1}' + $t.NewName + '${2}'), 1)
-        }
-    }
-    if ($renameIds) {
-        $iniBackup = "$iniPath.orig"
-        if (-not (Test-Path $iniBackup)) { Copy-Item -Path $iniPath -Destination $iniBackup -Force }
-        Set-Content -Path $iniPath -Value $ini -NoNewline
-        Write-PSMLog -Level WARN -Message ("basic_psm.ini updated (PSMServerId=$appNew, PSMServerAdminId=$gwNew). " +
-            "REQUIRED PAIRED STEP: rename the PSM server object ID accordingly in PVWA " +
-            "(Administration > Options > Privileged Session Management > Configured PSM Servers), " +
-            "otherwise the PSM will not find its server configuration.")
-    }
-    else {
-        Write-PSMLog -Level INFO -Message ("basic_psm.ini PSMServerId/PSMServerAdminId left unchanged " +
-            "(Registration.RenameServerIds=false): they stay aligned with the PSM server object in PVWA Options.")
-    }
+        foreach ($t in $targets) {
+            if ($t.OldName -cne $t.NewName) {
+                # The target name may ALREADY exist on the Vault side (leftover from
+                # a previous installation of the SAME server). Resolved per the
+                # configured policy - see Resolve-PSMExistingComponentUser.
+                $handled = Resolve-PSMExistingComponentUser -Settings $Settings -Session $Session `
+                              -Target $t -Action $existingAction -NonInteractive:$NonInteractive
+                if (-not $handled) {
+                    # 2. RENAME in the Vault, VERIFIED by re-reading the user (up to
+                    #    30 s): the PVWA may accept the PUT without applying it.
+                    Rename-PvwaUser -Session $Session -UserName $t.OldName -NewUserName $t.NewName | Out-Null
+                    $renamed = $false
+                    for ($i = 1; $i -le 6 -and -not $renamed; $i++) {
+                        $renamed = [bool]@(Find-PvwaUser -Session $Session -Search $t.NewName |
+                                           Where-Object { $_.username -eq $t.NewName }).Count
+                        if (-not $renamed) { Start-Sleep -Seconds 5 }
+                    }
+                    if (-not $renamed) {
+                        throw ("Vault rename of '$($t.OldName)' to '$($t.NewName)' was accepted by the PVWA but NOT applied " +
+                               "(user still '$($t.OldName)'). Cred file left untouched. Rename the user in PVWA/PrivateArk " +
+                               'with the PSM service stopped, then relaunch.')
+                    }
+                    Write-PSMLog -Level INFO -Message "Vault: user '$($t.OldName)' renamed to '$($t.NewName)' (verified)."
+                    Start-Sleep -Seconds $stepDelaySec
 
-    }
-    finally {
-        # Each target is always left consistent (Vault + cred file both renamed,
-        # or both untouched), so the service can be restarted even on failure.
-        if ($wasRunning) {
-            try {
-                Start-Service -Name $svcName -ErrorAction Stop
-                Write-PSMLog -Level INFO -Message 'PSM service restarted.'
+                    # 3-5. Backup of the cred file, new cred file, Vault password -
+                    #      each step verified (Sync-PSMComponentCredential).
+                    try {
+                        Sync-PSMComponentCredential -Settings $Settings -Session $Session `
+                            -CredPath $t.CredPath -UserName $t.NewName -StepDelaySec $stepDelaySec
+                    }
+                    catch {
+                        $syncError = $_
+                        if ($syncError.Exception.Data['LocalUnchanged']) {
+                            # The cred file is back under the OLD name: put the Vault
+                            # name back too, so that both match again.
+                            $back = $false
+                            try {
+                                Rename-PvwaUser -Session $Session -UserName $t.NewName -NewUserName $t.OldName | Out-Null
+                                Start-Sleep -Seconds $stepDelaySec
+                                $back = [bool]@(Find-PvwaUser -Session $Session -Search $t.OldName |
+                                                Where-Object { $_.username -eq $t.OldName }).Count
+                            }
+                            catch { Write-PSMLog -Level ERROR -Message "Vault rename rollback call failed: $($_.Exception.Message)" }
+                            if ($back) {
+                                Write-PSMLog -Level WARN -Message "Vault: rename rolled back ('$($t.NewName)' -> '$($t.OldName)', verified) to match the unchanged cred file."
+                            }
+                            else {
+                                Write-PSMLog -Level ERROR -Message ("Vault rename rollback NOT applied: the Vault user is '$($t.NewName)' but the " +
+                                    "cred file still says '$($t.OldName)' - rename the user back in PVWA before relaunching.")
+                            }
+                        }
+                        throw $syncError
+                    }
+                }
             }
-            catch {
-                # Logged here so it never masks an exception already propagating;
-                # re-raised below on the success path (fail-fast as before).
-                $restartError = $_.Exception.Message
-                Write-PSMLog -Level ERROR -Message "PSM service failed to restart: $restartError - check PSMConsole.log."
+            # basic_psm.ini: matching ID (OPT-IN, see RenameServerIds above).
+            if ($renameIds) {
+                if ($ini -notmatch ('(?im)^\s*' + $t.IniKey + '\s*=\s*"')) {
+                    throw "Rename-PSMComponentAccounts: key '$($t.IniKey)' not found in $iniPath."
+                }
+                $ini = ([regex]('(?im)^(\s*' + $t.IniKey + '\s*=\s*")[^"]*(")')).Replace($ini, ('${1}' + $t.NewName + '${2}'), 1)
             }
         }
+        if ($renameIds) {
+            $iniBackup = "$iniPath.orig"
+            if (-not (Test-Path $iniBackup)) { Copy-Item -Path $iniPath -Destination $iniBackup -Force }
+            Set-Content -Path $iniPath -Value $ini -NoNewline
+            Write-PSMLog -Level WARN -Message ("basic_psm.ini updated (PSMServerId=$appNew, PSMServerAdminId=$gwNew). " +
+                "REQUIRED PAIRED STEP: rename the PSM server object ID accordingly in PVWA " +
+                "(Administration > Options > Privileged Session Management > Configured PSM Servers), " +
+                "otherwise the PSM will not find its server configuration.")
+        }
+        else {
+            Write-PSMLog -Level INFO -Message ("basic_psm.ini PSMServerId/PSMServerAdminId left unchanged " +
+                "(Registration.RenameServerIds=false): they stay aligned with the PSM server object in PVWA Options.")
+        }
     }
-    if ($restartError) { throw "PSM service failed to restart after the component rename: $restartError" }
+    catch { $failure = $_ }
+
+    # 6. START the service and VERIFY it stays up. Also attempted after a failure
+    #    (the PSM may still run under its previous accounts); the original error
+    #    is then re-raised.
+    if ($svc) {
+        if ($failure) {
+            try { Start-PSMServiceVerified -Name $svcName -ConsoleLog $consoleLog }
+            catch { Write-PSMLog -Level ERROR -Message "PSM service after the failure: $($_.Exception.Message)" }
+            throw $failure
+        }
+        Start-PSMServiceVerified -Name $svcName -ConsoleLog $consoleLog
+    }
+    elseif ($failure) { throw $failure }
     Write-PSMLog -Level OK -Message "Component accounts renamed: $appNew / $gwNew."
     return $true
 }
