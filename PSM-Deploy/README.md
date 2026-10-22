@@ -182,6 +182,11 @@ The resume is **interactive** (the PVWA `Get-Credential` prompts work) and
     the per-server AD ACL group placed in the machine's local Administrators group —
     **PreFlight verifies both** (recursive membership by SID) and WARNs explicitly on
     a missing or inverted assignment.
+  - **Install, never upgrade**: PreFlight reads the version of the PSM already
+    installed on the machine (file version of the service's `CAPSM.exe`) and **stops
+    before changing anything** when it differs from `settings.psd1` → `PsmVersion`
+    (e.g. a 12.6 server with a 14.0 target). Use the CyberArk upgrade procedure or a
+    fresh machine instead. Same version = resume of our own deployment, allowed.
   - **Component account naming** (`settings.psd1` → `Registration.RenameComponents`,
     enabled by default): `RegisterComponent.exe` generates random names
     (`PSMApp_<hex>`/`PSMGw_<hex>`) **with no naming option** for PSM. After

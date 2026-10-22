@@ -124,6 +124,26 @@ try {
 
     # ===================== PHASE: PreFlight =====================
     if (-not (Test-PSMPhaseComplete 'PreFlight')) {
+        # Guard: this script INSTALLS, it does not UPGRADE. On a machine already
+        # running another PSM version (e.g. 12.6), the Installation stage would be
+        # skipped (service present) and the target version's PostInstallation /
+        # Registration / Hardening would run on top of the old binaries,
+        # re-registering a live PSM. Stop before touching anything.
+        $installed = Get-PSMInstalledVersion
+        $expected  = [string]$Settings.PsmVersion
+        if ($installed -is [string]) {   # 'Unreadable' (a [version] compared to a string would throw)
+            Write-PSMLog -Level WARN -Message ("PreFlight: a PSM service is present but its version could not be read - " +
+                "make sure it is the target version ($expected) before going further.")
+        }
+        elseif ($installed) {
+            $installedMM = '{0}.{1}' -f $installed.Major, $installed.Minor
+            if ($expected -and ($installedMM -ne $expected)) {
+                throw ("PreFlight: PSM $installed is ALREADY installed on this machine, the target is $expected " +
+                       "(settings.psd1 PsmVersion). This script installs, it does not upgrade - nothing was changed. " +
+                       'Upgrade with the CyberArk upgrade procedure, or deploy on a fresh machine.')
+            }
+            Write-PSMLog -Level INFO -Message "PreFlight: PSM $installed already installed (target $expected) - resuming our own deployment."
+        }
         Confirm-PSMZone -ZoneConfig $ZoneConfig -NonInteractive:$NonInteractive
         # Connectivity check of the RDS license servers (non-blocking: WARN).
         Test-PSMLicenseServers -Servers $Settings.Rds.LicenseServers | Out-Null

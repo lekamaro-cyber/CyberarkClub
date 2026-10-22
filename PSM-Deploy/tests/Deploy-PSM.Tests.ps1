@@ -94,6 +94,20 @@ Describe 'Stages module (driving CyberArk Execute-Stage.ps1)' {
     }
 }
 
+Describe 'Installed PSM version guard (install, never upgrade)' {
+    BeforeAll {
+        Import-Module (Join-Path $root 'modules\PSM.Install.psm1') -Force
+    }
+    It 'Get-PSMInstalledVersion returns $null, a [version] or Unreadable' {
+        $v = Get-PSMInstalledVersion
+        ($null -eq $v -or $v -is [version] -or $v -eq 'Unreadable') | Should -BeTrue
+    }
+    It 'settings.psd1 PsmVersion is a major.minor the guard can compare' {
+        $s = Import-PowerShellDataFile (Join-Path $root 'config\settings.psd1')
+        $s.PsmVersion | Should -Match '^\d+\.\d+$'
+    }
+}
+
 Describe 'Stage XML injection (config-driven, media intact)' {
     BeforeAll {
         Import-Module (Join-Path $root 'modules\PSM.Common.psm1')  -Force
