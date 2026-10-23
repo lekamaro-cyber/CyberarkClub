@@ -31,6 +31,17 @@
     #   Hardening.*). EMPTY by default = injection INACTIVE.
     #   WARNING: use the account's REAL sAMAccountName (20-character limit, often
     #   truncated compared to the Name/CN shown in the AD console).
+    #
+    # PsmVips: load-balancer VIPs in front of the PSMs (RDP). Key = VIP FQDN, i.e.
+    #   the DNS name the certificate must carry in its SAN; Members = the PSM
+    #   servers behind it (short names, case-insensitive). On each member, the
+    #   RdpCertificate phase looks in Cert:\LocalMachine\My for a valid
+    #   certificate WITH its private key whose SAN contains the VIP name (exact
+    #   name, a *.domain wildcard does not count), checks that NETWORK SERVICE
+    #   (TermService) can read the key, then binds it to the RDP listener.
+    #   Certificate absent / key not readable / binding failure = ALERT, never a
+    #   stop: fix by hand, then relaunch (the check runs on every launch).
+    #   @{} = no VIP in this zone (check inactive).
     # =====================================================================
 
     # --- Sandbox / PRE (test PVWA) ---------------------------------------
@@ -44,6 +55,10 @@
         InstallAccountUserName = ''
         PSMConnectUserName      = 'FRANCE\FRSVCPREPSMConnect'
         PSMAdminConnectUserName = 'FRANCE\FRSVCPREPSMAdminConn'  # real sAMAccountName (20-char limit)
+        PsmVips = @{
+            # '<vip fqdn>' = @{ Members = @('<PSM server>', '<PSM server>') }   # TODO: real VIP name
+            # e.g. 'psm-pre.intra.corp' = @{ Members = @('FRPRDSRV10012', 'FRPRDSRV10013') }
+        }
     }
 
     DC1 = @{
@@ -56,6 +71,7 @@
         InstallAccountUserName = '<INSTALL-USER-DC1>'      # name of the install account to retrieve
         PSMConnectUserName      = ''   # empty = no injection (see note above)
         PSMAdminConnectUserName = ''
+        PsmVips                 = @{}  # see note above
     }
 
     DC2 = @{
@@ -68,5 +84,6 @@
         InstallAccountUserName = '<INSTALL-USER-DC2>'
         PSMConnectUserName      = ''   # empty = no injection (see note above)
         PSMAdminConnectUserName = ''
+        PsmVips                 = @{}  # see note above
     }
 }

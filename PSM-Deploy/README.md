@@ -55,6 +55,7 @@ PSM-Deploy/
 │  ├─ PSM.Install.psm1       # CyberArk Installation + PostInstallation stages
 │  ├─ PSM.Register.psm1      # CyberArk Registration stage (Vault secret via -spwdObj)
 │  ├─ PSM.Hardening.psm1     # PSMHardening + controlled AppLocker policy
+│  ├─ PSM.Certificates.psm1  # RDP certificate of the PSMs behind a VIP (check + bind)
 │  └─ PSM.Software.psm1      # Generic config-driven install
 ├─ applocker/PSMConfigureAppLocker.xml   # Controlled AppLocker policy (placeholder)
 ├─ media/                    # (empty) PSM 12.6/14.0 media — not versioned
@@ -69,7 +70,7 @@ PSM-Deploy/
 ```
 PreFlight → Readiness → Prerequisites(RDS) → [reboot+resume] → RdsLicensing → Software
        → Installation → PostInstallation → Registration(secret via PVWA API)
-       → Hardening(+AppLocker) → Validation
+       → Hardening(+AppLocker) → RdpCertificate(every launch) → Validation
 
 Readiness / Prerequisites / Installation / PostInstallation / Registration / Hardening
 are **CyberArk stages** driven via `InstallationAutomation\Execute-Stage.ps1`
@@ -238,6 +239,21 @@ The resume is **interactive** (the PVWA `Get-Credential` prompts work) and
 - [ ] `InstallAccountSafe` / `InstallAccountUserName` (or empty = connected admin)
 - [ ] `PSMConnectUserName` / `PSMAdminConnectUserName` = **real sAMAccountNames**
       (20-character limit — check in AD, the Name/CN can differ)
+- [ ] `PsmVips` = the VIPs in front of the PSMs:
+      `'<vip fqdn>' = @{ Members = @('<PSM>', ...) }` (`@{}` = no VIP)
+
+**RDP certificate (`RdpCertificate` phase, PSM behind a VIP).** On each member
+of a `PsmVips` entry, the script looks in `Cert:\LocalMachine\My` for a
+certificate whose **SAN contains the VIP name** (exact name: a `*.domain`
+wildcard does not count), with its **private key**, valid, Server
+Authentication EKU (or none); the latest expiry wins. It then **checks only**
+that NETWORK SERVICE (TermService) can read the private key (the ACL is never
+changed) and binds the certificate to the RDP listener
+(`Win32_TSGeneralSetting`, `RDP-tcp`). Certificate absent, not usable, key not
+readable (then NOT bound: TermService could not open it) or binding failure =
+**framed ALERT with the manual fix, never a stop**. The phase is not recorded
+in `progress.json`: every launch re-checks it, so after a manual fix or a
+certificate renewal, relaunching `.\Deploy-PSM.ps1 -Zone <zone>` is enough.
 
 **Once per MEDIA version** (12.6, 14.0...):
 - [ ] Drop the media **as-is** under `media\PSM` (never edited by hand)
@@ -251,6 +267,8 @@ The resume is **interactive** (the PVWA `Get-Credential` prompts work) and
 **For EACH server:**
 - [ ] Machine: Server 2022, **domain-joined**, `D:` drive present, EDR exclusion
       for the install window (otherwise Hardening ends in the tolerated WARN)
+- [ ] Behind a VIP: the VIP certificate (PFX, **with private key**) imported into
+      `LocalMachine\My`, NETWORK SERVICE with Read on its private key
 - [ ] AD (ahead of time): the per-server ACL group
       `...-Administrators-<SERVER>` contains the zone's **PSMAdminConnect**
       (and NOT PSMConnect) — PreFlight verifies both and WARNs

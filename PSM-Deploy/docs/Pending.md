@@ -50,3 +50,6 @@ To do:
 - [ ] PreFlight version guard (install, never upgrade): test with `-Reset -WhatIf`.
 - [ ] Ordered credential sequence with rollback (`Sync-PSMComponentCredential`).
 - [ ] Merged software list (`software.psd1` + `software.extra.psd1`).
+- [ ] RDP certificate behind the VIP (`RdpCertificate` phase, zones.psd1 `PsmVips`):
+      certificate found + key check + binding. Flow tested off-server with a simulated
+      certificate store and WMI only.

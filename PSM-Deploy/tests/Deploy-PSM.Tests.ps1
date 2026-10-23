@@ -435,6 +435,60 @@ Describe 'Software list: common software.psd1 + per-type software.extra.psd1' {
     }
 }
 
+Describe 'RDP certificate (PSM behind a VIP, zones.psd1 PsmVips)' {
+    BeforeAll {
+        Import-Module (Join-Path $root 'modules\PSM.Common.psm1')       -Force
+        Import-Module (Join-Path $root 'modules\PSM.Certificates.psm1') -Force
+        Initialize-PSMLogging -LogDirectory (Join-Path $env:TEMP 'psm-test-logs')
+        $script:vipZone = @{ Name = 'TEST'; PsmVips = @{
+            'psm-vip.test.corp' = @{ Members = @('PSM01', 'PSM02.test.corp') }
+            'other.test.corp'   = @{ Members = @('PSM02') }
+            'broken.test.corp'  = @{ }
+        } }
+    }
+    It 'Every zone carries a PsmVips table whose entries all have Members' {
+        $z = Import-PowerShellDataFile (Join-Path $root 'config\zones.psd1')
+        foreach ($k in $z.Keys) {
+            $z[$k]['PsmVips'] | Should -BeOfType [System.Collections.IDictionary]
+            foreach ($vip in $z[$k].PsmVips.Keys) { $z[$k].PsmVips[$vip]['Members'] | Should -Not -BeNullOrEmpty }
+        }
+    }
+    It 'SAN match: exact and case-insensitive, a wildcard does NOT match' {
+        Test-PSMSanMatch -SanName 'PSM-VIP.test.corp'  -ExpectedName 'psm-vip.test.corp' | Should -BeTrue
+        Test-PSMSanMatch -SanName 'psm-vip.test.corp.' -ExpectedName 'psm-vip.test.corp' | Should -BeTrue
+        Test-PSMSanMatch -SanName '*.test.corp'        -ExpectedName 'psm-vip.test.corp' | Should -BeFalse
+        Test-PSMSanMatch -SanName ''                   -ExpectedName 'psm-vip.test.corp' | Should -BeFalse
+    }
+    It 'VIPs of a server: short name or FQDN member, case-insensitive; malformed entry skipped' {
+        @(Get-PSMServerVips -ZoneConfig $script:vipZone -ComputerName 'psm01') | Should -Be @('psm-vip.test.corp')
+        @(Get-PSMServerVips -ZoneConfig $script:vipZone -ComputerName 'PSM02' | Sort-Object) |
+            Should -Be @('other.test.corp', 'psm-vip.test.corp')
+        @(Get-PSMServerVips -ZoneConfig $script:vipZone -ComputerName 'PSM99').Count | Should -Be 0
+        @(Get-PSMServerVips -ZoneConfig @{ Name = 'X' } -ComputerName 'PSM01').Count | Should -Be 0
+    }
+    It 'Not behind a VIP / no PsmVips key: nothing to do, no alert' {
+        Invoke-PSMRdpCertificate -ZoneConfig $script:vipZone -ComputerName 'PSM99' | Should -BeTrue
+        Invoke-PSMRdpCertificate -ZoneConfig @{ Name = 'X' } -ComputerName 'PSM01' | Should -BeTrue
+    }
+    It 'Reads the SAN DNS names from the raw extension (IP / e-mail entries ignored)' -Skip:(-not ('System.Security.Cryptography.X509Certificates.CertificateRequest' -as [type])) {
+        $rsa = [System.Security.Cryptography.RSA]::Create(2048)
+        $req = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new('CN=test', $rsa, 'SHA256',
+                   [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+        $san = [System.Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder]::new()
+        $san.AddIpAddress([System.Net.IPAddress]::Parse('10.1.2.3'))
+        $san.AddDnsName('psm-vip.test.corp')
+        $san.AddEmailAddress('a@test.corp')
+        $san.AddDnsName('psm01.test.corp')
+        $req.CertificateExtensions.Add($san.Build())
+        $cert = $req.CreateSelfSigned([datetimeoffset]::Now.AddDays(-1), [datetimeoffset]::Now.AddDays(1))
+        @(Get-PSMCertSanDnsNames -Certificate $cert) | Should -Be @('psm-vip.test.corp', 'psm01.test.corp')
+        $noSan = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new('CN=nosan', $rsa, 'SHA256',
+                   [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+        @(Get-PSMCertSanDnsNames -Certificate $noSan.CreateSelfSigned([datetimeoffset]::Now, [datetimeoffset]::Now.AddDays(1))).Count |
+            Should -Be 0
+    }
+}
+
 Describe 'Software phase (optional entries)' {
     BeforeAll {
         Import-Module (Join-Path $root 'modules\PSM.Common.psm1')   -Force

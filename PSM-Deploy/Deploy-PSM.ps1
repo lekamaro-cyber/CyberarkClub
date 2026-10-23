@@ -12,7 +12,8 @@
     Phases (CyberArk stages are driven via InstallationAutomation\Execute-Stage.ps1):
       PreFlight -> Readiness -> Prerequisites(RDS) -> [reboot] -> RdsLicensing
              -> Software -> Installation -> PostInstallation -> [possible reboot at each stage]
-             -> Registration(secret via PVWA API) -> Hardening(+AppLocker) -> Validation
+             -> Registration(secret via PVWA API) -> Hardening(+AppLocker)
+             -> RdpCertificate(VIP certificate on RDP, every launch) -> Validation
 
 .PARAMETER Zone
     Zone key in config\zones.psd1 (e.g. DC1, DC2). Selects Vault/PVWA.
@@ -415,6 +416,20 @@ try {
         if ($r.RestartRequired -and -not $WhatIfPreference) { Start-PSMResumeReboot -Reason 'Hardening stage'; return }
     }
 
+    # ===================== PHASE: RDP certificate (PSM behind a VIP) =====================
+    # Certificate with the VIP name in its SAN (zones.psd1 PsmVips) bound to the
+    # RDP listener. NOT recorded in progress.json: the check is quick and
+    # idempotent, so every launch re-checks it (manual fix, renewed certificate).
+    # Any problem = ALERT, never a stop (fixed by hand, then relaunch).
+    $rdpCertAlert = $false
+    try {
+        $rdpCertAlert = -not (Invoke-PSMRdpCertificate -ZoneConfig $ZoneConfig -WhatIf:$WhatIfPreference)
+    }
+    catch {
+        $rdpCertAlert = $true
+        Write-PSMLog -Level WARN -Message "RDP certificate: unexpected error, nothing changed ($($_.Exception.Message)) - check by hand."
+    }
+
     # ===================== PHASE: Validation =====================
     if (-not (Test-PSMPhaseComplete 'Validation')) {
         if (Test-PSMInstalled) {
@@ -428,7 +443,13 @@ try {
 
     # Resume task cleanup once everything is done.
     Unregister-PSMResumeTask
-    Write-PSMLog -Level OK -Message "Deployment completed."
+    if ($rdpCertAlert) {
+        Write-PSMLog -Level WARN -Message ("Deployment completed WITH an RDP certificate ALERT (see above): fix it by hand, " +
+            "then relaunch .\Deploy-PSM.ps1 -Zone $Zone to re-check and bind.")
+    }
+    else {
+        Write-PSMLog -Level OK -Message "Deployment completed."
+    }
 }
 catch {
     Write-PSMLog -Level ERROR -Message "Stop (fail-fast): $($_.Exception.Message)"
