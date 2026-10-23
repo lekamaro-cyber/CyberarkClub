@@ -27,6 +27,9 @@
                          without the media staged).
     The PSM "covers everything"; these binaries are the clients/tools added afterwards.
     REMINDER: copied .exe binaries must be allowed in the AppLocker policy too.
+
+    The list itself = config\software.psd1 (common) + the optional
+    config\software.extra.psd1 (per server type) - see Get-PSMSoftwareList.
 #>
 
 Set-StrictMode -Version Latest
@@ -111,4 +114,43 @@ function Invoke-PSMSoftware {
     }
 }
 
-Export-ModuleMember -Function Invoke-PSMSoftware
+function Get-PSMSoftwareList {
+    <#
+        Software list of THIS server = the COMMON list plus the server type's
+        own additions, so a type never has to repeat the common applications:
+          - config\software.psd1        : common list (base tree, all types);
+          - config\software.extra.psd1  : OPTIONAL, same shape, typically
+                                          shipped by a PSM-Distribute overlay.
+        An extra entry with the same Name as a common one REPLACES it in place
+        (e.g. another Chrome version for one type); new names are appended.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [string] $SourcesRoot)
+
+    $basePath  = Join-Path $SourcesRoot 'config\software.psd1'
+    $extraPath = Join-Path $SourcesRoot 'config\software.extra.psd1'
+    $base = @((Import-PowerShellDataFile -Path $basePath)['Applications'] | Where-Object { $_ })
+    if (-not (Test-Path $extraPath)) {
+        Write-PSMLog -Level INFO -Message "Software: $($base.Count) application(s) from software.psd1 (no software.extra.psd1)."
+        return ,$base
+    }
+    $extra = @((Import-PowerShellDataFile -Path $extraPath)['Applications'] | Where-Object { $_ })
+
+    $merged   = [System.Collections.Generic.List[object]]::new()
+    foreach ($app in $base) { $merged.Add($app) }
+    $replaced = @()
+    $added    = @()
+    foreach ($app in $extra) {
+        if (-not $app['Name']) { throw "software.extra.psd1: an Applications entry has no 'Name'." }
+        $idx = -1
+        for ($i = 0; $i -lt $merged.Count; $i++) { if ($merged[$i]['Name'] -eq $app['Name']) { $idx = $i; break } }
+        if ($idx -ge 0) { $merged[$idx] = $app; $replaced += $app['Name'] }
+        else            { $merged.Add($app);    $added    += $app['Name'] }
+    }
+    Write-PSMLog -Level INFO -Message ("Software: $($merged.Count) application(s) = $($base.Count) from software.psd1 " +
+        "+ software.extra.psd1 (added: $(if ($added) { $added -join ', ' } else { 'none' }); " +
+        "replaced: $(if ($replaced) { $replaced -join ', ' } else { 'none' }))")
+    return ,$merged.ToArray()
+}
+
+Export-ModuleMember -Function Invoke-PSMSoftware, Get-PSMSoftwareList

@@ -399,6 +399,42 @@ Describe 'Test-PSMSettingsDrift (config drift vs script version)' {
     }
 }
 
+Describe 'Software list: common software.psd1 + per-type software.extra.psd1' {
+    BeforeAll {
+        Import-Module (Join-Path $root 'modules\PSM.Common.psm1')   -Force
+        Import-Module (Join-Path $root 'modules\PSM.Software.psm1') -Force
+        Initialize-PSMLogging -LogDirectory (Join-Path $env:TEMP 'psm-test-logs')
+        $script:newSources = {
+            param([string] $Extra)
+            $src = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path (Join-Path $src 'config') -Force | Out-Null
+            Set-Content -Path (Join-Path $src 'config\software.psd1') -Value @'
+@{ Applications = @(
+    @{ Name = 'Chrome'; Installer = 'installers\chrome\chrome-v1.msi'; DetectTest = '$true' }
+    @{ Name = 'Tool';   Installer = 'installers\tool\tool.msi';        DetectTest = '$true' }
+) }
+'@
+            if ($Extra) { Set-Content -Path (Join-Path $src 'config\software.extra.psd1') -Value $Extra }
+            return $src
+        }
+    }
+    It 'Without software.extra.psd1: the common list only' {
+        $list = Get-PSMSoftwareList -SourcesRoot (& $script:newSources $null)
+        @($list | ForEach-Object { $_.Name }) | Should -Be @('Chrome', 'Tool')
+    }
+    It 'Extra entries are ADDED to the common list (Chrome stays)' {
+        $src  = & $script:newSources "@{ Applications = @( @{ Name = 'SQLDev'; Installer = 'installers\sqldev\setup.msi'; DetectTest = '`$true' } ) }"
+        $list = Get-PSMSoftwareList -SourcesRoot $src
+        @($list | ForEach-Object { $_.Name }) | Should -Be @('Chrome', 'Tool', 'SQLDev')
+    }
+    It 'An extra entry with the same Name REPLACES the common one in place' {
+        $src  = & $script:newSources "@{ Applications = @( @{ Name = 'Chrome'; Installer = 'installers\chrome\chrome-v2.msi'; DetectTest = '`$true' } ) }"
+        $list = Get-PSMSoftwareList -SourcesRoot $src
+        $list.Count          | Should -Be 2
+        $list[0].Installer   | Should -Be 'installers\chrome\chrome-v2.msi'
+    }
+}
+
 Describe 'Software phase (optional entries)' {
     BeforeAll {
         Import-Module (Join-Path $root 'modules\PSM.Common.psm1')   -Force

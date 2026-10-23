@@ -223,7 +223,12 @@ The resume is **interactive** (the PVWA `Get-Credential` prompts work) and
     case encountered: EDR blocking system ACL modifications (even `takeown`). The failed
     steps remain **to be retried** (EDR exclusion, then remove `Hardening` from
     `state\progress.json` and rerun). Set back to `$false` for the strict behavior.
-- `config/software.psd1`: any additional software.
+- `config/software.psd1`: any additional software, **common to all server types**.
+  `config/software.extra.psd1` (optional, same shape, usually shipped by a
+  PSM-Distribute overlay) **adds** the type's own applications to that list: an
+  overlay no longer has to repeat the common ones (e.g. Chrome). An extra entry
+  with the **same `Name`** as a common one **replaces** it (e.g. another Chrome
+  version for one type). The deployment log shows the merged list.
 
 ## Per-server deployment checklist
 

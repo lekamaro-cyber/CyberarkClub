@@ -61,7 +61,6 @@ Get-ChildItem (Join-Path $SourcesRoot 'modules') -Filter '*.psm1' |
 # --- Configuration loading --------------------------------------------------
 $Settings = Import-PowerShellDataFile (Join-Path $SourcesRoot 'config\settings.psd1')
 $Zones    = Import-PowerShellDataFile (Join-Path $SourcesRoot 'config\zones.psd1')
-$Software = Import-PowerShellDataFile (Join-Path $SourcesRoot 'config\software.psd1')
 
 # --- Logging + state init ---------------------------------------------------
 $StateDir = Join-Path $SourcesRoot $Settings.Paths.State
@@ -253,7 +252,8 @@ try {
 
     # ===================== PHASE: Additional software =====================
     if (-not (Test-PSMPhaseComplete 'Software')) {
-        Invoke-PSMSoftware -SoftwareList $Software.Applications -SourcesRoot $SourcesRoot
+        # Common list (software.psd1) + the server type's additions (software.extra.psd1).
+        Invoke-PSMSoftware -SoftwareList (Get-PSMSoftwareList -SourcesRoot $SourcesRoot) -SourcesRoot $SourcesRoot
         if (-not $WhatIfPreference) { Set-PSMPhaseComplete 'Software' }
     }
 
