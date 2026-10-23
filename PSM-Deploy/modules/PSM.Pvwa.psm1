@@ -173,11 +173,77 @@ function Find-PvwaUser {
     return @()
 }
 
+function Write-PvwaTrace {
+    # Verbose trace of the PVWA calls (screen + deployment log). Never logs the
+    # Authorization header nor cookie VALUES.
+    param([string] $Message)
+    if (Get-Command Write-PSMLog -ErrorAction SilentlyContinue) { Write-PSMLog -Level INFO -Message "[PVWA] $Message" }
+    else { Write-Verbose "[PVWA] $Message" }
+}
+
+function Limit-PvwaText {
+    param([string] $Text, [int] $Max = 1500)
+    $flat = ($Text -replace '\s*[\r\n]+\s*', ' ')
+    if ($flat.Length -gt $Max) { return $flat.Substring(0, $Max) + " ... (+$($flat.Length - $Max) chars)" }
+    return $flat
+}
+
+function Format-PvwaUserState {
+    # One-line summary of a Vault user object (only the fields the PVWA returned).
+    param($User)
+    if ($null -eq $User) { return '(empty response)' }
+    $props = $User.PSObject.Properties.Name
+    $parts = foreach ($k in 'id', 'username', 'userType', 'componentUser', 'location', 'source',
+                            'suspended', 'enableUser', 'changePassOnNextLogon') {
+        if ($props -contains $k) { "$k=$($User.$k)" }
+    }
+    return ($parts -join ' ')
+}
+
+function Invoke-PvwaRequestTraced {
+    <#
+        PVWA REST call with a full trace: method, URI, HTTP status, duration,
+        and on error the response body sent by the PVWA. Same session handling
+        as the other calls (Authorization header + load-balancer web session).
+        Re-throws the original error, so callers keep their error matching
+        (e.g. '(401)' for the reconnect logic).
+    #>
+    param(
+        [Parameter(Mandatory)] $Session,
+        [Parameter(Mandatory)] [string] $Method,
+        [Parameter(Mandatory)] [string] $Uri,
+        [string] $Body,
+        [int] $TimeoutSec = 60
+    )
+    $params = @{ Uri = $Uri; Method = $Method; Headers = $Session.Headers; TimeoutSec = $TimeoutSec
+                 UseBasicParsing = $true; ErrorAction = 'Stop' }
+    if ($Session.WebSession) { $params.WebSession = $Session.WebSession }
+    if ($Body) { $params.Body = $Body; $params.ContentType = 'application/json' }
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        $r = Invoke-WebRequest @params
+    }
+    catch {
+        $sw.Stop()
+        $code = try { [int]$_.Exception.Response.StatusCode } catch { '?' }
+        $detail = if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $_.ErrorDetails.Message } else { $_.Exception.Message }
+        Write-PvwaTrace "$Method $Uri -> HTTP $code in $($sw.ElapsedMilliseconds) ms - response: $(Limit-PvwaText $detail)"
+        throw
+    }
+    $sw.Stop()
+    Write-PvwaTrace "$Method $Uri -> HTTP $($r.StatusCode) in $($sw.ElapsedMilliseconds) ms ($([string]$r.Content).Length chars)"
+    if ([string]::IsNullOrWhiteSpace([string]$r.Content)) { return $null }
+    return ([string]$r.Content | ConvertFrom-Json)
+}
+
 function Rename-PvwaUser {
     <#
         Renames a Vault user through the PVWA API (PUT /API/Users/{id}):
         fetches the full object, replaces 'username', returns the updated object.
         Used to align the PSM component accounts with the naming convention.
+        VERBOSE: every call is traced (URI, HTTP status, duration), with the
+        user's state before, the PUT body, the PUT response and a read-back of
+        the user by id right after the PUT.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -186,7 +252,19 @@ function Rename-PvwaUser {
         [Parameter(Mandatory)] [string] $NewUserName,
         [int] $TimeoutSec = 60
     )
-    $match = @(Find-PvwaUser -Session $Session -Search $UserName | Where-Object { $_.username -eq $UserName })
+    $cookieNames = try {
+        @($Session.WebSession.Cookies.GetCookies([uri]$Session.PvwaUrl) | ForEach-Object { $_.Name }) -join ', '
+    } catch { '' }
+    if (-not $cookieNames) { $cookieNames = 'none (no load-balancer affinity cookie)' }
+    Write-PvwaTrace "RENAME '$UserName' -> '$NewUserName' | PVWA $($Session.PvwaUrl) | session cookies: $cookieNames"
+
+    # 1. Search the user by its current name.
+    $searchUri = "$($Session.PvwaUrl)/PasswordVault/API/Users?search=$([uri]::EscapeDataString($UserName))"
+    $resp = Invoke-PvwaRequestTraced -Session $Session -Method Get -Uri $searchUri -TimeoutSec $TimeoutSec
+    $all  = if ($resp -and ($resp.PSObject.Properties.Name -contains 'Users')) { @($resp.Users) } else { @() }
+    Write-PvwaTrace ("search '$UserName': $($all.Count) result(s): " +
+                     ((@($all | ForEach-Object { "$($_.username) (id $($_.id))" })) -join ', '))
+    $match = @($all | Where-Object { $_.username -eq $UserName })
     if ($match.Count -ne 1) {
         throw "Rename-PvwaUser: user '$UserName' not found or ambiguous ($($match.Count) result(s)) on the Vault side."
     }
@@ -194,18 +272,32 @@ function Rename-PvwaUser {
 
     if (-not $PSCmdlet.ShouldProcess($UserName, "Rename to '$NewUserName' (PVWA API)")) { return $null }
 
+    # 2. Full user object, state before the rename.
     $userUri = "$($Session.PvwaUrl)/PasswordVault/API/Users/$id"
-    $user    = Invoke-RestMethod -Uri $userUri -Method Get -Headers $Session.Headers -WebSession $Session.WebSession -TimeoutSec $TimeoutSec -ErrorAction Stop
+    $user    = Invoke-PvwaRequestTraced -Session $Session -Method Get -Uri $userUri -TimeoutSec $TimeoutSec
+    Write-PvwaTrace "before: $(Format-PvwaUserState $user)"
+
+    # 3. PUT with only 'username' changed.
     $user.username = $NewUserName
+    $body = $user | ConvertTo-Json -Depth 8 -Compress
+    Write-PvwaTrace "PUT body: $(Limit-PvwaText $body)"
     try {
-        return Invoke-RestMethod -Uri $userUri -Method Put -Headers $Session.Headers -WebSession $Session.WebSession `
-                -Body ($user | ConvertTo-Json -Depth 8) -ContentType 'application/json' `
-                -TimeoutSec $TimeoutSec -ErrorAction Stop
+        $result = Invoke-PvwaRequestTraced -Session $Session -Method Put -Uri $userUri -Body $body -TimeoutSec $TimeoutSec
     }
     catch {
         throw ("PVWA rename of '$UserName' to '$NewUserName' failed: $($_.Exception.Message). " +
                'Alternative: rename the user in PVWA (Administration > Users) then relaunch.')
     }
+    Write-PvwaTrace "PUT response: $(Format-PvwaUserState $result)"
+    Write-PvwaTrace "PUT response raw: $(Limit-PvwaText ($result | ConvertTo-Json -Depth 8 -Compress))"
+
+    # 4. Read-back by id, independent of the search index.
+    try {
+        $after = Invoke-PvwaRequestTraced -Session $Session -Method Get -Uri $userUri -TimeoutSec $TimeoutSec
+        Write-PvwaTrace "read-back by id: $(Format-PvwaUserState $after)"
+    }
+    catch { Write-PvwaTrace "read-back by id failed: $($_.Exception.Message)" }
+    return $result
 }
 
 function Remove-PvwaUser {

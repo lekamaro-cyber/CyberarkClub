@@ -506,8 +506,10 @@ function Rename-PSMComponentAccounts {
                     Rename-PvwaUser -Session $Session -UserName $t.OldName -NewUserName $t.NewName | Out-Null
                     $renamed = $false
                     for ($i = 1; $i -le 6 -and -not $renamed; $i++) {
-                        $renamed = [bool]@(Find-PvwaUser -Session $Session -Search $t.NewName |
-                                           Where-Object { $_.username -eq $t.NewName }).Count
+                        $found   = @(Find-PvwaUser -Session $Session -Search $t.NewName)
+                        $renamed = [bool]@($found | Where-Object { $_.username -eq $t.NewName }).Count
+                        Write-PSMLog -Level INFO -Message ("[PVWA] rename check $i/6: search '$($t.NewName)' -> $($found.Count) result(s): " +
+                            ((@($found | ForEach-Object { "$($_.username) (id $($_.id))" })) -join ', '))
                         if (-not $renamed) { Start-Sleep -Seconds 5 }
                     }
                     if (-not $renamed) {
