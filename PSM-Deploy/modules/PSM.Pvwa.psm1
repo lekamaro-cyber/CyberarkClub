@@ -232,8 +232,17 @@ function Invoke-PvwaRequestTraced {
     }
     $sw.Stop()
     Write-PvwaTrace "$Method $Uri -> HTTP $($r.StatusCode) in $($sw.ElapsedMilliseconds) ms ($(([string]$r.Content).Length) chars)"
-    if ([string]::IsNullOrWhiteSpace([string]$r.Content)) { return $null }
-    return ([string]$r.Content | ConvertFrom-Json)
+    $content = [string]$r.Content
+    if ([string]::IsNullOrWhiteSpace($content)) { return $null }
+    try { return ($content | ConvertFrom-Json) }
+    catch {
+        # A non-JSON answer (e.g. an HTML page) does not come from the PVWA API
+        # itself - show it raw instead of a bare "Invalid JSON primitive".
+        Write-PvwaTrace ("$Method $Uri -> response is NOT JSON (HTTP $($r.StatusCode), Content-Type " +
+                         "'$($r.Headers['Content-Type'])'): $(Limit-PvwaText $content)")
+        throw ("PVWA returned a non-JSON response to $Method $Uri (HTTP $($r.StatusCode)) - probably not " +
+               "the PVWA itself (load balancer / WAF page?): $(Limit-PvwaText $content 300)")
+    }
 }
 
 function Rename-PvwaUser {
