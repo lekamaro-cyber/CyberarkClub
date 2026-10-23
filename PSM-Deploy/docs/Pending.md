@@ -51,5 +51,6 @@ To do:
 - [ ] Ordered credential sequence with rollback (`Sync-PSMComponentCredential`).
 - [ ] Merged software list (`software.psd1` + `software.extra.psd1`).
 - [ ] RDP certificate behind the VIP (`RdpCertificate` phase, zones.psd1 `PsmVips`):
-      certificate found + key check + binding. Flow tested off-server with a simulated
-      certificate store and WMI only.
+      validated on FRPRDSRV10013 (certificate found by SAN, key readable by NETWORK
+      SERVICE, already bound -> OK) and the "NO private key" alert on FRPRDSRV10012.
+      Not exercised yet on a server: an actual binding change (CHANGED).
