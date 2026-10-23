@@ -231,7 +231,7 @@ function Invoke-PvwaRequestTraced {
         throw
     }
     $sw.Stop()
-    Write-PvwaTrace "$Method $Uri -> HTTP $($r.StatusCode) in $($sw.ElapsedMilliseconds) ms ($([string]$r.Content).Length chars)"
+    Write-PvwaTrace "$Method $Uri -> HTTP $($r.StatusCode) in $($sw.ElapsedMilliseconds) ms ($(([string]$r.Content).Length) chars)"
     if ([string]::IsNullOrWhiteSpace([string]$r.Content)) { return $null }
     return ([string]$r.Content | ConvertFrom-Json)
 }
@@ -261,7 +261,9 @@ function Rename-PvwaUser {
     # 1. Search the user by its current name.
     $searchUri = "$($Session.PvwaUrl)/PasswordVault/API/Users?search=$([uri]::EscapeDataString($UserName))"
     $resp = Invoke-PvwaRequestTraced -Session $Session -Method Get -Uri $searchUri -TimeoutSec $TimeoutSec
-    $all  = if ($resp -and ($resp.PSObject.Properties.Name -contains 'Users')) { @($resp.Users) } else { @() }
+    # @( if ... ) - not "if { @(...) }": PowerShell unrolls a one-element array
+    # assigned from an 'if', and .Count on a single object throws under StrictMode.
+    $all  = @(if ($resp -and ($resp.PSObject.Properties.Name -contains 'Users')) { $resp.Users })
     Write-PvwaTrace ("search '$UserName': $($all.Count) result(s): " +
                      ((@($all | ForEach-Object { "$($_.username) (id $($_.id))" })) -join ', '))
     $match = @($all | Where-Object { $_.username -eq $UserName })
