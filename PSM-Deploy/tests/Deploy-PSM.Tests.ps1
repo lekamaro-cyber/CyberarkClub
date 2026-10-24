@@ -435,6 +435,30 @@ Describe 'Software list: common software.psd1 + per-type software.extra.psd1' {
     }
 }
 
+Describe 'RDS license servers (reachable ones written first)' {
+    BeforeAll {
+        Import-Module (Join-Path $root 'modules\PSM.Common.psm1')  -Force
+        Import-Module (Join-Path $root 'modules\PSM.Prereqs.psm1') -Force
+        Initialize-PSMLogging -LogDirectory (Join-Path $env:TEMP 'psm-test-logs')
+        # Reachable server = a local listener; unreachable = a name that never resolves.
+        $script:listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+        $script:listener.Start()
+        $script:port = $script:listener.LocalEndpoint.Port
+    }
+    AfterAll { $script:listener.Stop() }
+    It 'Puts the reachable server first, keeps the unreachable one after it' {
+        @(Get-PSMLicenseServerOrder -Servers 'lic-otherdc.invalid', '127.0.0.1' -Port $script:port -TimeoutMs 1000) |
+            Should -Be @('127.0.0.1', 'lic-otherdc.invalid')
+    }
+    It 'Keeps the config order when all or none are reachable, and for a single server' {
+        @(Get-PSMLicenseServerOrder -Servers '127.0.0.1', 'localhost' -Port $script:port -TimeoutMs 1000) |
+            Should -Be @('127.0.0.1', 'localhost')
+        @(Get-PSMLicenseServerOrder -Servers 'a.invalid', 'b.invalid' -Port $script:port -TimeoutMs 1000) |
+            Should -Be @('a.invalid', 'b.invalid')
+        @(Get-PSMLicenseServerOrder -Servers 'only.invalid' -Port $script:port) | Should -Be @('only.invalid')
+    }
+}
+
 Describe 'RDP certificate (PSM behind a VIP, zones.psd1 PsmVips)' {
     BeforeAll {
         Import-Module (Join-Path $root 'modules\PSM.Common.psm1')       -Force

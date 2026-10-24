@@ -10,11 +10,13 @@
     # --- RD Session Host licensing ---------------------------------------
     Rds = @{
         LicenseMode    = 'PerUser'                 # 'PerUser' | 'PerDevice'
-        # One OR several license servers, in order of preference.
-        # Written into the 'LicenseServers' registry value (comma-separated list).
+        # One OR several license servers (e.g. one per datacenter). Written into
+        # the 'LicenseServers' registry value (comma-separated list): the servers
+        # REACHABLE from the machine (TCP 135, tested at deployment) first, the
+        # others kept after them (DR). Same order as here inside each group.
         LicenseServers = @(
             'FRPRDSRV8930.france.intra.corp'
-            # '<RDS-LICENSE-SERVER-2>'             # optional additional server
+            # '<RDS-LICENSE-SERVER-2>'             # other datacenter's server
         )
     }
 

@@ -34,6 +34,27 @@ function Get-PSMRegValue {
     }
 }
 
+function Test-PSMTcpReachable {
+    # TCP connect test with a timeout ($true = the port answered).
+    param(
+        [Parameter(Mandatory)] [string] $Server,
+        [int] $Port      = 135,
+        [int] $TimeoutMs = 3000
+    )
+    $ok = $false
+    try {
+        $client = [System.Net.Sockets.TcpClient]::new()
+        $iar    = $client.BeginConnect($Server, $Port, $null, $null)
+        if ($iar.AsyncWaitHandle.WaitOne($TimeoutMs)) {
+            $client.EndConnect($iar)
+            $ok = $client.Connected
+        }
+        $client.Close()
+    }
+    catch { $ok = $false }
+    return $ok
+}
+
 function Test-PSMLicenseServers {
     <#
         Connectivity check towards the RDS license server(s).
@@ -48,18 +69,7 @@ function Test-PSMLicenseServers {
     )
     $allOk = $true
     foreach ($srv in (@($Servers) | Where-Object { $_ })) {
-        $ok = $false
-        try {
-            $client = [System.Net.Sockets.TcpClient]::new()
-            $iar    = $client.BeginConnect($srv, $Port, $null, $null)
-            if ($iar.AsyncWaitHandle.WaitOne($TimeoutMs)) {
-                $client.EndConnect($iar)
-                $ok = $client.Connected
-            }
-            $client.Close()
-        }
-        catch { $ok = $false }
-
+        $ok = Test-PSMTcpReachable -Server $srv -Port $Port -TimeoutMs $TimeoutMs
         if ($ok) {
             Write-PSMLog -Level OK   -Message "RDS license server reachable: $srv (TCP $Port)."
         }
@@ -69,6 +79,39 @@ function Test-PSMLicenseServers {
         }
     }
     return $allOk
+}
+
+function Get-PSMLicenseServerOrder {
+    <#
+        Order in which the license servers are written: the ones REACHABLE
+        from this server first, then the others - kept in the list (DR: the
+        flows between datacenters are closed today, the other DC's server may
+        be needed later). Config order is kept inside each group; none
+        reachable = config order (WARN).
+    #>
+    [CmdletBinding()]
+    param(
+        [string[]] $Servers,
+        [int]      $Port      = 135,
+        [int]      $TimeoutMs = 3000
+    )
+    $list = @(@($Servers) | Where-Object { $_ })
+    if ($list.Count -le 1) { return $list }
+    $reachable   = @()
+    $unreachable = @()
+    foreach ($srv in $list) {
+        if (Test-PSMTcpReachable -Server $srv -Port $Port -TimeoutMs $TimeoutMs) { $reachable += $srv }
+        else                                                                    { $unreachable += $srv }
+    }
+    if (-not $reachable) {
+        Write-PSMLog -Level WARN -Message ("RDS license servers: NONE reachable (TCP $Port) among $($list -join ', ') - " +
+            'written in config order, check DNS/firewall.')
+        return $list
+    }
+    $ordered = @($reachable + $unreachable)
+    Write-PSMLog -Level INFO -Message ("RDS license servers: reachable first -> $($ordered -join ', ')" +
+        $(if ($unreachable) { " (not reachable from here, kept after for DR: $($unreachable -join ', '))" }))
+    return $ordered
 }
 
 function Invoke-PSMReadiness {
@@ -100,14 +143,15 @@ function Invoke-PSMPrerequisites {
 function Invoke-PSMRdsLicensing {
     <#
         Configures the RD Session Host licensing mode and license server(s)
-        ('LicenseServers' registry value = comma-separated list).
+        ('LicenseServers' registry value = comma-separated list, the servers
+        reachable from this machine first - see Get-PSMLicenseServerOrder).
         To be run AFTER the RDS role installation (Prerequisites stage).
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param([Parameter(Mandatory)] $Settings)
 
     $licMode    = $Settings.Rds.LicenseMode
-    $licSrvList = @($Settings.Rds.LicenseServers) | Where-Object { $_ }
+    $licSrvList = @(Get-PSMLicenseServerOrder -Servers $Settings.Rds.LicenseServers)
     $licSrvStr  = $licSrvList -join ','
     $rdKey      = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
 
@@ -134,4 +178,4 @@ function Invoke-PSMRdsLicensing {
 }
 
 Export-ModuleMember -Function Invoke-PSMReadiness, Invoke-PSMPrerequisites, `
-                              Invoke-PSMRdsLicensing, Test-PSMLicenseServers, Get-PSMRegValue
+                              Invoke-PSMRdsLicensing, Test-PSMLicenseServers, Get-PSMLicenseServerOrder, Get-PSMRegValue
