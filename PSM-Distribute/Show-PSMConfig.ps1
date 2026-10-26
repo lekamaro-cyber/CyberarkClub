@@ -61,6 +61,16 @@ function Format-CfgValue {
     return [string]$Value
 }
 
+function Get-Psd1SyntaxErrors {
+    # Import-PowerShellDataFile only says "could not be parsed": the parser gives
+    # the line and the reason (missing quote, duplicate key, missing brace...).
+    param([Parameter(Mandatory)] [string] $Path)
+    $full = (Resolve-Path -LiteralPath $Path).ProviderPath
+    $errs = $null
+    [void][System.Management.Automation.Language.Parser]::ParseFile($full, [ref]$null, [ref]$errs)
+    return @($errs | Select-Object -First 3 | ForEach-Object { "line $($_.Extent.StartLineNumber): $($_.Message)" })
+}
+
 function New-PSMConfigModel {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [string] $ConfigPath)
@@ -76,12 +86,20 @@ function New-PSMConfigModel {
             if ($Required) { Add-Check 'Error' $Label "Not found: $Path" }
             return $null
         }
-        try { return Import-PowerShellDataFile -LiteralPath $Path }
+        $syntax = @(Get-Psd1SyntaxErrors -Path $Path)
+        if ($syntax) {
+            Add-Check 'Error' $Label "SYNTAX ERROR in $Path - $($syntax -join ' | ') (the deployment cannot read this file either)."
+            return $null
+        }
+        # -ErrorAction Stop: on 5.1 the cmdlet only WRITES its error (not catchable otherwise).
+        try { return Import-PowerShellDataFile -LiteralPath $Path -ErrorAction Stop }
         catch { Add-Check 'Error' $Label "Cannot be read: $($_.Exception.Message)"; return $null }
     }
 
     if (-not (Test-Path -LiteralPath $ConfigPath)) { throw "distribution.psd1 not found: $ConfigPath (use -ConfigPath)." }
-    $dist        = Import-PowerShellDataFile -LiteralPath $ConfigPath
+    $syntax = @(Get-Psd1SyntaxErrors -Path $ConfigPath)
+    if ($syntax) { throw "SYNTAX ERROR in $ConfigPath - $($syntax -join ' | ')" }
+    $dist        = Import-PowerShellDataFile -LiteralPath $ConfigPath -ErrorAction Stop
     $baseRoot    = [string](Get-CfgValue $dist 'SourceRoot')
     $overlayRoot = [string](Get-CfgValue $dist 'OverlayRoot')
     if (-not $baseRoot -or -not $overlayRoot) { throw "distribution.psd1: SourceRoot and OverlayRoot are required." }
