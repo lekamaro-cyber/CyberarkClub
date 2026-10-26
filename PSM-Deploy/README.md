@@ -57,6 +57,7 @@ PSM-Deploy/
 │  ├─ PSM.Hardening.psm1     # PSMHardening + controlled AppLocker policy
 │  ├─ PSM.Certificates.psm1  # RDP certificate of the PSMs behind a VIP (check + bind)
 │  └─ PSM.Software.psm1      # Generic config-driven install
+├─ tools/Test-PSMRdsReadiness.ps1        # READ-ONLY check before (re)running InstallRDS
 ├─ applocker/PSMConfigureAppLocker.xml   # Controlled AppLocker policy (placeholder)
 ├─ media/                    # (empty) PSM 12.6/14.0 media — not versioned
 ├─ installers/               # (empty) additional binaries — not versioned
