@@ -129,6 +129,31 @@ consistent with the PSM-Deploy doctrine.
 .\Distribute-PSMSources.ps1 -Server <srv> -SkipStaging
 ```
 
+## Configuration view (`Show-PSMConfig.ps1`)
+
+A READ-ONLY window (WPF) that puts the whole configuration on one screen, from
+the same files the push uses: `config\distribution.psd1`, the base
+`config\settings.psd1` / `zones.psd1` / `software.psd1`, and each profile's
+overlay (an overlay file wins over the base one, as in the staging trees).
+It never connects to a server and never writes anything.
+
+```powershell
+.\Show-PSMConfig.ps1            # the window
+.\Show-PSMConfig.ps1 -NoGui     # same content in the console
+```
+
+| Tab | Shows |
+|-----|-------|
+| Profiles | each profile, its servers, and the software they will install: common list + profile (`software.extra.psd1`), where each file is staged (base / profile / MISSING) |
+| Servers | profile, zone, VIP, push lot (account) and software count per server |
+| Zones and VIPs | PVWA, Vault, session accounts per zone; each VIP (= the SAN expected in the RDP certificate) and its members |
+| Settings | the key `settings.psd1` and `distribution.psd1` values |
+| Checks | errors / warnings / info: profile not declared, installer missing, overlay folder not declared, VIP member outside the inventory, zone mismatch, `autorun.inf` in the media, placeholders left in a zone |
+
+Optional `Zone = '<zones.psd1 key>'` on a `Servers` entry: shown in the view and
+checked against the server's VIP (ignored by `Distribute-PSMSources.ps1`).
+Without it, the zone is deduced from the VIPs the server belongs to.
+
 ## Behavior & warnings
 
 - Transport is `robocopy /MIR` over the admin share

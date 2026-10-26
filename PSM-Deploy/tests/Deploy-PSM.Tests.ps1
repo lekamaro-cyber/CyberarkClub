@@ -783,3 +783,57 @@ Describe 'PSM-Distribute (source distribution from the CPM)' {
         }
     }
 }
+
+Describe 'Show-PSMConfig (read-only configuration view)' {
+    BeforeAll {
+        $script:showConfig = Join-Path (Split-Path $root -Parent) 'PSM-Distribute\Show-PSMConfig.ps1'
+        # Fake CPM: base + overlays STD (none) / MDW (missing installer) / ARK (replaces
+        # a common entry), an undeclared overlay folder, a VIP member outside the inventory.
+        $cpm = Join-Path $TestDrive 'cpm'
+        foreach ($d in 'PSM-Deploy\config', 'Overlays\MDW\config', 'Overlays\ARK\config', 'Overlays\ARK\installers\pa', 'Overlays\OLD') {
+            New-Item -ItemType Directory -Path (Join-Path $cpm $d) -Force | Out-Null
+        }
+        Set-Content -Path (Join-Path $cpm 'PSM-Deploy\config\settings.psd1') -Value "@{ PsmVersion = '14.0'; Install = @{ InstallDir = 'D:\CyberArk'; RecordingDir = '' } }"
+        Set-Content -Path (Join-Path $cpm 'PSM-Deploy\config\zones.psd1') -Value "@{ PRE = @{ Name = 'PRE'; PvwaUrl = 'https://pvwa'; PsmVips = @{ 'vip.test.corp' = @{ Members = @('SRV1', 'SRV9') } } } }"
+        Set-Content -Path (Join-Path $cpm 'PSM-Deploy\config\software.psd1') -Value "@{ Applications = @( @{ Name = 'Tool'; Installer = 'installers\tool.msi'; Optional = `$true } ) }"
+        Set-Content -Path (Join-Path $cpm 'Overlays\MDW\config\software.extra.psd1') -Value "@{ Applications = @( @{ Name = 'SSMS'; Installer = 'installers\ssms.exe' } ) }"
+        Set-Content -Path (Join-Path $cpm 'Overlays\ARK\config\software.extra.psd1') -Value "@{ Applications = @( @{ Name = 'Tool'; Installer = 'installers\pa\pa.msi' } ) }"
+        Set-Content -Path (Join-Path $cpm 'Overlays\ARK\installers\pa\pa.msi') -Value 'x'
+        $script:distCfg = Join-Path $cpm 'distribution.psd1'
+        Set-Content -Path $script:distCfg -Value @"
+@{
+    SourceRoot = '$cpm\PSM-Deploy'; OverlayRoot = '$cpm\Overlays'
+    ServerTypes = @('STD', 'MDW', 'ARK')
+    PushAccounts = @{ LOT = @{ Match = 'SRV*'; UserName = 'svc'; Address = 'corp'; LogonName = '' } }
+    Servers = @( @{ Name = 'SRV1'; Type = 'STD' }, @{ Name = 'SRV2'; Type = 'MDW'; Zone = 'PRE' }, @{ Name = 'SRV3'; Type = 'ARK' } )
+}
+"@
+        $script:model = & $script:showConfig -ConfigPath $script:distCfg -PassThru
+    }
+    It 'Lists the profiles with their servers' {
+        @($script:model.Profiles | ForEach-Object { $_.Name }) | Should -Be @('STD', 'MDW', 'ARK')
+        @($script:model.Profiles | Where-Object Name -eq 'STD').Servers | Should -Be @('SRV1')
+    }
+    It 'Shows the effective software list (common + profile, same Name = replaced)' {
+        $mdw = ($script:model.Profiles | Where-Object Name -eq 'MDW').Software
+        @($mdw | ForEach-Object { $_.Software }) | Should -Be @('Tool', 'SSMS')
+        $ark = ($script:model.Profiles | Where-Object Name -eq 'ARK').Software
+        @($ark).Count     | Should -Be 1
+        $ark[0].Origin    | Should -Be 'Profile (replaces common)'
+        $ark[0].Staged    | Should -Be 'Profile'
+    }
+    It 'Resolves zone (declared or from the VIP) and push lot per server' {
+        $srv1 = $script:model.Servers | Where-Object Server -eq 'SRV1'
+        $srv1.Zone    | Should -Be 'PRE (from VIP)'
+        $srv1.VIP     | Should -Be 'vip.test.corp'
+        $srv1.PushLot | Should -Be 'LOT (svc)'
+        ($script:model.Servers | Where-Object Server -eq 'SRV2').Zone | Should -Be 'PRE'
+    }
+    It 'Flags the configuration mistakes' {
+        $text = @($script:model.Checks | ForEach-Object { "$($_.Level)|$($_.Topic)|$($_.Detail)" }) -join "`n"
+        $text | Should -Match "Error\|Profile MDW\|'SSMS': file not found"
+        $text | Should -Match "Warning\|Overlays\|Folder 'OLD' is not a declared profile"
+        $text | Should -Match "Warning\|VIP vip.test.corp\|Member 'SRV9' is not in the server inventory"
+        $script:model.Errors | Should -Be 1
+    }
+}
