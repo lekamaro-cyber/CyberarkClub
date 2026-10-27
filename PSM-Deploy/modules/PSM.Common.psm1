@@ -125,10 +125,12 @@ function Invoke-IdempotentStep {
         Runs an idempotent step.
         -Test   : scriptblock returning $true when the target state is already met.
         -Action : scriptblock applying the target state (only when Test = $false).
-        Honors -WhatIf / -Confirm via ShouldProcess.
+        Honors -WhatIf / -Confirm via ShouldProcess. ConfirmImpact Medium: no
+        per-step prompt by default (software, RDS licensing, RDP certificate...);
+        -Confirm (or $ConfirmPreference = 'Medium') brings the prompts back.
         Returns: 'OK' (already compliant), 'CHANGED' (applied), 'WHATIF', 'FAILED'.
     #>
-    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
     param(
         [Parameter(Mandatory)] [string]      $Name,
         [Parameter(Mandatory)] [scriptblock] $Test,

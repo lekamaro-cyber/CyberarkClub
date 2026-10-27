@@ -105,7 +105,7 @@ The resume is **interactive** (the PVWA `Get-Credential` prompts work) and
 # 2) "Plan" mode (dry-run) — changes nothing:
 .\Deploy-PSM.ps1 -Zone DC1 -WhatIf
 
-# 3) Real deployment (interactive confirmations, including the zone):
+# 3) Real deployment (asks only for the zone confirmation and the PVWA account):
 .\Deploy-PSM.ps1 -Zone DC1
 
 # 4) Resume (normally automatic via the scheduled task after reboot):
@@ -287,8 +287,9 @@ certificate renewal, relaunching `.\Deploy-PSM.ps1 -Zone <zone>` is enough.
       (direct Vault admin from the PSM — do NOT stage it on production PSMs;
       on a hardened PSM, allow `PrivateArk.exe` in the AppLocker policy)
 - [ ] Launch: `.\Deploy-PSM.ps1 -Zone <zone> -Reset` — then let it run
-      (reboots auto-resume; one PVWA prompt at Registration; type `YES`/`A`
-      at the confirmations)
+      (reboots auto-resume; type `YES` once at the zone confirmation; one PVWA
+      prompt at Registration; no per-step confirmation - software, RDS
+      licensing and RDP certificate apply on their own)
 
 ## Distributing the sources (multi-server)
 
