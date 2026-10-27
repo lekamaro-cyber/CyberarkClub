@@ -153,6 +153,10 @@ try {
             }
             Write-PSMLog -Level INFO -Message "PreFlight: PSM $installed already installed (target $expected) - resuming our own deployment."
         }
+        # Logic check of -Zone (no mapping: the zones' PsmVips members), shown
+        # BEFORE the zone confirmation. An alert, never a stop.
+        try { Test-PSMZoneByVip -Zones $Zones -ZoneKey $Zone | Out-Null }
+        catch { Write-PSMLog -Level WARN -Message "Zone check skipped: $($_.Exception.Message)" }
         Confirm-PSMZone -ZoneConfig $ZoneConfig -NonInteractive:$NonInteractive
         # Connectivity check of the RDS license servers (non-blocking: WARN).
         Test-PSMLicenseServers -Servers $Settings.Rds.LicenseServers | Out-Null

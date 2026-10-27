@@ -490,6 +490,17 @@ Describe 'RDP certificate (PSM behind a VIP, zones.psd1 PsmVips)' {
         @(Get-PSMServerVips -ZoneConfig $script:vipZone -ComputerName 'PSM99').Count | Should -Be 0
         @(Get-PSMServerVips -ZoneConfig @{ Name = 'X' } -ComputerName 'PSM01').Count | Should -Be 0
     }
+    It 'Zone check (no mapping): consistent, wrong zone, in no VIP, zone without VIP' {
+        $zones = @{
+            PRE = @{ Name = 'PRE'; PsmVips = @{ 'vip-pre.test.corp' = @{ Members = @('PSM01') } } }
+            PRD = @{ Name = 'PRD'; PsmVips = @{ 'vip-prd.test.corp' = @{ Members = @('PSM02') } } }
+            DC1 = @{ Name = 'DC1'; PsmVips = @{} }
+        }
+        Test-PSMZoneByVip -Zones $zones -ZoneKey 'PRE' -ComputerName 'psm01' | Should -BeTrue
+        Test-PSMZoneByVip -Zones $zones -ZoneKey 'PRE' -ComputerName 'PSM02' | Should -BeFalse   # behind a PRD VIP
+        Test-PSMZoneByVip -Zones $zones -ZoneKey 'PRD' -ComputerName 'PSM99' | Should -BeFalse   # zone has VIPs, server in none
+        Test-PSMZoneByVip -Zones $zones -ZoneKey 'DC1' -ComputerName 'PSM99' | Should -BeNullOrEmpty
+    }
     It 'Not behind a VIP / no PsmVips key: nothing to do, no alert' {
         Invoke-PSMRdpCertificate -ZoneConfig $script:vipZone -ComputerName 'PSM99' | Should -BeTrue
         Invoke-PSMRdpCertificate -ZoneConfig @{ Name = 'X' } -ComputerName 'PSM01' | Should -BeTrue

@@ -131,6 +131,47 @@ function Get-PSMServerVips {
     return $vips
 }
 
+function Test-PSMZoneByVip {
+    <#
+        Logic check of the -Zone choice WITHOUT any server->zone mapping: the
+        zones' PsmVips already say which servers sit behind which VIP.
+          - behind a VIP of the selected zone                    -> OK,    $true;
+          - not behind a VIP of the selected zone (it has VIPs),
+            or behind a VIP of ANOTHER zone                      -> ALERT, $false;
+          - the selected zone declares no VIP and no other zone
+            lists the server                                     -> INFO,  $null.
+        Never blocks: the operator decides at the zone confirmation that follows.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Zones,
+        [Parameter(Mandatory)] [string] $ZoneKey,
+        [string] $ComputerName = $env:COMPUTERNAME
+    )
+    $mine = @(Get-PSMServerVips -ZoneConfig $Zones[$ZoneKey] -ComputerName $ComputerName)
+    if ($mine.Count -gt 0) {
+        Write-PSMLog -Level OK -Message "Zone check: $ComputerName is behind VIP(s) $($mine -join ', ') of zone '$ZoneKey' - consistent."
+        return $true
+    }
+    $elsewhere = @()
+    foreach ($k in @($Zones.Keys | Where-Object { $_ -ne $ZoneKey } | Sort-Object)) {
+        foreach ($v in @(Get-PSMServerVips -ZoneConfig $Zones[$k] -ComputerName $ComputerName)) { $elsewhere += "$v (zone '$k')" }
+    }
+    $zoneVips = Get-PSMConfigValue -Config $Zones[$ZoneKey] -Key 'PsmVips'
+    $hasVips  = ($zoneVips -is [System.Collections.IDictionary]) -and $zoneVips.Count -gt 0
+    if (-not $hasVips -and -not $elsewhere) {
+        Write-PSMLog -Level INFO -Message ("Zone check: zone '$ZoneKey' declares no VIP and no other zone lists $ComputerName " +
+            '- nothing to cross-check.')
+        return $null
+    }
+    $lines = @("$ComputerName is NOT behind any VIP of the selected zone '$ZoneKey'.")
+    if ($elsewhere) { $lines += "It IS behind: $($elsewhere -join ', ')  ->  is -Zone '$ZoneKey' the right one?" }
+    else            { $lines += 'It is not behind any VIP of the other zones either (zones.psd1 PsmVips).' }
+    $lines += 'Check the zone BEFORE typing YES. If the zone is right, add the server to that zone''s VIP Members.'
+    Write-PSMAlert -Title 'ZONE CHECK' -Lines $lines
+    return $false
+}
+
 function Get-PSMPrivateKeyFile {
     # Machine key file of the certificate's private key, $null when not found
     # (e.g. key held by a TPM/HSM provider).
@@ -324,4 +365,4 @@ function Invoke-PSMRdpCertificate {
 }
 
 Export-ModuleMember -Function Invoke-PSMRdpCertificate, Get-PSMServerVips, Get-PSMCertSanDnsNames,
-    Test-PSMSanMatch, Test-PSMNetworkServiceKeyRead
+    Test-PSMSanMatch, Test-PSMNetworkServiceKeyRead, Test-PSMZoneByVip
