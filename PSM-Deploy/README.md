@@ -191,7 +191,11 @@ The resume is **interactive** (the PVWA `Get-Credential` prompts work) and
     fresh machine instead. Same version = resume of our own deployment, allowed.
   - **Component account naming** (`settings.psd1` → `Registration.RenameComponents`,
     enabled by default): `RegisterComponent.exe` generates random names
-    (`PSMApp_<hex>`/`PSMGw_<hex>`) **with no naming option** for PSM. After
+    (`PSMApp_<hex>`/`PSMGw_<hex>`) **with no naming option** for PSM. (The 14.0
+    `RegistrationConfig.xml` does have a `psmuserssuffix` parameter, passed to
+    `RegisterComponent.exe` by `InvokeRegistrationTool.psm1`, but it only replaces
+    the suffix: the `PSMApp_`/`PSMGw_` prefix stays, so it cannot produce the
+    `PSM-<HOSTNAME>` convention - checked 2026-10-27, renaming kept.) After
     registration, the script automatically renames them per the convention
     (`PSM-<HOSTNAME>` / `PSMA<HOSTNAME>`, configurable patterns): Vault user via
     the PVWA API (verified), then, step by step with pauses and a check at each step:
