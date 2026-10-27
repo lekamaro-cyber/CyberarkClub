@@ -51,6 +51,15 @@ param(
     [pscredential] $PvwaCredential
 )
 
+# --- "Downloaded from the Internet" mark ------------------------------------
+# Files extracted from a downloaded archive carry a Zone.Identifier mark, and
+# robocopy carries it to every server: PowerShell then refuses or asks to
+# confirm each module/script, installers may show a security warning. Remove
+# it from the whole sources tree BEFORE loading the modules (no-op when there
+# is none; -WhatIf:$false so plan mode does not print one line per file).
+Get-ChildItem -LiteralPath $PSScriptRoot -Recurse -File -ErrorAction SilentlyContinue |
+    Unblock-File -ErrorAction SilentlyContinue -WhatIf:$false
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 

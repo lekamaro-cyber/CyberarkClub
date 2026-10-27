@@ -129,6 +129,13 @@ consistent with the PSM-Deploy doctrine.
 .\Distribute-PSMSources.ps1 -Server <srv> -SkipStaging
 ```
 
+> After downloading a new version of the scripts, run `Unblock-File` on the
+> ZIP **before** extracting it on the CPM (or
+> `Get-ChildItem D:\PSMSources -Recurse -File | Unblock-File` afterwards):
+> robocopy carries the "downloaded from the Internet" mark to every server.
+> `Deploy-PSM.ps1` also removes it on each server before loading its modules,
+> as a safety net.
+
 ## Configuration view (`Show-PSMConfig.ps1`)
 
 A READ-ONLY window (WPF) that puts the whole configuration on one screen, from
