@@ -99,6 +99,19 @@ function Write-PSMLog {
     }
 }
 
+function Write-PSMAlert {
+    # Framed multi-line WARN, so the alert stands out in the console and the log.
+    param(
+        [Parameter(Mandatory)] [string]   $Title,
+        [Parameter(Mandatory)] [string[]] $Lines
+    )
+    $bar = '*' * 78
+    Write-PSMLog -Level WARN -Message $bar
+    Write-PSMLog -Level WARN -Message "ALERT - $Title"
+    foreach ($l in $Lines) { Write-PSMLog -Level WARN -Message "  $l" }
+    Write-PSMLog -Level WARN -Message $bar
+}
+
 # ---------------------------------------------------------------------------
 # Elevation
 # ---------------------------------------------------------------------------

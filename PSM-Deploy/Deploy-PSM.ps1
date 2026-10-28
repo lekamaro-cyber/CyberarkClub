@@ -24,6 +24,13 @@
 .PARAMETER NonInteractive
     Skips the interactive confirmations (reserve for automation).
 
+.PARAMETER NoPvwa
+    For a server with NO network flow to the PVWA: no PVWA call at all. The
+    Vault install account (a CyberArk/Vault account - LDAP accounts are refused
+    by the registration) is entered directly and checked by the Vault on port
+    1858; the component accounts are NOT renamed (a framed alert lists the
+    manual steps). Remembered for the resume after a reboot.
+
 .EXAMPLE
     # "Plan" mode (dry-run): changes nothing
     .\Deploy-PSM.ps1 -Zone DC1 -WhatIf
@@ -31,6 +38,10 @@
 .EXAMPLE
     # Real deployment with confirmations
     .\Deploy-PSM.ps1 -Zone DC1
+
+.EXAMPLE
+    # Server that cannot reach the PVWA
+    .\Deploy-PSM.ps1 -Zone DC1 -NoPvwa
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -48,7 +59,11 @@ param(
     # PVWA account of the admin performing the installation. When omitted in
     # interactive mode, it is requested via Get-Credential. Vault secrets are then
     # retrieved through the PVWA REST API (no CCP/AIM).
-    [pscredential] $PvwaCredential
+    # With -NoPvwa: the Vault install account itself.
+    [pscredential] $PvwaCredential,
+
+    # No network flow to the PVWA from this server (see .PARAMETER NoPvwa).
+    [switch] $NoPvwa
 )
 
 # --- "Downloaded from the Internet" mark ------------------------------------
@@ -103,7 +118,22 @@ if (-not $Zones.ContainsKey($Zone)) {
 }
 $ZoneConfig = $Zones[$Zone]
 
-Write-PSMLog -Level INFO -Message "=== PSM deployment $($Settings.PsmVersion) | Zone $Zone | Resume=$Resume | WhatIf=$($WhatIfPreference) ==="
+# --- -NoPvwa (no flow to the PVWA from this server) --------------------------
+# Remembered in the state: the resume after a reboot does not pass it. A manual
+# launch uses exactly what it is given (and records it).
+if ($Resume) {
+    if (-not $NoPvwa -and [bool](Get-PSMStateValue -Name 'NoPvwa')) {
+        $NoPvwa = $true
+        Write-PSMLog -Level INFO -Message 'Resume: -NoPvwa re-read from state.'
+    }
+}
+elseif (-not $WhatIfPreference) { Set-PSMStateValue -Name 'NoPvwa' -Value ([bool]$NoPvwa) }
+
+Write-PSMLog -Level INFO -Message "=== PSM deployment $($Settings.PsmVersion) | Zone $Zone | Resume=$Resume | NoPvwa=$NoPvwa | WhatIf=$($WhatIfPreference) ==="
+if ($NoPvwa) {
+    Write-PSMLog -Level WARN -Message ('-NoPvwa: no PVWA call. At Registration the Vault install account is entered directly ' +
+        '(CyberArk/Vault account, checked by the Vault), and the component accounts are NOT renamed (manual steps listed then).')
+}
 
 # Schedules the supervised resume (AtLogOn) then reboots. Callers mark the phase
 # complete BEFORE calling this when the stage succeeded; a phase interrupted by a
@@ -315,7 +345,42 @@ try {
     # ===================== CyberArk STAGE: Registration (secret via PVWA) =====================
     if (-not (Test-PSMPhaseComplete 'Registration')) {
         if ($WhatIfPreference) {
-            Write-PSMLog -Level INFO -Message "WhatIf: the Registration stage would run (Vault password retrieved via the PVWA API)."
+            if ($NoPvwa) { Write-PSMLog -Level INFO -Message 'WhatIf: the Registration stage would run (-NoPvwa: Vault install account entered directly, no rename).' }
+            else         { Write-PSMLog -Level INFO -Message 'WhatIf: the Registration stage would run (Vault password retrieved via the PVWA API).' }
+        }
+        elseif ($NoPvwa) {
+            # No flow to the PVWA from this server: the Vault install account is
+            # entered directly and checked by the Vault itself during the
+            # registration (port 1858). No PVWA call, hence no component rename.
+            if (-not [bool](Get-PSMStateValue -Name 'RegistrationStageDone')) {
+                if ($ZoneConfig.InstallAccountSafe) {
+                    Write-PSMLog -Level WARN -Message ('-NoPvwa: zones.psd1 InstallAccountSafe/InstallAccountUserName ignored ' +
+                        '(fetching that account needs the PVWA API) - enter the Vault install account instead.')
+                }
+                $installCred = $PvwaCredential
+                if (-not $installCred) {
+                    if ($NonInteractive) { throw '-NoPvwa -NonInteractive: pass the Vault install account with -PvwaCredential.' }
+                    $installCred = Get-Credential -Message ('Vault install account for the PSM registration (-NoPvwa). CyberArk/Vault ' +
+                        'account (LDAP is refused); checked by the Vault: a wrong password fails the registration.')
+                    if (-not $installCred) { throw 'Registration cancelled: no Vault install account entered.' }
+                }
+                Register-PSMSecret -Secret $installCred.Password
+                $r = Invoke-PSMRegister -Settings $Settings -SourcesRoot $SourcesRoot `
+                        -InstallCredential $installCred `
+                        -VaultAddress $ZoneConfig.VaultAddress
+                if (-not $r.Succeeded) {
+                    throw ("Registration stage failed: $($r.ErrorData) (-NoPvwa: a wrong Vault password also ends here - " +
+                           'mind the account lockout before retrying).')
+                }
+                Set-PSMStateValue -Name 'RegistrationStageDone' -Value $true
+            }
+            else {
+                Write-PSMLog -Level INFO -Message 'CyberArk registration already completed.'
+                $r = [pscustomobject]@{ Succeeded = $true; RestartRequired = $false }
+            }
+            Write-PSMManualRenameAlert -Settings $Settings
+            Set-PSMPhaseComplete 'Registration'
+            if ($r.RestartRequired) { Start-PSMResumeReboot -Reason 'Registration stage'; return }
         }
         else {
             # 1) PVWA authentication of the admin performing the installation, WITH

@@ -627,6 +627,36 @@ Describe 'Existing component Vault user (Overwrite / password-sync policy)' {
     }
 }
 
+Describe '-NoPvwa: component account names and manual rename alert' {
+    BeforeAll {
+        Import-Module (Join-Path $root 'modules\PSM.Common.psm1')   -Force
+        Import-Module (Join-Path $root 'modules\PSM.Pvwa.psm1')     -Force
+        Import-Module (Join-Path $root 'modules\PSM.Register.psm1') -Force
+        Initialize-PSMLogging -LogDirectory (Join-Path $env:TEMP 'psm-test-logs')
+        $vault = Join-Path $TestDrive 'PSM\Vault'
+        New-Item -ItemType Directory -Path $vault -Force | Out-Null
+        Set-Content -Path (Join-Path $vault 'psmapp.cred') -Value 'Username=PSMApp_a1b2c3'
+        Set-Content -Path (Join-Path $vault 'psmgw.cred')  -Value 'Username=PSMGw_a1b2c3'
+        Set-Content -Path (Join-Path $TestDrive 'PSM\basic_psm.ini') -Value @(
+            "PSMAppCredFile=`"$vault\psmapp.cred`"", "PSMGWCredFile=`"$vault\psmgw.cred`"")
+        $script:npSettings = @{ Install = @{ InstallDir = $TestDrive }
+            Registration = @{ RenameComponents = $true; AppUserPattern = 'PSM-{HOSTNAME}'; GwUserPattern = 'PSMA{HOSTNAME}' } }
+    }
+    It 'Reads the generated names from the cred files and computes the targets' {
+        $rows = @(Get-PSMComponentAccountNames -Settings $script:npSettings)
+        $rows.Count      | Should -Be 2
+        $rows[0].Current | Should -Be 'PSMApp_a1b2c3'
+        $rows[0].Target  | Should -Be "PSM-$($env:COMPUTERNAME.ToUpper())"
+        $rows[1].Current | Should -Be 'PSMGw_a1b2c3'
+        $rows[1].Target  | Should -Be "PSMA$($env:COMPUTERNAME.ToUpper())"
+    }
+    It 'The alert never throws (rename on or off)' {
+        { Write-PSMManualRenameAlert -Settings $script:npSettings } | Should -Not -Throw
+        $off = @{ Install = $script:npSettings.Install; Registration = @{ RenameComponents = $false } }
+        { Write-PSMManualRenameAlert -Settings $off } | Should -Not -Throw
+    }
+}
+
 Describe 'Test-PSMDomainAccount (SID resolution of the zone accounts)' {
     BeforeAll {
         Import-Module (Join-Path $root 'modules\PSM.Common.psm1') -Force

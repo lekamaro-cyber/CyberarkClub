@@ -26,19 +26,6 @@ $ErrorActionPreference = 'Stop'
 $script:ServerAuthEku = '1.3.6.1.5.5.7.3.1'
 $script:SanOid        = '2.5.29.17'
 
-function Write-PSMAlert {
-    # Framed multi-line WARN, so the alert stands out in the console and the log.
-    param(
-        [Parameter(Mandatory)] [string]   $Title,
-        [Parameter(Mandatory)] [string[]] $Lines
-    )
-    $bar = '*' * 78
-    Write-PSMLog -Level WARN -Message $bar
-    Write-PSMLog -Level WARN -Message "ALERT - $Title"
-    foreach ($l in $Lines) { Write-PSMLog -Level WARN -Message "  $l" }
-    Write-PSMLog -Level WARN -Message $bar
-}
-
 function Test-PSMSanMatch {
     <#
         $true when the SAN DNS name matches the expected name: exact,

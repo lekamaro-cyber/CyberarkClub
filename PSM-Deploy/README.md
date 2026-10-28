@@ -111,6 +111,13 @@ The resume is **interactive** (the PVWA `Get-Credential` prompts work) and
 # 4) Resume (normally automatic via the scheduled task after reboot):
 .\Deploy-PSM.ps1 -Zone DC1 -Resume
 
+# 4b) Server with NO network flow to the PVWA: no PVWA call at all. The Vault
+#     install account (CyberArk/Vault account, not LDAP) is asked directly and
+#     checked by the Vault (port 1858); the component accounts are NOT renamed -
+#     a framed alert gives current -> target names and the manual steps.
+#     Remembered for the resume after a reboot.
+.\Deploy-PSM.ps1 -Zone DC1 -NoPvwa
+
 # 5) Start over from SCRATCH (after uninstalling/cleaning up the PSM): resets
 #    the state to replay ALL phases (Installation included):
 .\Deploy-PSM.ps1 -Zone DC1 -Reset
