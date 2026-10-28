@@ -54,3 +54,28 @@ To do:
       validated on FRPRDSRV10013 (certificate found by SAN, key readable by NETWORK
       SERVICE, already bound -> OK) and the "NO private key" alert on FRPRDSRV10012.
       Not exercised yet on a server: an actual binding change (CHANGED).
+
+## 5. PRD Vault: PSM license full (blocks every new PSM)
+
+**Found on 2026-10-28** (NLHOUSRV10662): `RegisterComponent.log` -> `ITATS937E Limit of 40
+licensed PSM users exceeded`. License file: PSM = 20, multiplicity 2 (one application + one
+gateway user per PSM, both of type `PSM`). Registered today: 18 official PSMs + BEDRPSRV10648/10649
+= 20 servers = 40/40. PSMP users are counted apart (`PSMPServer`, 16/40). Not a network or
+`-NoPvwa` issue.
+
+To do:
+- [ ] License extension for the migration (peak = old + new PSMs running at the same time),
+      or unregister each replaced old PSM (its 2 users + PSM Server object) before the new one.
+- [ ] Check System Health for long-disconnected PSMs still holding 2 slots each.
+
+## 6. Gateway user naming does not match production
+
+Production gateways are `PSMGw_<HOST>` (older PSMs) or `Gw_<HOST>` (recent ones); the
+application user is always `PSM-<HOST>`. `settings.psd1` `GwUserPattern = 'PSMA{HOSTNAME}'`
+matches no production server (only BEDRPSRV10648/10649, renamed by the script).
+
+To do:
+- [ ] Choose the convention: `Gw_{HOSTNAME}`, or `PSMGw_{HOSTNAME}` (= the 14.0 native name:
+      no gateway rename at all, only the application user).
+- [ ] Set `GwUserPattern` accordingly, then fix BEDRPSRV10648/10649 (remove `Registration`
+      from `state\progress.json`, relaunch with the PVWA reachable: only the gateway is renamed).
