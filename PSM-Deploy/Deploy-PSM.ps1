@@ -40,6 +40,17 @@
     sessions: a reboot the stage asks for is announced, to do by hand).
     Typical use: after an EDR exclusion, instead of editing state\progress.json.
 
+.PARAMETER Upgrade
+    Upgrades the installed PSM with the media under media\PSM when the media
+    carries a HIGHER version (e.g. a 14.0 build fixing a vulnerability). The
+    14.0 CyberArk automation has no upgrade mode: the script runs the checks
+    (service running, no pending reboot, free space, open sessions listed, YES),
+    backs up the PSM configuration, launches the CyberArk wizard (the operator
+    clicks through it), resumes after its reboot, checks the new version, then
+    replays the Hardening, the RDP certificate and the configuration check.
+    No registration, no rename (an upgrade keeps them). Each step is recorded:
+    any relaunch (or the resume task) continues an unfinished upgrade.
+
 .EXAMPLE
     # "Plan" mode (dry-run): changes nothing
     .\Deploy-PSM.ps1 -Zone DC1 -WhatIf
@@ -55,6 +66,11 @@
 .EXAMPLE
     # Replay the Hardening on a PSM already in place (e.g. after an EDR exclusion)
     .\Deploy-PSM.ps1 -Zone DC1 -RedoHardening
+
+.EXAMPLE
+    # Upgrade the installed PSM with the newer media (dry-run first)
+    .\Deploy-PSM.ps1 -Zone DC1 -Upgrade -WhatIf
+    .\Deploy-PSM.ps1 -Zone DC1 -Upgrade
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -79,7 +95,10 @@ param(
     [switch] $NoPvwa,
 
     # Replay ONLY the Hardening stage on a PSM in place (see .PARAMETER RedoHardening).
-    [switch] $RedoHardening
+    [switch] $RedoHardening,
+
+    # Upgrade the installed PSM with the newer media (see .PARAMETER Upgrade).
+    [switch] $Upgrade
 )
 
 # --- "Downloaded from the Internet" mark ------------------------------------
@@ -119,6 +138,9 @@ if ($Reset -and $Resume) {
 if ($RedoHardening -and ($Reset -or $Resume)) {
     throw "-RedoHardening cannot be combined with -Reset or -Resume (it replays the Hardening stage only)."
 }
+if ($Upgrade -and ($Reset -or $RedoHardening)) {
+    throw "-Upgrade cannot be combined with -Reset or -RedoHardening (the upgrade replays the Hardening itself)."
+}
 if ($Reset) {
     Reset-PSMState
     Unregister-PSMResumeTask   # removes a possibly stale resume task
@@ -146,9 +168,10 @@ if ($Resume) {
         Write-PSMLog -Level INFO -Message 'Resume: -NoPvwa re-read from state.'
     }
 }
-elseif (-not $WhatIfPreference -and -not $RedoHardening) { Set-PSMStateValue -Name 'NoPvwa' -Value ([bool]$NoPvwa) }
+elseif (-not $WhatIfPreference -and -not $RedoHardening -and -not $Upgrade) { Set-PSMStateValue -Name 'NoPvwa' -Value ([bool]$NoPvwa) }
 
-Write-PSMLog -Level INFO -Message "=== PSM deployment $($Settings.PsmVersion) | Zone $Zone | Resume=$Resume | NoPvwa=$NoPvwa | RedoHardening=$RedoHardening | WhatIf=$($WhatIfPreference) ==="
+Write-PSMLog -Level INFO -Message ("=== PSM deployment $($Settings.PsmVersion) | Zone $Zone | Resume=$Resume | NoPvwa=$NoPvwa | " +
+    "RedoHardening=$RedoHardening | Upgrade=$Upgrade | WhatIf=$($WhatIfPreference) ===")
 if ($NoPvwa) {
     Write-PSMLog -Level WARN -Message ('-NoPvwa: no PVWA call. At Registration the Vault install account is entered directly ' +
         '(CyberArk/Vault account, checked by the Vault), and the component accounts are NOT renamed (manual steps listed then).')
@@ -267,8 +290,14 @@ function Write-PSMEndMessage {
     }
 }
 
+$upgradeInProgress = $false   # read by the catch block below
 try {
     Assert-PSMElevation
+
+    # An unfinished -Upgrade (state 'Upgrade', step not 'Done') takes over any
+    # launch: the resume task after the installer's reboot, or a relaunch.
+    $upgradeState      = Get-PSMStateValue -Name 'Upgrade'
+    $upgradeInProgress = [bool]($upgradeState -and ([string]$upgradeState.Step -ne 'Done'))
 
     # ===================== -RedoHardening: the Hardening stage ONLY =====================
     # For a PSM ALREADY in place, deployed by this script or not: none of the
@@ -276,6 +305,10 @@ try {
     # restarted automatically (live sessions). Then the RDP certificate and the
     # configuration check, as at the end of a deployment.
     if ($RedoHardening) {
+        if ($upgradeInProgress) {
+            throw ("-RedoHardening: an upgrade is in progress (step '$($upgradeState.Step)') - " +
+                   "relaunch .\Deploy-PSM.ps1 -Zone $Zone -Upgrade to finish it (it replays the Hardening).")
+        }
         if (-not (Test-PSMInstalled)) {
             throw '-RedoHardening: no PSM service on this machine - nothing to harden (deploy it first).'
         }
@@ -308,6 +341,124 @@ try {
         exit 0
     }
 
+    # ===================== -Upgrade: newer media over the installed PSM =====================
+    # Steps recorded in the state ('Upgrade': From, Target, Setup, Backup, Step):
+    # Installer (CyberArk wizard, run by the operator) -> Hardening -> Checks -> Done.
+    # No registration, no rename: an upgrade keeps the PSM's Vault identity.
+    if ($Upgrade -or $upgradeInProgress) {
+        $wizardRan = $false
+        if (-not $upgradeInProgress) {
+            # --- Checks: any failure stops BEFORE changing anything ---------------
+            $installed = Get-PSMInstalledVersion
+            if (-not $installed) { throw '-Upgrade: no PSM service on this machine - deploy it instead.' }
+            if ($installed -isnot [version]) { throw '-Upgrade: the version of the installed PSM cannot be read (service path) - upgrade it by hand.' }
+            if ((Test-PSMPhaseComplete 'PreFlight') -and -not (Test-PSMPhaseComplete 'Registration')) {
+                throw "-Upgrade: the deployment of this server is not finished - relaunch .\Deploy-PSM.ps1 -Zone $Zone to finish it first."
+            }
+            $setup = Get-PSMMediaSetup -Settings $Settings -SourcesRoot $SourcesRoot
+            if ($setup.Version -le (ConvertTo-PSMFullVersion $installed)) {
+                throw ("-Upgrade: nothing to upgrade - installed PSM $installed, media $($setup.Version) ($($setup.Path)). " +
+                       'Drop the newer CyberArk media under media\PSM first.')
+            }
+            $mediaMM = '{0}.{1}' -f $setup.Version.Major, $setup.Version.Minor
+            if ($mediaMM -ne [string]$Settings.PsmVersion) {
+                throw "-Upgrade: the media is $($setup.Version) but settings.psd1 PsmVersion is '$($Settings.PsmVersion)' - set PsmVersion = '$mediaMM' first."
+            }
+            $svc = Get-Service -Name 'CyberArk Privileged Session Manager'
+            if ([string]$svc.Status -ne 'Running') {
+                throw "-Upgrade: the PSM service is $($svc.Status) - an upgrade does not repair a PSM: fix it first."
+            }
+            $pending = @(Test-PSMPendingReboot | Where-Object { $_ -ne 'pending file renames' })
+            if ($pending) { throw "-Upgrade: a reboot is pending ($($pending -join ', ')) - reboot first." }
+            $psmDir = Get-PSMInstalledPsmDir -Settings $Settings
+            foreach ($drive in @('C', (Split-Path $psmDir -Qualifier).TrimEnd(':')) | Select-Object -Unique) {
+                $freeGb = [math]::Round((Get-PSDrive -Name $drive -ErrorAction Stop).Free / 1GB, 1)
+                if ($freeGb -lt 3) { throw "-Upgrade: only $freeGb GB free on ${drive}: - free some space first." }
+            }
+            try { Test-PSMZoneByVip -Zones $Zones -ZoneKey $Zone | Out-Null }
+            catch { Write-PSMLog -Level WARN -Message "Zone check skipped: $($_.Exception.Message)" }
+            $others = @(Get-PSMOtherSessions)
+            Write-PSMAlert -Title "PSM UPGRADE $installed -> $($setup.Version) on $env:COMPUTERNAME" -Lines @(
+                "Installer: $($setup.Path)",
+                'The PSM service stops during the upgrade: OPEN SESSIONS ARE CUT.',
+                "Open sessions now: $(if ($others) { $others -join ', ' } else { 'none' })",
+                'Take the server out of the VIP pool first when it serves users.',
+                'Then: backup of the PSM configuration -> CyberArk wizard (you click through it; accept its',
+                'restart: the script resumes at your next logon) -> new version checked -> Hardening replayed',
+                '-> RDP certificate -> configuration check. No registration, no rename.')
+            if ($others -and $NonInteractive) { throw "-Upgrade -NonInteractive: sessions are open ($($others -join ', ')) - stopping." }
+            Confirm-PSMZone -ZoneConfig $ZoneConfig -NonInteractive:$NonInteractive
+            Assert-PSMZoneAccounts
+
+            $backup = Backup-PSMConfiguration -PsmDir $psmDir -Label "$installed" -WhatIf:$WhatIfPreference
+            if ($WhatIfPreference) {
+                Write-PSMLog -Level INFO -Message ("WhatIf: the CyberArk wizard $($setup.Path) would run ($installed -> $($setup.Version)), " +
+                    'then the Hardening, the RDP certificate and the configuration check.')
+                $auditAlerts = Invoke-PSMAuditPhase -RdpCertAlert (Invoke-PSMRdpCertificatePhase)
+                Write-PSMSummary
+                exit 0
+            }
+            $upgradeState = [pscustomobject]@{
+                From = "$installed"; Target = "$($setup.Version)"; Setup = $setup.Path; Backup = $backup
+                Step = 'Installer'; Started = (Get-Date -Format 's') }
+            Set-PSMStateValue -Name 'Upgrade' -Value $upgradeState
+        }
+        else {
+            Write-PSMLog -Level INFO -Message "Upgrade $($upgradeState.From) -> $($upgradeState.Target) in progress: resuming at step '$($upgradeState.Step)'."
+        }
+
+        # Armed for the whole upgrade: the installer may restart the machine by itself.
+        $resumeUser = Get-PSMStateValue -Name 'InstallUser'
+        if (-not $resumeUser) { $resumeUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name }
+        Register-PSMResumeTask -ScriptPath $PSCommandPath -Zone $Zone -User $resumeUser
+
+        # --- Step Installer: the CyberArk wizard, until the new version is there ---
+        if ($upgradeState.Step -eq 'Installer') {
+            $target = ConvertTo-PSMFullVersion $upgradeState.Target
+            $now    = ConvertTo-PSMFullVersion (Get-PSMInstalledVersion)
+            if (-not $now -or $now -lt $target) {
+                Write-PSMLog -Level WARN -Message ("Launching the CyberArk wizard ($($upgradeState.Setup)): follow it to the end. If it asks to " +
+                    "restart, accept: the script resumes at the next logon of '$resumeUser'.")
+                Start-Process -FilePath $upgradeState.Setup -WorkingDirectory (Split-Path $upgradeState.Setup -Parent) -Wait
+                $wizardRan = $true
+                $now = ConvertTo-PSMFullVersion (Get-PSMInstalledVersion)
+                if (-not $now -or $now -lt $target) {
+                    throw ("Upgrade NOT applied: installed version $(if ($now) { $now } else { 'unreadable' }), expected $target " +
+                           "(wizard cancelled or failed - see its log). Relaunch .\Deploy-PSM.ps1 -Zone $Zone -Upgrade to run it again.")
+                }
+            }
+            Write-PSMLog -Level OK -Message "PSM upgraded: $now (from $($upgradeState.From)). Backup of the previous configuration: $($upgradeState.Backup)"
+            $upgradeState.Step = 'Hardening'
+            Set-PSMStateValue -Name 'Upgrade' -Value $upgradeState
+            # The installer finished in THIS run and left a reboot pending: reboot
+            # (resume task armed) before replaying the Hardening.
+            if ($wizardRan -and @(Test-PSMPendingReboot).Count -gt 0) {
+                Start-PSMResumeReboot -Reason 'PSM upgrade (installer)'
+                return
+            }
+        }
+
+        # --- Step Hardening: replayed as is (same config and tolerance) -------------
+        if ($upgradeState.Step -eq 'Hardening') {
+            $r = Invoke-PSMHardeningPhase
+            if (Test-PSMPhaseComplete 'Registration') { Set-PSMPhaseComplete 'Hardening' }
+            $upgradeState.Step = 'Checks'
+            Set-PSMStateValue -Name 'Upgrade' -Value $upgradeState
+            if ($r.RestartRequired) { Start-PSMResumeReboot -Reason 'Hardening stage (upgrade)'; return }
+        }
+
+        # --- Step Checks: RDP certificate + configuration check, then done -----------
+        $rdpCertAlert = Invoke-PSMRdpCertificatePhase
+        $upgradeState.Step = 'Done'
+        $upgradeState | Add-Member -NotePropertyName Finished -NotePropertyValue (Get-Date -Format 's') -Force
+        Set-PSMStateValue -Name 'Upgrade' -Value $upgradeState
+        Unregister-PSMResumeTask
+        $auditAlerts = Invoke-PSMAuditPhase -RdpCertAlert $rdpCertAlert
+        Write-PSMEndMessage -What "Upgrade $($upgradeState.From) -> $(Get-PSMInstalledVersion)" -RdpCertAlert $rdpCertAlert -AuditAlerts $auditAlerts
+        Write-PSMSummary
+        exit 0
+    }
+
     # ===================== PHASE: PreFlight =====================
     if (-not (Test-PSMPhaseComplete 'PreFlight')) {
         # Guard: this script INSTALLS, it does not UPGRADE. On a machine already
@@ -325,8 +476,8 @@ try {
             $installedMM = '{0}.{1}' -f $installed.Major, $installed.Minor
             if ($expected -and ($installedMM -ne $expected)) {
                 throw ("PreFlight: PSM $installed is ALREADY installed on this machine, the target is $expected " +
-                       "(settings.psd1 PsmVersion). This script installs, it does not upgrade - nothing was changed. " +
-                       'Upgrade with the CyberArk upgrade procedure, or deploy on a fresh machine.')
+                       "(settings.psd1 PsmVersion). A normal launch installs, it does not upgrade - nothing was changed. " +
+                       "Upgrade with .\Deploy-PSM.ps1 -Zone $Zone -Upgrade (CyberArk wizard), or deploy on a fresh machine.")
             }
             Write-PSMLog -Level INFO -Message "PreFlight: PSM $installed already installed (target $expected) - resuming our own deployment."
         }
@@ -640,6 +791,11 @@ catch {
     Write-PSMLog -Level ERROR -Message "Stop (fail-fast): $($_.Exception.Message)"
     if ($RedoHardening) {
         Write-PSMLog -Level WARN -Message "-RedoHardening stopped: fix the cause, then relaunch .\Deploy-PSM.ps1 -Zone $Zone -RedoHardening."
+    }
+    elseif ($Upgrade -or $upgradeInProgress) {
+        Write-PSMLog -Level WARN -Message ("-Upgrade stopped: fix the cause, then relaunch .\Deploy-PSM.ps1 -Zone $Zone -Upgrade " +
+            '(a started upgrade resumes at its step; the PSM-Deploy-Resume task, when armed, relaunches it at the next logon). ' +
+            "To abandon a started upgrade: Unregister-ScheduledTask PSM-Deploy-Resume, and remove 'Upgrade' from state\progress.json.")
     }
     else {
         Write-PSMLog -Level WARN  -Message ("The 'PSM-Deploy-Resume' task stays armed: after fixing, the deployment " +

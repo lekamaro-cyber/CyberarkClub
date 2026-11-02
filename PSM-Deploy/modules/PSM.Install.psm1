@@ -108,4 +108,120 @@ function Get-PSMInstalledPsmDir {
     return (Get-PSMInstallPaths -Settings $Settings).PsmDir
 }
 
-Export-ModuleMember -Function Invoke-PSMInstall, Invoke-PSMPostInstall, Test-PSMInstalled, Get-PSMInstalledVersion, Get-PSMInstalledPsmDir
+# ---------------------------------------------------------------------------
+# Upgrade (-Upgrade): helpers around the CyberArk wizard
+# ---------------------------------------------------------------------------
+
+function ConvertTo-PSMFullVersion {
+    # '14.0.5' / '14.0.5.57' / '14.00.0005' / [version] -> [version] with 4 parts
+    # (missing parts = 0), so that versions of different shapes compare; $null
+    # when unreadable.
+    param($Value)
+    $m = [regex]::Match([string]$Value, '^\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?')
+    if (-not $m.Success) { return $null }
+    $p = @(1..4 | ForEach-Object { if ($m.Groups[$_].Success) { [int]$m.Groups[$_].Value } else { 0 } })
+    return [version]::new($p[0], $p[1], $p[2], $p[3])
+}
+
+function Get-PSMMediaSetup {
+    <#
+        PSM installer of the media: the setup.exe under media\PSM that carries a
+        product version - the one whose product name mentions the Session
+        Manager when several do, otherwise the highest version.
+        Returns { Path; Version ([version], 4 parts); Product }. Throws when none.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] $Settings,
+        [Parameter(Mandatory)] [string] $SourcesRoot
+    )
+    $mediaPsm = Join-Path $SourcesRoot $Settings.Install.MediaRelativePath
+    $cands = @(Get-ChildItem -LiteralPath $mediaPsm -Recurse -File -Filter 'setup.exe' -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            [pscustomobject]@{ Path = $_.FullName; Version = (ConvertTo-PSMFullVersion $_.VersionInfo.ProductVersion)
+                               Product = [string]$_.VersionInfo.ProductName }
+        } | Where-Object { $_.Version })
+    if (-not $cands) { throw "No setup.exe carrying a product version under $mediaPsm - is the CyberArk media there?" }
+    $named = @($cands | Where-Object { $_.Product -match 'Session Manager' })
+    $pool  = if ($named) { $named } else { $cands }
+    return @($pool | Sort-Object Version -Descending)[0]
+}
+
+function Test-PSMPendingReboot {
+    # Reasons for a pending reboot (empty = none). Callers wrap in @().
+    $reasons = @()
+    if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') { $reasons += 'roles/features servicing (CBS)' }
+    if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') { $reasons += 'Windows Update' }
+    try {
+        if ((Get-Item -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -ErrorAction Stop).GetValue('PendingFileRenameOperations', $null)) {
+            $reasons += 'pending file renames'
+        }
+    }
+    catch { }
+    return $reasons
+}
+
+function Get-PSMOtherSessions {
+    # User names of the OTHER sessions open on this machine (active or
+    # disconnected), from quser. quser writes "No User exists" on stderr when
+    # there is none: read in a Continue scope (PS 5.1 stderr trap). Callers wrap in @().
+    try {
+        $lines = @(& { $ErrorActionPreference = 'Continue'; & quser.exe 2>&1 } | Where-Object { $_ -is [string] })
+    }
+    catch { return @() }
+    return @($lines | Select-Object -Skip 1 | Where-Object { $_ -notmatch '^\s*>' } |
+        ForEach-Object { ($_.Trim() -split '\s+')[0] } |
+        Where-Object { $_ -and $_ -ne $env:USERNAME } | Select-Object -Unique)
+}
+
+function Backup-PSMConfiguration {
+    <#
+        Copy of the PSM configuration before an upgrade: basic_psm.ini, Vault\
+        (cred files, vault.ini) and Hardening\. Next to the PSM folder, out of
+        the installer's reach: <InstallDir>\PSM-Backup-<label>-<stamp>, readable
+        by Administrators and SYSTEM ONLY (protected ACL set BEFORE the copy, so
+        the copied cred files are never more exposed than in the PSM folder).
+        Returns the backup folder (also under -WhatIf, nothing created then).
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)] [string] $PsmDir,
+        [Parameter(Mandatory)] [string] $Label
+    )
+    $dest = Join-Path (Split-Path $PsmDir -Parent) ('PSM-Backup-{0}-{1}' -f $Label, (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    if (-not $PSCmdlet.ShouldProcess($dest, 'Back up the PSM configuration')) {
+        Write-PSMLog -Level INFO -Message "WhatIf: the PSM configuration would be backed up to $dest."
+        return $dest
+    }
+    New-Item -ItemType Directory -Path $dest -Force | Out-Null
+    $acl = New-Object System.Security.AccessControl.DirectorySecurity
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($sid in 'S-1-5-32-544', 'S-1-5-18') {   # Administrators, SYSTEM
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+            (New-Object System.Security.Principal.SecurityIdentifier $sid), 'FullControl',
+            'ContainerInherit, ObjectInherit', 'None', 'Allow')))
+    }
+    Set-Acl -LiteralPath $dest -AclObject $acl
+
+    $jobs = @(
+        @{ From = $PsmDir;                         To = $dest;                         What = @('basic_psm.ini') }
+        @{ From = (Join-Path $PsmDir 'Vault');     To = (Join-Path $dest 'Vault');     What = @('/E') }
+        @{ From = (Join-Path $PsmDir 'Hardening'); To = (Join-Path $dest 'Hardening'); What = @('/E') }
+    )
+    foreach ($j in $jobs) {
+        if (-not (Test-Path -LiteralPath $j.From)) {
+            Write-PSMLog -Level WARN -Message "Backup: $($j.From) not found - skipped."
+            continue
+        }
+        # /COPY:DAT: the copies inherit the protected ACL above. Exit code 0-7 = success.
+        & robocopy.exe $j.From $j.To @($j.What) /COPY:DAT /R:1 /W:1 /NP /NFL /NDL /NJH /NJS | Out-Null
+        if ($LASTEXITCODE -ge 8) {
+            throw "Backup of $($j.From) failed (robocopy exit code $LASTEXITCODE) - nothing was upgraded."
+        }
+    }
+    Write-PSMLog -Level OK -Message "PSM configuration backed up to $dest (Administrators/SYSTEM only)."
+    return $dest
+}
+
+Export-ModuleMember -Function Invoke-PSMInstall, Invoke-PSMPostInstall, Test-PSMInstalled, Get-PSMInstalledVersion, Get-PSMInstalledPsmDir,
+    ConvertTo-PSMFullVersion, Get-PSMMediaSetup, Test-PSMPendingReboot, Get-PSMOtherSessions, Backup-PSMConfiguration

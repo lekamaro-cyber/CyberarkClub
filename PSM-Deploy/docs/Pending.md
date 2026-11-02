@@ -97,17 +97,16 @@ To do:
       holding only this right (full list: Administrators + the zone's two accounts), and
       the right removed from the common PSM GPO.
 
-## 8. PSM upgrade: no silent upgrade mode in the 14.0 media
+## 8. PSM upgrade (`-Upgrade`): wizard-based, not run on a server yet
 
 **Checked on 2026-11-02** on the 14.0 media: `Execute-Stage.ps1` takes only `configFilePath,
 silentMode, displayJson, delayedrestart, restartAfterStageCompleted, pwd, spwd, spwdObj` (no
 `-modeOfOperation`), no stage XML mentions an upgrade, no upgrade file in the media. The
-production PSMs are all 14.0.x.
+production PSMs are all 14.0.x; the vulnerability fix comes as a higher 14.0 build (full
+media). `-Upgrade` therefore wraps the CyberArk wizard (README, "-Upgrade").
 
 To do:
-- [ ] At the next media: rerun the same three searches (`modeOfOperation`, `Upgrade` in
-      the XML, files named `*upgrade*` / `PSMSilent*`).
-- [ ] Then `-Upgrade` in Deploy-PSM: pre-checks (allowed version list, service running, no
-      open session, no pending reboot, free space, YES) and config backup -> the CyberArk
-      silent mode when the media has one, otherwise its wizard run by the operator ->
-      Hardening replayed as is, RDP certificate, configuration check. No rename.
+- [ ] First run on a PRE server: `-Upgrade -WhatIf` (check the setup.exe it picks and both
+      versions), then `-Upgrade`. Watch: does `Start-Process -Wait` return only once the
+      wizard is finished; does the wizard ask for the Vault credentials; does it restart.
+- [ ] If a later media brings a silent upgrade mode: replace the wizard step only.

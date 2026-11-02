@@ -130,6 +130,12 @@ The resume is **interactive** (the PVWA `Get-Credential` prompts work) and
 # 4d) Configuration check only (read-only, changes nothing), on any PSM:
 .\tools\Test-PSMConfiguration.ps1 -Zone DC1
 
+# 4e) UPGRADE the installed PSM with a newer media under media\PSM (e.g. a 14.0
+#     build fixing a vulnerability). Dry-run first: it shows the installed and
+#     media versions and runs every check.
+.\Deploy-PSM.ps1 -Zone DC1 -Upgrade -WhatIf
+.\Deploy-PSM.ps1 -Zone DC1 -Upgrade
+
 # 5) Start over from SCRATCH (after uninstalling/cleaning up the PSM): resets
 #    the state to replay ALL phases (Installation included):
 .\Deploy-PSM.ps1 -Zone DC1 -Reset
@@ -203,11 +209,32 @@ The resume is **interactive** (the PVWA `Get-Credential` prompts work) and
     the per-server AD ACL group placed in the machine's local Administrators group —
     **PreFlight verifies both** (recursive membership by SID) and WARNs explicitly on
     a missing or inverted assignment.
-  - **Install, never upgrade**: PreFlight reads the version of the PSM already
-    installed on the machine (file version of the service's `CAPSM.exe`) and **stops
-    before changing anything** when it differs from `settings.psd1` → `PsmVersion`
-    (e.g. a 12.6 server with a 14.0 target). Use the CyberArk upgrade procedure or a
-    fresh machine instead. Same version = resume of our own deployment, allowed.
+  - **A normal launch installs, never upgrades**: PreFlight reads the version of the
+    PSM already installed on the machine (file version of the service's `CAPSM.exe`)
+    and **stops before changing anything** when it differs from `settings.psd1` →
+    `PsmVersion` (e.g. a 12.6 server with a 14.0 target). Same version = resume of
+    our own deployment, allowed. Upgrades go through **`-Upgrade`** (below).
+  - **`-Upgrade`** (newer media under `media\PSM`, e.g. a 14.0 build fixing a
+    vulnerability). The 14.0 CyberArk automation has **no upgrade mode**
+    (`Execute-Stage.ps1` has no such parameter), so the script wraps the
+    **CyberArk wizard**, the documented upgrade path:
+    1. checks, nothing changed when one fails: PSM installed and its version
+       readable, media `setup.exe` version **higher** than the installed one and
+       matching `PsmVersion`, PSM service running, no pending reboot, 3 GB free on
+       C: and the PSM drive; open sessions listed in a framed alert; zone `YES`;
+    2. backup of `basic_psm.ini`, `Vault\` and `Hardening\` to
+       `<InstallDir>\PSM-Backup-<version>-<stamp>` (Administrators/SYSTEM only);
+    3. the wizard (`setup.exe` of the media) — **the operator clicks through it**;
+       the resume task is armed, so a restart asked by the wizard is fine;
+    4. new version checked (not applied = stop, relaunch `-Upgrade` to retry);
+       reboot when the installer left one pending;
+    5. Hardening replayed as is, RDP certificate, configuration check.
+    **No registration, no rename** — an upgrade keeps the PSM's Vault identity.
+    Each step is recorded in `state\progress.json` (`Upgrade`): any relaunch, or the
+    resume task, continues an unfinished upgrade. To abandon one: remove the task
+    (`Unregister-ScheduledTask PSM-Deploy-Resume`) and the `Upgrade` key.
+    ⚠️ The new media is used **as delivered**: carry over to its `*Config.xml`
+    (Hardening in particular) any hand edit made to the previous media's ones.
   - **Component account naming** (`settings.psd1` → `Registration.RenameComponents`,
     enabled by default): `RegisterComponent.exe` generates random names
     (`PSMApp_<hex>`/`PSMGw_<hex>`) **with no naming option** for PSM. (The 14.0

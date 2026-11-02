@@ -721,6 +721,22 @@ Describe 'Configuration check (read-only) and -RedoHardening' {
         (Get-Command Invoke-PSMRdpCertificate).Parameters.Keys | Should -Contain 'ReportOnly'
         (Get-Command Get-PSMComponentAccountNames).Parameters.Keys | Should -Contain 'PsmDir'
     }
+    It '-Upgrade: versions of different shapes compare (media 14.0.6 > installed 14.0.5.57)' {
+        ConvertTo-PSMFullVersion '14.0.5'         | Should -Be ([version]'14.0.5.0')
+        ConvertTo-PSMFullVersion '14.00.0005.0057' | Should -Be ([version]'14.0.5.57')
+        ConvertTo-PSMFullVersion ([version]'14.0.6') | Should -Be ([version]'14.0.6.0')
+        ConvertTo-PSMFullVersion 'abc'            | Should -BeNullOrEmpty
+        (ConvertTo-PSMFullVersion '14.0.6') -gt (ConvertTo-PSMFullVersion '14.0.5.57') | Should -BeTrue
+        (ConvertTo-PSMFullVersion '14.0.5') -gt (ConvertTo-PSMFullVersion '14.0.5.57') | Should -BeFalse
+    }
+    It '-Upgrade: the helpers never throw on a machine without PSM / media' {
+        { @(Get-PSMOtherSessions) } | Should -Not -Throw
+        { @(Test-PSMPendingReboot) } | Should -Not -Throw
+        { Get-PSMMediaSetup -Settings @{ Install = @{ MediaRelativePath = 'nope\PSM' } } -SourcesRoot $TestDrive } |
+            Should -Throw '*No setup.exe*'
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'Deploy-PSM.ps1'), [ref]$null, [ref]$null)
+        @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath }) | Should -Contain 'Upgrade'
+    }
     It 'tools\Test-PSMConfiguration.ps1 parses without error' {
         $errors = $null
         [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'tools\Test-PSMConfiguration.ps1'), [ref]$null, [ref]$errors)
