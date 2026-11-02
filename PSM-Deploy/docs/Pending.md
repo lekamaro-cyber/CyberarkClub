@@ -105,8 +105,19 @@ silentMode, displayJson, delayedrestart, restartAfterStageCompleted, pwd, spwd, 
 production PSMs are all 14.0.x; the vulnerability fix comes as a higher 14.0 build (full
 media). `-Upgrade` therefore wraps the CyberArk wizard (README, "-Upgrade").
 
+**First run on 2026-11-02** (FRPRDSRV10013, 14.0.5.91 -> 14.0.6.63): `-WhatIf` picked
+`media\PSM\setup.exe` and both versions right. Real run, seen:
+- the wizard asks for the Oracle Instant Client (19c 64-bit chosen) and for a **Vault
+  account** ("update the environment required for the Policy Manager in the Vault");
+- `Start-Process -Wait` returned while the wizard was still running ("repairing"): the
+  script replayed the Hardening and ran the check mid-install. Fixed: it now waits for
+  the installer processes, then asks for ENTER once the wizard is closed;
+- the wizard's Vault logon failed: `ITACM020S ... vault was temporarily unavailable
+  (520,513,10054)` although `tnc 10.176.202.17 -p 1858` succeeds (10054 = connection reset).
+
 To do:
-- [ ] First run on a PRE server: `-Upgrade -WhatIf` (check the setup.exe it picks and both
-      versions), then `-Upgrade`. Watch: does `Start-Process -Wait` return only once the
-      wizard is finished; does the wizard ask for the Vault credentials; does it restart.
-- [ ] If a later media brings a silent upgrade mode: replace the wizard step only.
+- [ ] ITACM020S: retry; check the address in `<PSM>\Vault\Vault.ini`, the PRE Vault ITALog
+      (source 10.176.91.55). Once the wizard is done: `-RedoHardening` (it ran mid-install).
+- [ ] Silent upgrade: NOT with a recorded `.iss` - the wizard's Vault password would sit in
+      it in clear. Only if a later media takes the password like the Registration does
+      (`-spwdObj`); then replace the wizard step only.
