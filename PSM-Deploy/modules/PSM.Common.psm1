@@ -92,10 +92,12 @@ function Write-PSMLog {
         default   { Write-Host $line }
     }
 
-    if ($script:LogTextPath) { Add-Content -Path $script:LogTextPath -Value $line }
+    # -WhatIf:$false: the log is always written, also from a function running
+    # under -WhatIf (otherwise "What if: Add Content" noise and lines lost).
+    if ($script:LogTextPath) { Add-Content -Path $script:LogTextPath -Value $line -WhatIf:$false }
     if ($script:LogJsonPath) {
         $obj = [ordered]@{ ts = $ts; level = $Level; message = $safe }
-        Add-Content -Path $script:LogJsonPath -Value ($obj | ConvertTo-Json -Compress)
+        Add-Content -Path $script:LogJsonPath -Value ($obj | ConvertTo-Json -Compress) -WhatIf:$false
     }
 }
 
