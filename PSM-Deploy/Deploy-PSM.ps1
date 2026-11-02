@@ -419,15 +419,7 @@ try {
             if (-not $now -or $now -lt $target) {
                 Write-PSMLog -Level WARN -Message ("Launching the CyberArk wizard ($($upgradeState.Setup)): follow it to the end. If it asks to " +
                     "restart, accept: the script resumes at the next logon of '$resumeUser'.")
-                $launched = Get-Date
                 Start-Process -FilePath $upgradeState.Setup -WorkingDirectory (Split-Path $upgradeState.Setup -Parent) -Wait
-                # setup.exe can return BEFORE the wizard is done (seen on FRPRDSRV10013:
-                # Hardening replayed while it was still "repairing"): wait for the
-                # installer processes, then for the operator's word.
-                Wait-PSMInstallerProcesses -Since $launched | Out-Null
-                if (-not $NonInteractive) {
-                    [void](Read-Host 'Press ENTER once the CyberArk wizard is CLOSED (Finish clicked, no error left on screen)')
-                }
                 $wizardRan = $true
                 $now = ConvertTo-PSMFullVersion (Get-PSMInstalledVersion)
                 if (-not $now -or $now -lt $target) {

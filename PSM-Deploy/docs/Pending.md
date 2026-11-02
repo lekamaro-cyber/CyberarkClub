@@ -109,15 +109,15 @@ media). `-Upgrade` therefore wraps the CyberArk wizard (README, "-Upgrade").
 `media\PSM\setup.exe` and both versions right. Real run, seen:
 - the wizard asks for the Oracle Instant Client (19c 64-bit chosen) and for a **Vault
   account** ("update the environment required for the Policy Manager in the Vault");
-- `Start-Process -Wait` returned while the wizard was still running ("repairing"): the
-  script replayed the Hardening and ran the check mid-install. Fixed: it now waits for
-  the installer processes, then asks for ENTER once the wizard is closed;
-- the wizard's Vault logon failed: `ITACM020S ... vault was temporarily unavailable
-  (520,513,10054)` although `tnc 10.176.202.17 -p 1858` succeeds (10054 = connection reset).
+- the script waited for the wizard, saw 14.0.6.95, replayed the Hardening; the check
+  then found the PSM service **stopped**;
+- a "repairing" run of the wizard failed on its Vault logon: `ITACM020S ... vault was
+  temporarily unavailable (520,513,10054)` although `tnc 10.176.202.17 -p 1858` succeeds
+  (10054 = connection reset).
 
 To do:
 - [ ] ITACM020S: retry; check the address in `<PSM>\Vault\Vault.ini`, the PRE Vault ITALog
-      (source 10.176.91.55). Once the wizard is done: `-RedoHardening` (it ran mid-install).
+      (source 10.176.91.55). Then the PSM service must start (PSMConsole.log).
 - [ ] Silent upgrade: NOT with a recorded `.iss` - the wizard's Vault password would sit in
       it in clear. Only if a later media takes the password like the Registration does
       (`-spwdObj`); then replace the wizard step only.

@@ -174,39 +174,6 @@ function Get-PSMOtherSessions {
         Where-Object { $_ -and $_ -ne $env:USERNAME } | Select-Object -Unique)
 }
 
-function Wait-PSMInstallerProcesses {
-    <#
-        Waits until no installer process started since -Since is left. The
-        media's setup.exe can return while the InstallShield engine still runs
-        (seen on FRPRDSRV10013: the wizard was still "repairing" when the script
-        went on). The Windows Installer service itself (msiexec /V) is ignored.
-        Returns $false after -TimeoutMinutes (WARN), $true otherwise.
-    #>
-    param(
-        [Parameter(Mandatory)] [datetime] $Since,
-        [int] $TimeoutMinutes = 180
-    )
-    $names     = @('setup.exe', 'ISSetup.exe', 'ISBEW64.exe', 'IDriver.exe', 'msiexec.exe')
-    $deadline  = (Get-Date).AddMinutes($TimeoutMinutes)
-    $announced = $false
-    while ($true) {
-        $left = @(Get-CimInstance -ClassName Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-            ($names -contains $_.Name) -and $_.CreationDate -and ($_.CreationDate -ge $Since) -and
-            ([string]$_.CommandLine -notmatch '\s/V(\s|$)') })
-        if (-not $left) { return $true }
-        if (-not $announced) {
-            Write-PSMLog -Level INFO -Message ("Waiting for the installer to finish (" +
-                (($left | ForEach-Object { "$($_.Name) #$($_.ProcessId)" }) -join ', ') + ')...')
-            $announced = $true
-        }
-        if ((Get-Date) -gt $deadline) {
-            Write-PSMLog -Level WARN -Message "Installer processes still running after $TimeoutMinutes min - going on."
-            return $false
-        }
-        Start-Sleep -Seconds 10
-    }
-}
-
 function Backup-PSMConfiguration {
     <#
         Copy of the PSM configuration before an upgrade: basic_psm.ini, Vault\
@@ -257,5 +224,4 @@ function Backup-PSMConfiguration {
 }
 
 Export-ModuleMember -Function Invoke-PSMInstall, Invoke-PSMPostInstall, Test-PSMInstalled, Get-PSMInstalledVersion, Get-PSMInstalledPsmDir,
-    ConvertTo-PSMFullVersion, Get-PSMMediaSetup, Test-PSMPendingReboot, Get-PSMOtherSessions, Backup-PSMConfiguration,
-    Wait-PSMInstallerProcesses
+    ConvertTo-PSMFullVersion, Get-PSMMediaSetup, Test-PSMPendingReboot, Get-PSMOtherSessions, Backup-PSMConfiguration
