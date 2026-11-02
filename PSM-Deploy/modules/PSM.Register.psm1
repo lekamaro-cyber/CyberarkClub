@@ -595,10 +595,14 @@ function Get-PSMComponentAccountNames {
     <#
         READ-ONLY: current name of each PSM component account (Username= of the
         cred files listed in basic_psm.ini) and its target name (naming
-        convention). Used by -NoPvwa to say what is left to rename by hand.
+        convention). Used by -NoPvwa to say what is left to rename by hand, and
+        by the configuration check (-PsmDir: PSM folder read from the machine).
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)] $Settings)
+    param(
+        [Parameter(Mandatory)] $Settings,
+        [string] $PsmDir   # empty -> derived from settings.psd1 Install.InstallDir
+    )
 
     $regCfg     = Get-PSMConfigValue -Config $Settings -Key 'Registration'
     $hostName   = $env:COMPUTERNAME.ToUpper()
@@ -607,7 +611,8 @@ function Get-PSMComponentAccountNames {
     if (-not $appPattern) { $appPattern = 'PSM-{HOSTNAME}' }
     if (-not $gwPattern)  { $gwPattern  = 'PSMA{HOSTNAME}' }
 
-    $iniPath = Join-Path (Get-PSMInstallPaths -Settings $Settings).PsmDir 'basic_psm.ini'
+    if (-not $PsmDir) { $PsmDir = (Get-PSMInstallPaths -Settings $Settings).PsmDir }
+    $iniPath = Join-Path $PsmDir 'basic_psm.ini'
     $ini = if (Test-Path -LiteralPath $iniPath) { Get-Content -Path $iniPath -Raw } else { '' }
     $rows = @()
     foreach ($e in @(@{ Role = 'Application'; Key = 'PSMAppCredFile'; Pattern = $appPattern },

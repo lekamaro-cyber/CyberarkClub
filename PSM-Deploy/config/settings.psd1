@@ -155,7 +155,7 @@
         # deployment completes even when hardening steps fail (observed case: EDR
         # blocking system ACL modifications, even takeown).
         # The failed steps remain TO BE REDONE: fix the cause (EDR exclusion),
-        # remove 'Hardening' from state\progress.json and relaunch. Set back to
+        # then .\Deploy-PSM.ps1 -Zone <zone> -RedoHardening. Set back to
         # $false once the environment is fixed to restore the strict behavior.
         NonBlocking  = $true
         HardeningDir = ''   # empty -> derived from Install.InstallDir (<InstallDir>\PSM\Hardening)

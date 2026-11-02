@@ -14,6 +14,7 @@
              -> Software -> Installation -> PostInstallation -> [possible reboot at each stage]
              -> Registration(secret via PVWA API) -> Hardening(+AppLocker)
              -> RdpCertificate(VIP certificate on RDP, every launch) -> Validation
+             -> configuration check (read-only, every launch: framed alert listing the defects)
 
 .PARAMETER Zone
     Zone key in config\zones.psd1 (e.g. DC1, DC2). Selects Vault/PVWA.
@@ -31,6 +32,14 @@
     1858; the component accounts are NOT renamed (a framed alert lists the
     manual steps). Remembered for the resume after a reboot.
 
+.PARAMETER RedoHardening
+    For a PSM ALREADY in place (deployed by this script or not): replays ONLY
+    the Hardening stage (+ AppLocker), with the same config and tolerance as
+    the deployment, then the RDP certificate and the configuration check. No
+    other phase runs, no resume task, never an automatic reboot (live
+    sessions: a reboot the stage asks for is announced, to do by hand).
+    Typical use: after an EDR exclusion, instead of editing state\progress.json.
+
 .EXAMPLE
     # "Plan" mode (dry-run): changes nothing
     .\Deploy-PSM.ps1 -Zone DC1 -WhatIf
@@ -42,6 +51,10 @@
 .EXAMPLE
     # Server that cannot reach the PVWA
     .\Deploy-PSM.ps1 -Zone DC1 -NoPvwa
+
+.EXAMPLE
+    # Replay the Hardening on a PSM already in place (e.g. after an EDR exclusion)
+    .\Deploy-PSM.ps1 -Zone DC1 -RedoHardening
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -63,7 +76,10 @@ param(
     [pscredential] $PvwaCredential,
 
     # No network flow to the PVWA from this server (see .PARAMETER NoPvwa).
-    [switch] $NoPvwa
+    [switch] $NoPvwa,
+
+    # Replay ONLY the Hardening stage on a PSM in place (see .PARAMETER RedoHardening).
+    [switch] $RedoHardening
 )
 
 # --- "Downloaded from the Internet" mark ------------------------------------
@@ -100,6 +116,9 @@ Test-PSMSettingsDrift -Settings $Settings | Out-Null
 if ($Reset -and $Resume) {
     throw "-Reset and -Resume are incompatible (start from scratch vs resume)."
 }
+if ($RedoHardening -and ($Reset -or $Resume)) {
+    throw "-RedoHardening cannot be combined with -Reset or -Resume (it replays the Hardening stage only)."
+}
 if ($Reset) {
     Reset-PSMState
     Unregister-PSMResumeTask   # removes a possibly stale resume task
@@ -127,9 +146,9 @@ if ($Resume) {
         Write-PSMLog -Level INFO -Message 'Resume: -NoPvwa re-read from state.'
     }
 }
-elseif (-not $WhatIfPreference) { Set-PSMStateValue -Name 'NoPvwa' -Value ([bool]$NoPvwa) }
+elseif (-not $WhatIfPreference -and -not $RedoHardening) { Set-PSMStateValue -Name 'NoPvwa' -Value ([bool]$NoPvwa) }
 
-Write-PSMLog -Level INFO -Message "=== PSM deployment $($Settings.PsmVersion) | Zone $Zone | Resume=$Resume | NoPvwa=$NoPvwa | WhatIf=$($WhatIfPreference) ==="
+Write-PSMLog -Level INFO -Message "=== PSM deployment $($Settings.PsmVersion) | Zone $Zone | Resume=$Resume | NoPvwa=$NoPvwa | RedoHardening=$RedoHardening | WhatIf=$($WhatIfPreference) ==="
 if ($NoPvwa) {
     Write-PSMLog -Level WARN -Message ('-NoPvwa: no PVWA call. At Registration the Vault install account is entered directly ' +
         '(CyberArk/Vault account, checked by the Vault), and the component accounts are NOT renamed (manual steps listed then).')
@@ -158,8 +177,136 @@ function Start-PSMResumeReboot {
     Restart-Computer -Force
 }
 
+# The zone's PSM session accounts must resolve in the domain NOW, otherwise
+# the Hardening will fail much later ("identity references could not be
+# translated"). Classic trap: sAMAccountName limited to 20 characters,
+# truncated and therefore different from the Name/CN shown in the AD console.
+function Assert-PSMZoneAccounts {
+    foreach ($acctKey in 'PSMConnectUserName', 'PSMAdminConnectUserName') {
+        $acct = Get-PSMConfigValue -Config $ZoneConfig -Key $acctKey
+        if ($acct -and -not (Test-PSMDomainAccount -Account $acct)) {
+            throw ("PreFlight: zone account '$acct' ($acctKey) cannot be resolved in the domain. " +
+                   "Check the account's REAL sAMAccountName in AD (20-character limit, " +
+                   "often truncated compared to the Name/CN) and fix zones.psd1.")
+        }
+    }
+}
+
+# Hardening stage (+ AppLocker), shared by the deployment and -RedoHardening.
+# Records its outcome in the state (read by the configuration check). Returns
+# the stage result; throws on failure unless Hardening.NonBlocking tolerates it.
+function Invoke-PSMHardeningPhase {
+    # Domain PSM session accounts: Consts.ps1 (framework) + variables of the
+    # PSMHardening.ps1 / PSMConfigureAppLocker.ps1 scripts (via Invoke-PSMHardening).
+    Set-PSMAutomationConsts -Settings $Settings -SourcesRoot $SourcesRoot -ZoneConfig $ZoneConfig | Out-Null
+    $r = Invoke-PSMHardening -Settings $Settings -SourcesRoot $SourcesRoot -ZoneConfig $ZoneConfig
+    if (-not $WhatIfPreference) {
+        Set-PSMStateValue -Name 'LastHardening' -Value ([pscustomobject]@{
+            Date = (Get-Date -Format 's'); Succeeded = [bool]$r.Succeeded
+            ErrorData = [string]$r.ErrorData; LogPath = [string]$r.LogPath })
+    }
+    if (-not $r.Succeeded) {
+        # Hardening.NonBlocking: a hardening failure does not block the deployment
+        # (e.g. EDR blocking system ACL modifications). The failed steps remain
+        # TO BE REDONE once the cause is fixed.
+        $hCfg = Get-PSMConfigValue -Config $Settings -Key 'Hardening'
+        $tolerated = $hCfg -and [bool](Get-PSMConfigValue -Config $hCfg -Key 'NonBlocking')
+        if ($tolerated) {
+            Write-PSMLog -Level WARN -Message ("Hardening stage FAILURE TOLERATED (Hardening.NonBlocking): $($r.ErrorData) " +
+                "-> deployment continues. TO BE REDONE: fix the cause (e.g. EDR exclusion), then relaunch " +
+                ".\Deploy-PSM.ps1 -Zone $Zone -RedoHardening.")
+        }
+        else {
+            throw "Hardening stage failed: $($r.ErrorData)"
+        }
+    }
+    return $r
+}
+
+# RDP certificate (PSM behind a VIP): certificate with the VIP name in its SAN
+# (zones.psd1 PsmVips) bound to the RDP listener. Checked on EVERY launch
+# (quick and idempotent: manual fix, renewed certificate). Any problem = ALERT,
+# never a stop. Returns $true when an alert was raised.
+function Invoke-PSMRdpCertificatePhase {
+    try {
+        return (-not (Invoke-PSMRdpCertificate -ZoneConfig $ZoneConfig -WhatIf:$WhatIfPreference))
+    }
+    catch {
+        Write-PSMLog -Level WARN -Message "RDP certificate: unexpected error, nothing changed ($($_.Exception.Message)) - check by hand."
+        return $true
+    }
+}
+
+# Read-only configuration check closing every launch. Returns the number of
+# defects (ALERT); a check that cannot run never stops the script.
+function Invoke-PSMAuditPhase {
+    param([bool] $RdpCertAlert)
+    try {
+        $audit = Invoke-PSMConfigurationAudit -Settings $Settings -Zones $Zones -ZoneKey $Zone `
+                    -LastHardening (Get-PSMStateValue -Name 'LastHardening') -RdpCertificateOk (-not $RdpCertAlert)
+        return @($audit | Where-Object { $_.Status -eq 'ALERT' }).Count
+    }
+    catch {
+        Write-PSMLog -Level WARN -Message "Configuration check skipped: $($_.Exception.Message)"
+        return [int]$RdpCertAlert
+    }
+}
+
+function Write-PSMEndMessage {
+    param([string] $What, [bool] $RdpCertAlert, [int] $AuditAlerts)
+    if ($AuditAlerts -gt 0) {
+        Write-PSMLog -Level WARN -Message ("$What completed WITH $AuditAlerts configuration alert(s): see the CONFIGURATION CHECK above " +
+            '(the check changed nothing - fix each point, then .\tools\Test-PSMConfiguration.ps1).')
+    }
+    elseif ($RdpCertAlert) {
+        Write-PSMLog -Level WARN -Message ("$What completed WITH an RDP certificate ALERT (see above): fix it by hand, " +
+            "then relaunch .\Deploy-PSM.ps1 -Zone $Zone to re-check and bind.")
+    }
+    else {
+        Write-PSMLog -Level OK -Message "$What completed."
+    }
+}
+
 try {
     Assert-PSMElevation
+
+    # ===================== -RedoHardening: the Hardening stage ONLY =====================
+    # For a PSM ALREADY in place, deployed by this script or not: none of the
+    # other phases runs, the resume task is never armed and the machine is never
+    # restarted automatically (live sessions). Then the RDP certificate and the
+    # configuration check, as at the end of a deployment.
+    if ($RedoHardening) {
+        if (-not (Test-PSMInstalled)) {
+            throw '-RedoHardening: no PSM service on this machine - nothing to harden (deploy it first).'
+        }
+        # Our own deployment stopped BEFORE the Registration: the Hardening comes after it.
+        if ((Test-PSMPhaseComplete 'PreFlight') -and -not (Test-PSMPhaseComplete 'Registration')) {
+            throw ("-RedoHardening: the deployment of this server is not finished (Registration not done) - " +
+                   "relaunch .\Deploy-PSM.ps1 -Zone $Zone to finish it.")
+        }
+        try { Test-PSMZoneByVip -Zones $Zones -ZoneKey $Zone | Out-Null }
+        catch { Write-PSMLog -Level WARN -Message "Zone check skipped: $($_.Exception.Message)" }
+        Write-PSMLog -Level WARN -Message ('-RedoHardening: the CyberArk Hardening stage changes system settings (permissions, ' +
+            'services, AppLocker) under the open sessions - prefer a maintenance window.')
+        Confirm-PSMZone -ZoneConfig $ZoneConfig -NonInteractive:$NonInteractive
+        Assert-PSMZoneAccounts
+
+        $r = Invoke-PSMHardeningPhase
+        # A server this script deployed keeps its phase marker up to date.
+        if (-not $WhatIfPreference -and (Test-PSMPhaseComplete 'Registration')) { Set-PSMPhaseComplete 'Hardening' }
+
+        $rdpCertAlert = Invoke-PSMRdpCertificatePhase
+        $auditAlerts  = Invoke-PSMAuditPhase -RdpCertAlert $rdpCertAlert
+        if ($r.RestartRequired -and -not $WhatIfPreference) {
+            Write-PSMAlert -Title 'REBOOT REQUIRED' -Lines @(
+                'The Hardening stage asks for a reboot to finish applying its settings.',
+                '-RedoHardening never reboots by itself (open sessions): reboot in a maintenance window,',
+                'then check with .\tools\Test-PSMConfiguration.ps1.')
+        }
+        Write-PSMEndMessage -What 'Hardening replay' -RdpCertAlert $rdpCertAlert -AuditAlerts $auditAlerts
+        Write-PSMSummary
+        exit 0
+    }
 
     # ===================== PHASE: PreFlight =====================
     if (-not (Test-PSMPhaseComplete 'PreFlight')) {
@@ -190,18 +337,8 @@ try {
         Confirm-PSMZone -ZoneConfig $ZoneConfig -NonInteractive:$NonInteractive
         # Connectivity check of the RDS license servers (non-blocking: WARN).
         Test-PSMLicenseServers -Servers $Settings.Rds.LicenseServers | Out-Null
-        # The zone's PSM session accounts must resolve in the domain NOW, otherwise
-        # the Hardening will fail much later ("identity references could not be
-        # translated"). Classic trap: sAMAccountName limited to 20 characters,
-        # truncated and therefore different from the Name/CN shown in the AD console.
-        foreach ($acctKey in 'PSMConnectUserName', 'PSMAdminConnectUserName') {
-            $acct = Get-PSMConfigValue -Config $ZoneConfig -Key $acctKey
-            if ($acct -and -not (Test-PSMDomainAccount -Account $acct)) {
-                throw ("PreFlight: zone account '$acct' ($acctKey) cannot be resolved in the domain. " +
-                       "Check the account's REAL sAMAccountName in AD (20-character limit, " +
-                       "often truncated compared to the Name/CN) and fix zones.psd1.")
-            }
-        }
+        # The zone's session accounts must resolve in the domain (see the function).
+        Assert-PSMZoneAccounts
         # Local Administrators membership, provisioned ahead of time in AD (per-server
         # ACL group placed in the machine's local Administrators group):
         #   - PSMAdminConnect MUST be a local admin (PVWA live session monitoring /
@@ -466,25 +603,8 @@ try {
 
     # ===================== CyberArk STAGE: Hardening (+ AppLocker) =====================
     if (-not (Test-PSMPhaseComplete 'Hardening')) {
-        # Domain PSM session accounts: Consts.ps1 (framework) + variables of the
-        # PSMHardening.ps1 / PSMConfigureAppLocker.ps1 scripts (via Invoke-PSMHardening).
-        Set-PSMAutomationConsts -Settings $Settings -SourcesRoot $SourcesRoot -ZoneConfig $ZoneConfig | Out-Null
-        $r = Invoke-PSMHardening -Settings $Settings -SourcesRoot $SourcesRoot -ZoneConfig $ZoneConfig
-        if (-not $r.Succeeded) {
-            # Hardening.NonBlocking: a hardening failure does not block the deployment
-            # (e.g. EDR blocking system ACL modifications). The failed steps remain
-            # TO BE REDONE once the cause is fixed.
-            $hCfg = Get-PSMConfigValue -Config $Settings -Key 'Hardening'
-            $tolerated = $hCfg -and [bool](Get-PSMConfigValue -Config $hCfg -Key 'NonBlocking')
-            if ($tolerated) {
-                Write-PSMLog -Level WARN -Message ("Hardening stage FAILURE TOLERATED (Hardening.NonBlocking): $($r.ErrorData) " +
-                    "-> deployment continues. TO BE REDONE: fix the cause (e.g. EDR exclusion), remove 'Hardening' " +
-                    "from state\progress.json then relaunch, or replay the failed steps via Execute-Stage.")
-            }
-            else {
-                throw "Hardening stage failed: $($r.ErrorData)"
-            }
-        }
+        # Tolerated failure (Hardening.NonBlocking) handled inside: see the function.
+        $r = Invoke-PSMHardeningPhase
         # The stage reported SUCCESS: all its steps ran. Mark the phase complete
         # BEFORE any reboot so the resume continues at the NEXT phase (re-running
         # a completed stage is version-dependent: harmless no-op on 12.6, endless
@@ -495,18 +615,8 @@ try {
     }
 
     # ===================== PHASE: RDP certificate (PSM behind a VIP) =====================
-    # Certificate with the VIP name in its SAN (zones.psd1 PsmVips) bound to the
-    # RDP listener. NOT recorded in progress.json: the check is quick and
-    # idempotent, so every launch re-checks it (manual fix, renewed certificate).
-    # Any problem = ALERT, never a stop (fixed by hand, then relaunch).
-    $rdpCertAlert = $false
-    try {
-        $rdpCertAlert = -not (Invoke-PSMRdpCertificate -ZoneConfig $ZoneConfig -WhatIf:$WhatIfPreference)
-    }
-    catch {
-        $rdpCertAlert = $true
-        Write-PSMLog -Level WARN -Message "RDP certificate: unexpected error, nothing changed ($($_.Exception.Message)) - check by hand."
-    }
+    # NOT recorded in progress.json: re-checked on every launch (see the function).
+    $rdpCertAlert = Invoke-PSMRdpCertificatePhase
 
     # ===================== PHASE: Validation =====================
     if (-not (Test-PSMPhaseComplete 'Validation')) {
@@ -521,19 +631,21 @@ try {
 
     # Resume task cleanup once everything is done.
     Unregister-PSMResumeTask
-    if ($rdpCertAlert) {
-        Write-PSMLog -Level WARN -Message ("Deployment completed WITH an RDP certificate ALERT (see above): fix it by hand, " +
-            "then relaunch .\Deploy-PSM.ps1 -Zone $Zone to re-check and bind.")
-    }
-    else {
-        Write-PSMLog -Level OK -Message "Deployment completed."
-    }
+
+    # ===================== Configuration check (read-only) =====================
+    $auditAlerts = Invoke-PSMAuditPhase -RdpCertAlert $rdpCertAlert
+    Write-PSMEndMessage -What 'Deployment' -RdpCertAlert $rdpCertAlert -AuditAlerts $auditAlerts
 }
 catch {
     Write-PSMLog -Level ERROR -Message "Stop (fail-fast): $($_.Exception.Message)"
-    Write-PSMLog -Level WARN  -Message ("The 'PSM-Deploy-Resume' task stays armed: after fixing, the deployment " +
-        "will resume at reconnection (or relaunch .\Deploy-PSM.ps1 -Zone $Zone). " +
-        "To cancel it: Unregister-ScheduledTask PSM-Deploy-Resume.")
+    if ($RedoHardening) {
+        Write-PSMLog -Level WARN -Message "-RedoHardening stopped: fix the cause, then relaunch .\Deploy-PSM.ps1 -Zone $Zone -RedoHardening."
+    }
+    else {
+        Write-PSMLog -Level WARN  -Message ("The 'PSM-Deploy-Resume' task stays armed: after fixing, the deployment " +
+            "will resume at reconnection (or relaunch .\Deploy-PSM.ps1 -Zone $Zone). " +
+            "To cancel it: Unregister-ScheduledTask PSM-Deploy-Resume.")
+    }
     Write-PSMSummary
     exit 1
 }

@@ -227,11 +227,14 @@ function Invoke-PSMRdpCertificate {
         RdpCertificate phase (see the module header). Returns $true when the
         RDP listener presents the VIP certificate (or no VIP concerns this
         server), $false after an ALERT. Never throws for a certificate problem.
+        -ReportOnly: same checks, never binds - a listener presenting another
+        certificate is an ALERT (configuration check, tools\Test-PSMConfiguration.ps1).
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)] $ZoneConfig,
-        [string] $ComputerName = $env:COMPUTERNAME
+        [string] $ComputerName = $env:COMPUTERNAME,
+        [switch] $ReportOnly
     )
     $zoneName = Get-PSMConfigValue -Config $ZoneConfig -Key 'Name'
     if ($null -eq (Get-PSMConfigValue -Config $ZoneConfig -Key 'PsmVips')) {
@@ -324,6 +327,17 @@ function Invoke-PSMRdpCertificate {
         'Manual fix (elevated PowerShell):',
         "  `$ts = Get-WmiObject -Namespace root\cimv2\TerminalServices -Class Win32_TSGeneralSetting -Filter `"TerminalName='RDP-tcp'`"",
         "  Set-WmiInstance -Path `$ts.__PATH -Arguments @{ SSLCertificateSHA1Hash = '$thumb' }")
+    if ($ReportOnly) {
+        $current = [string](Get-WmiObject @wmiArgs).SSLCertificateSHA1Hash
+        if ($current -ieq $thumb) {
+            Write-PSMLog -Level OK -Message "RDP certificate: RDP-Tcp presents $thumb."
+            return $true
+        }
+        Write-PSMAlert -Title 'RDP CERTIFICATE NOT BOUND' -Lines (@(
+            "RDP-Tcp presents $(if ($current) { $current } else { 'no certificate' }), not the VIP certificate $thumb (SAN $vipList).",
+            'Deploy-PSM.ps1 binds it on its next launch (also with -RedoHardening).') + $manualFix)
+        return $false
+    }
     try {
         Invoke-IdempotentStep -Name "RDP certificate (RDP-Tcp) = $thumb" `
             -Test {

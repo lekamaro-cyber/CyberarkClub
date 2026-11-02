@@ -42,7 +42,8 @@ To do:
 (tolerated: `Hardening.NonBlocking = $true`).
 
 To do:
-- [ ] EDR exclusion, then remove `Hardening` from `state\progress.json` and replay.
+- [ ] EDR exclusion, then `.\Deploy-PSM.ps1 -Zone <zone> -RedoHardening` (the configuration
+      check at the end must no longer report "Drive permissions" / "Hardening (last run)").
 - [ ] Once clean everywhere: `Hardening.NonBlocking = $false`.
 
 ## 4. Not yet run on a server
@@ -54,6 +55,10 @@ To do:
       validated on FRPRDSRV10013 (certificate found by SAN, key readable by NETWORK
       SERVICE, already bound -> OK) and the "NO private key" alert on FRPRDSRV10012.
       Not exercised yet on a server: an actual binding change (CHANGED).
+- [ ] `-RedoHardening` and the configuration check (`tools\Test-PSMConfiguration.ps1`):
+      flows simulated off-Windows only. First run: the check alone on BEDRPSRV10649 (expected
+      alerts: drive permissions, RDS logon right with the PRD accounts), then `-RedoHardening`.
+      On a PSM not deployed by the script: run the check alone first.
 
 ## 5. PRD Vault: PSM license full (blocks every new PSM)
 
@@ -79,3 +84,30 @@ To do:
       no gateway rename at all, only the application user).
 - [ ] Set `GwUserPattern` accordingly, then fix BEDRPSRV10648/10649 (remove `Registration`
       from `state\progress.json`, relaunch with the PVWA reachable: only the gateway is renamed).
+
+## 7. RDS logon right: PRD session accounts on an NPR server
+
+**Seen on 2026-10-30** (BEDRPSRV10649, zone NPRFR): "Allow log on through Remote Desktop
+Services" = `FRANCE\FRSVCPRDPSMConnect`, `FRANCE\FRSVCPRDPSMAdminConn`, Administrators. A
+GPO user right REPLACES the whole local list at every refresh. The configuration check now
+reports it ("RDS logon right", with the GPO name).
+
+To do:
+- [ ] AD team: one OU per zone for the PSM servers in each domain, one small GPO per zone
+      holding only this right (full list: Administrators + the zone's two accounts), and
+      the right removed from the common PSM GPO.
+
+## 8. PSM upgrade: no silent upgrade mode in the 14.0 media
+
+**Checked on 2026-11-02** on the 14.0 media: `Execute-Stage.ps1` takes only `configFilePath,
+silentMode, displayJson, delayedrestart, restartAfterStageCompleted, pwd, spwd, spwdObj` (no
+`-modeOfOperation`), no stage XML mentions an upgrade, no upgrade file in the media. The
+production PSMs are all 14.0.x.
+
+To do:
+- [ ] At the next media: rerun the same three searches (`modeOfOperation`, `Upgrade` in
+      the XML, files named `*upgrade*` / `PSMSilent*`).
+- [ ] Then `-Upgrade` in Deploy-PSM: pre-checks (allowed version list, service running, no
+      open session, no pending reboot, free space, YES) and config backup -> the CyberArk
+      silent mode when the media has one, otherwise its wizard run by the operator ->
+      Hardening replayed as is, RDP certificate, configuration check. No rename.

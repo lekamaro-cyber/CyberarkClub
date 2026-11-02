@@ -657,6 +657,77 @@ Describe '-NoPvwa: component account names and manual rename alert' {
     }
 }
 
+Describe 'Configuration check (read-only) and -RedoHardening' {
+    BeforeAll {
+        Get-ChildItem (Join-Path $root 'modules') -Filter '*.psm1' | ForEach-Object { Import-Module $_.FullName -Force }
+        Initialize-PSMLogging -LogDirectory (Join-Path $env:TEMP 'psm-test-logs')
+        $script:mine = @([pscustomobject]@{ Account = 'FR\NPRConnect'; Sid = 'S-NPR-1' }, [pscustomobject]@{ Account = 'FR\NPRAdmin'; Sid = 'S-NPR-2' })
+        $script:others = @(
+            [pscustomobject]@{ Account = 'FR\PRDConnect'; Sid = 'S-PRD-1'; Zone = 'PRD' }
+            [pscustomobject]@{ Account = 'FR\PRDAdmin';   Sid = 'S-PRD-2'; Zone = 'PRD' }
+            [pscustomobject]@{ Account = 'FR\NPRConnect'; Sid = 'S-NPR-1'; Zone = 'NPRBE' }   # shared with the zone
+            [pscustomobject]@{ Account = 'FR\PRDConnect'; Sid = 'S-PRD-1'; Zone = 'PRDBX' })  # same account, 2nd zone
+    }
+    It 'Parses a secedit user-right line (SIDs, unresolved name kept, empty right)' {
+        @(ConvertFrom-PSMUserRightLine -Line 'SeRemoteInteractiveLogonRight = *S-1-5-32-544,*S-1-5-21-1-1001,NOPE\x') |
+            Should -Be @('S-1-5-32-544', 'S-1-5-21-1-1001', 'NOPE\x')
+        @(ConvertFrom-PSMUserRightLine -Line 'SeX =').Count  | Should -Be 0
+        @(ConvertFrom-PSMUserRightLine -Line $null).Count    | Should -Be 0
+    }
+    It 'RDS logon right: the BEDRPSRV10649 case (PRD accounts on an NPR server)' {
+        $c = Compare-PSMSessionLogonRight -Granted @('S-1-5-32-544', 'S-PRD-1', 'S-PRD-2') -Mine $script:mine -Others $script:others
+        @($c.Missing).Count | Should -Be 2
+        @($c.Foreign | ForEach-Object { $_.Account }) | Should -Be @('FR\PRDConnect', 'FR\PRDAdmin')
+    }
+    It 'RDS logon right: right zone = no defect, an account shared with another zone is never foreign' {
+        $c = Compare-PSMSessionLogonRight -Granted @('S-1-5-32-544', 'S-NPR-1', 'S-NPR-2') -Mine $script:mine -Others $script:others
+        @($c.Missing).Count | Should -Be 0
+        @($c.Foreign).Count | Should -Be 0
+    }
+    It 'RDS logon right: a zone account that does not resolve is missing' {
+        $c = Compare-PSMSessionLogonRight -Granted @('S-1-5-32-544') -Mine @([pscustomobject]@{ Account = 'FR\Ghost'; Sid = $null })
+        @($c.Missing).Count | Should -Be 1
+    }
+    It 'Drive permissions: write ACEs of broad principals only (read, admins, Deny ignored)' {
+        $fsr = [System.Security.AccessControl.FileSystemRights]
+        $rules = @(
+            [pscustomobject]@{ IdentityReference = 'S-1-5-32-545'; FileSystemRights = $fsr::ReadAndExecute; AccessControlType = 'Allow'; PropagationFlags = 'None' }
+            [pscustomobject]@{ IdentityReference = 'S-1-5-11';     FileSystemRights = $fsr::AppendData;     AccessControlType = 'Allow'; PropagationFlags = 'None' }
+            [pscustomobject]@{ IdentityReference = 'S-1-5-11';     FileSystemRights = $fsr::Modify;         AccessControlType = 'Allow'; PropagationFlags = 'InheritOnly' }
+            [pscustomobject]@{ IdentityReference = 'S-1-5-32-544'; FileSystemRights = $fsr::FullControl;    AccessControlType = 'Allow'; PropagationFlags = 'None' }
+            [pscustomobject]@{ IdentityReference = 'S-1-1-0';      FileSystemRights = $fsr::Write;          AccessControlType = 'Deny';  PropagationFlags = 'None' }
+            [pscustomobject]@{ IdentityReference = 'S-1-1-0';      FileSystemRights = 0x10000000;           AccessControlType = 'Allow'; PropagationFlags = 'InheritOnly' })
+        $w = @(Get-PSMBroadWriteAces -Rules $rules)
+        $w.Count | Should -Be 3
+        $w[1]    | Should -Match 'subfolders and files only'
+        $w[2]    | Should -Match 'GENERIC_ALL'
+    }
+    It 'The full check never throws and reports every check' {
+        $zones = @{
+            NPRFR = @{ Name = 'NPRFR'; PSMConnectUserName = 'FAKEDOMAIN\NoSuchConnect'; PSMAdminConnectUserName = 'FAKEDOMAIN\NoSuchAdmin'; PsmVips = @{} }
+            PRD   = @{ Name = 'PRD'; PsmVips = @{} }
+        }
+        $settings = Import-PowerShellDataFile (Join-Path $root 'config\settings.psd1')
+        $last = [pscustomobject]@{ Date = '2026-11-02T10:00:00'; Succeeded = $false; ErrorData = 'PSMHRD004'; LogPath = 'x.log' }
+        $res = @(Invoke-PSMConfigurationAudit -Settings $settings -Zones $zones -ZoneKey 'NPRFR' -LastHardening $last -RdpCertificateOk $true)
+        $res.Count | Should -Be 9
+        foreach ($r in $res) { $r.Status | Should -BeIn @('OK', 'ALERT', 'INFO') }
+        ($res | Where-Object Check -eq 'Hardening (last run)').Status | Should -Be 'ALERT'
+        ($res | Where-Object Check -eq 'RDP certificate').Status      | Should -Be 'OK'
+    }
+    It 'Deploy-PSM.ps1 exposes -RedoHardening, Invoke-PSMRdpCertificate a report-only mode' {
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'Deploy-PSM.ps1'), [ref]$null, [ref]$null)
+        @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath }) | Should -Contain 'RedoHardening'
+        (Get-Command Invoke-PSMRdpCertificate).Parameters.Keys | Should -Contain 'ReportOnly'
+        (Get-Command Get-PSMComponentAccountNames).Parameters.Keys | Should -Contain 'PsmDir'
+    }
+    It 'tools\Test-PSMConfiguration.ps1 parses without error' {
+        $errors = $null
+        [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'tools\Test-PSMConfiguration.ps1'), [ref]$null, [ref]$errors)
+        @($errors).Count | Should -Be 0
+    }
+}
+
 Describe 'Test-PSMDomainAccount (SID resolution of the zone accounts)' {
     BeforeAll {
         Import-Module (Join-Path $root 'modules\PSM.Common.psm1') -Force

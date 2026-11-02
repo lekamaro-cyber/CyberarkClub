@@ -56,8 +56,10 @@ PSM-Deploy/
 │  ├─ PSM.Register.psm1      # CyberArk Registration stage (Vault secret via -spwdObj)
 │  ├─ PSM.Hardening.psm1     # PSMHardening + controlled AppLocker policy
 │  ├─ PSM.Certificates.psm1  # RDP certificate of the PSMs behind a VIP (check + bind)
+│  ├─ PSM.Audit.psm1         # READ-ONLY configuration check (end of every run)
 │  └─ PSM.Software.psm1      # Generic config-driven install
 ├─ tools/Test-PSMRdsReadiness.ps1        # READ-ONLY check before (re)running InstallRDS
+├─ tools/Test-PSMConfiguration.ps1       # READ-ONLY configuration check, any PSM, any time
 ├─ applocker/PSMConfigureAppLocker.xml   # Controlled AppLocker policy (placeholder)
 ├─ media/                    # (empty) PSM 12.6/14.0 media — not versioned
 ├─ installers/               # (empty) additional binaries — not versioned
@@ -72,6 +74,7 @@ PSM-Deploy/
 PreFlight → Readiness → Prerequisites(RDS) → [reboot+resume] → RdsLicensing → Software
        → Installation → PostInstallation → Registration(secret via PVWA API)
        → Hardening(+AppLocker) → RdpCertificate(every launch) → Validation
+       → Configuration check (read-only, every launch)
 
 Readiness / Prerequisites / Installation / PostInstallation / Registration / Hardening
 are **CyberArk stages** driven via `InstallationAutomation\Execute-Stage.ps1`
@@ -117,6 +120,15 @@ The resume is **interactive** (the PVWA `Get-Credential` prompts work) and
 #     a framed alert gives current -> target names and the manual steps.
 #     Remembered for the resume after a reboot.
 .\Deploy-PSM.ps1 -Zone DC1 -NoPvwa
+
+# 4c) PSM ALREADY in place (deployed by this script or not): replay ONLY the
+#     Hardening stage (+ AppLocker) - e.g. after an EDR exclusion - then the RDP
+#     certificate and the configuration check. No other phase, no resume task,
+#     never an automatic reboot (a reboot the stage asks for is announced).
+.\Deploy-PSM.ps1 -Zone DC1 -RedoHardening
+
+# 4d) Configuration check only (read-only, changes nothing), on any PSM:
+.\tools\Test-PSMConfiguration.ps1 -Zone DC1
 
 # 5) Start over from SCRATCH (after uninstalling/cleaning up the PSM): resets
 #    the state to replay ALL phases (Installation included):
@@ -234,8 +246,10 @@ The resume is **interactive** (the PVWA `Get-Credential` prompts work) and
   - **`Hardening.NonBlocking`** (`settings.psd1`, enabled by default): a failure of the
     Hardening stage is **tolerated** (WARN, deployment continues) instead of stopping —
     case encountered: EDR blocking system ACL modifications (even `takeown`). The failed
-    steps remain **to be retried** (EDR exclusion, then remove `Hardening` from
-    `state\progress.json` and rerun). Set back to `$false` for the strict behavior.
+    steps remain **to be retried** (EDR exclusion, then
+    `.\Deploy-PSM.ps1 -Zone <zone> -RedoHardening`). The configuration check at the
+    end of every run keeps reporting it until then. Set back to `$false` for the
+    strict behavior.
 - `config/software.psd1`: any additional software, **common to all server types**.
   `config/software.extra.psd1` (optional, same shape, usually shipped by a
   PSM-Distribute overlay) **adds** the type's own applications to that list: an
@@ -266,6 +280,26 @@ readable (then NOT bound: TermService could not open it) or binding failure =
 **framed ALERT with the manual fix, never a stop**. The phase is not recorded
 in `progress.json`: every launch re-checks it, so after a manual fix or a
 certificate renewal, relaunching `.\Deploy-PSM.ps1 -Zone <zone>` is enough.
+
+**Configuration check (read-only, end of every run).** After the deployment or
+`-RedoHardening`, and on demand with `.\tools\Test-PSMConfiguration.ps1 -Zone <zone>`
+(also on a PSM this script did not deploy: the PSM folder is read from the
+service), one line per check, then **one framed ALERT listing the defects**.
+It **changes nothing** — each alert says what to do:
+
+| Check | Alert when |
+|---|---|
+| PSM service | stopped, or version ≠ `settings.psd1` `PsmVersion` |
+| Hardening (last run) | the last Hardening stage run by PSM-Deploy failed (error + CyberArk log) |
+| Drive permissions | Users / Authenticated Users / Everyone can write at the root of a local drive (what `RunHardening` removes) |
+| RDS logon right | "Allow log on through Remote Desktop Services" misses a session account of the zone, or lists one of **another zone** (`zones.psd1` only, no mapping); says whether a GPO sets it |
+| Local Administrators | PSMAdminConnect not a member, or PSMConnect a member |
+| AppLocker | Application Identity stopped, no Exe rule, or audit only |
+| Zone (VIP) / RDP certificate | same as the PreFlight zone check / the `RdpCertificate` phase (report only) |
+| Component accounts | names differ from `AppUserPattern` / `GwUserPattern` |
+
+A check that cannot run is reported as INFO, never a stop. The tool's exit code
+is 0 without defect, 1 with at least one ALERT.
 
 **Once per MEDIA version** (12.6, 14.0...):
 - [ ] Drop the media **as-is** under `media\PSM` (never edited by hand)

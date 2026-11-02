@@ -63,6 +63,17 @@ function Invoke-PSMPostInstall {
                            -ConfigFilePath   $stage.ConfigFilePath
 }
 
+function Get-PSMServiceExePath {
+    # Executable the PSM service runs (CAPSM.exe), read from the service itself:
+    # $null when there is no PSM service, '' when its path cannot be read.
+    $svc = Get-CimInstance -ClassName Win32_Service -Filter "Name='Cyberark Privileged Session Manager'" -ErrorAction SilentlyContinue
+    if (-not $svc) { return $null }
+    # PathName: "D:\CyberArk\PSM\CAPSM.exe" [args] (quoted or not).
+    $m = [regex]::Match([string]$svc.PathName, '^\s*"?(?<exe>[^"]+?\.exe)')
+    if (-not $m.Success -or -not (Test-Path $m.Groups['exe'].Value)) { return '' }
+    return $m.Groups['exe'].Value
+}
+
 function Get-PSMInstalledVersion {
     <#
         Version of the PSM ALREADY installed on this machine, read from the
@@ -73,14 +84,28 @@ function Get-PSMInstalledVersion {
           [version]     -> e.g. 14.0.5.57 / 12.6.x;
           'Unreadable'  -> service present but its version could not be read.
     #>
-    $svc = Get-CimInstance -ClassName Win32_Service -Filter "Name='Cyberark Privileged Session Manager'" -ErrorAction SilentlyContinue
-    if (-not $svc) { return $null }
-    # PathName: "D:\CyberArk\PSM\CAPSM.exe" [args] (quoted or not).
-    $m = [regex]::Match([string]$svc.PathName, '^\s*"?(?<exe>[^"]+?\.exe)')
-    if (-not $m.Success -or -not (Test-Path $m.Groups['exe'].Value)) { return 'Unreadable' }
-    $fv = [regex]::Match([string](Get-Item $m.Groups['exe'].Value).VersionInfo.FileVersion, '^\d+(\.\d+){1,3}')
+    $exe = Get-PSMServiceExePath
+    if ($null -eq $exe) { return $null }
+    if (-not $exe) { return 'Unreadable' }
+    $fv = [regex]::Match([string](Get-Item $exe).VersionInfo.FileVersion, '^\d+(\.\d+){1,3}')
     if (-not $fv.Success) { return 'Unreadable' }
     return [version]$fv.Value
 }
 
-Export-ModuleMember -Function Invoke-PSMInstall, Invoke-PSMPostInstall, Test-PSMInstalled, Get-PSMInstalledVersion
+function Get-PSMInstalledPsmDir {
+    <#
+        PSM folder of the PSM ALREADY installed (folder of CAPSM.exe), read from
+        the service: right on a PSM installed elsewhere than settings.psd1
+        Install.InstallDir (e.g. an older PSM in C:\Program Files (x86)\CyberArk\PSM).
+        Falls back to the folder derived from settings.psd1 when the service
+        path cannot be read; $null when there is no PSM service.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] $Settings)
+    $exe = Get-PSMServiceExePath
+    if ($null -eq $exe) { return $null }
+    if ($exe) { return Split-Path $exe -Parent }
+    return (Get-PSMInstallPaths -Settings $Settings).PsmDir
+}
+
+Export-ModuleMember -Function Invoke-PSMInstall, Invoke-PSMPostInstall, Test-PSMInstalled, Get-PSMInstalledVersion, Get-PSMInstalledPsmDir
