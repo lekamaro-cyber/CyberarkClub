@@ -118,6 +118,11 @@ media). `-Upgrade` therefore wraps the CyberArk wizard (README, "-Upgrade").
 To do:
 - [ ] ITACM020S: retry; check the address in `<PSM>\Vault\Vault.ini`, the PRE Vault ITALog
       (source 10.176.91.55). Then the PSM service must start (PSMConsole.log).
-- [ ] Silent upgrade: NOT with a recorded `.iss` - the wizard's Vault password would sit in
-      it in clear. Only if a later media takes the password like the Registration does
-      (`-spwdObj`); then replace the wizard step only.
+
+**Decision (2026-11-03): keep the wizard.** The CyberArk automation does not upgrade:
+`Installation\RunInstallation.psm1` only picks `PSMInstallationTemplate.iss` (nothing
+installed) or `PSMRepairTemplate.iss` (a PSM in the registry, version never compared); the
+repair answers (`SdWelcomeMaint`, 302 = Repair) do not match the 14.0.6 update screens. No
+home-made `.iss` (unsupported path). Operator: answer the wizard, choose "Yes, restart now"
+at the end; the script resumes and does the rest.
+- [ ] Only if CyberArk supports a silent upgrade on a later media: replace the wizard step.
