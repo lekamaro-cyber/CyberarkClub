@@ -5,7 +5,8 @@
 
 .DESCRIPTION
     We do not install anything ourselves: we run the CyberArk framework stages
-    (Installation = silent setup driven by InstallationConfig.xml - no .iss file;
+    (Installation = silent setup: RunInstallation fills the media's own
+    PSMInstallationTemplate.iss from InstallationConfig.xml - nothing to generate;
     PostInstallation = PSMConnect/PSMAdminConnect configuration, etc.).
     Idempotency is ensured at two levels: our phase tracking (progress.json)
     and each CyberArk step's PreCheck (already-done steps are skipped).
