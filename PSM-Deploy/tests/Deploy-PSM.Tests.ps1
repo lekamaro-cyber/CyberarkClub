@@ -745,6 +745,7 @@ Describe 'Configuration check (read-only) and -RedoHardening' {
 <PSMAppLockerConfiguration><AllowedApplications>
 <Application Name="RDPClip" Type="Exe" SessionType="*" Path="c:\windows\system32\rdpclip.exe" Method="Publisher" />
 <Application Name="HandMade" Type="Exe" Path="D:\Tools\hand.exe" Method="Hash" />
+<Libraries />
 </AllowedApplications></PSMAppLockerConfiguration>
 '@
         Set-Content -Path (Join-Path $src 'applocker\PSMConfigureAppLocker.xml') -Value @"
@@ -759,7 +760,7 @@ Describe 'Configuration check (read-only) and -RedoHardening' {
         $raw = Get-Content (Join-Path $psm 'Hardening\PSMConfigureAppLocker.xml') -Raw
         @(([xml]$raw).SelectNodes('//Application') | ForEach-Object { "$($_.GetAttribute('Name'))/$($_.GetAttribute('Method'))" }) |
             Should -Be @('RDPClip/Publisher', 'HandMade/Hash', 'Tool/Hash')
-        $raw | Should -Match '<!-- custom -->\s*<Application Name="Tool"'
+        $raw | Should -Match '<!-- custom -->\s*<Application Name="Tool"[^>]*/>\s*<Libraries'   # CyberArk's schema: <Libraries> last
         Merge-PSMAppLockerConfig -Settings $s -SourcesRoot $src -PsmDir $psm | Should -Be 'OK'
         { Merge-PSMAppLockerConfig -Settings $s -SourcesRoot $src -PsmDir (Join-Path $TestDrive 'no-psm') } | Should -Throw '*not found*'
     }

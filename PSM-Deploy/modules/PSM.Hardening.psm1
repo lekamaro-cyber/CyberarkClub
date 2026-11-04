@@ -183,22 +183,49 @@ function Merge-PSMAppLockerConfig {
             "then: .\Deploy-PSM.ps1 -Zone <zone> -RedoHardening"))
     }
 
+    # CyberArk's AppLocker script validates the file against its schema and stops on
+    # the first error (e.g. <Application> after <Libraries>): check before and after.
+    $xsd = Join-Path (Split-Path $target -Parent) 'PSMConfigureAppLocker.xsd'
+    $schemaErrors = {
+        param([System.Xml.XmlDocument] $Xml)
+        if (-not (Test-Path -LiteralPath $xsd)) { return @() }
+        $errs = New-Object System.Collections.Generic.List[string]
+        if ($Xml.Schemas.Count -eq 0) { [void]$Xml.Schemas.Add($null, $xsd) }
+        $Xml.Validate({ param($s, $e) $errs.Add("$($e.Severity): $($e.Message)") }.GetNewClosure())
+        return @($errs)
+    }
+    $before = @(& $schemaErrors $doc)
+    if ($before) {
+        Write-PSMAlert -Title 'APPLOCKER FILE INVALID ON THIS SERVER' -Lines (@(
+            "$target does not pass CyberArk's schema: the RunApplocker step will fail on it.") +
+            @($before | ForEach-Object { "  $_" }) + @(
+            "Restore a valid file (e.g. one of its .bak copies in $(Split-Path $target -Parent)), then relaunch."))
+    }
+
     return Invoke-IdempotentStep -Name "AppLocker exceptions added to $target" `
         -Test { $todo.Count -eq 0 } `
         -Action {
-            # Indentation of the existing entries; inserted before the closing tag's line break.
+            # Inserted right AFTER the last existing <Application> of the same parent
+            # (never at the end: the schema wants <Libraries> after the applications),
+            # with the indentation of the existing entries.
             $first  = $inPlace[0]
             $indent = if ($first.PreviousSibling -and $first.PreviousSibling.NodeType -eq 'Whitespace') { $first.PreviousSibling.Value } else { "`r`n    " }
+            $lastIn = @{}
+            foreach ($a in $inPlace) { $lastIn[$a.ParentNode] = $a }
             foreach ($n in $todo) {
                 # Same parent element as in our file when the file has it (e.g. AllowedApplications).
                 $parent = @($doc.GetElementsByTagName($n.ParentNode.LocalName))[0]
-                if (-not $parent) { $parent = $first.ParentNode }
-                $anchor = $parent.LastChild
-                if (-not ($anchor -and $anchor.NodeType -eq 'Whitespace')) { $anchor = $null }
+                $after  = if ($parent -and $lastIn.ContainsKey($parent)) { $lastIn[$parent] } else { $inPlace[-1] }
+                $parent = $after.ParentNode
                 foreach ($new in @($doc.CreateWhitespace($indent), $doc.CreateComment(' custom '),
                                    $doc.CreateWhitespace($indent), $doc.ImportNode($n, $true))) {
-                    if ($anchor) { [void]$parent.InsertBefore($new, $anchor) } else { [void]$parent.AppendChild($new) }
+                    $after = $parent.InsertAfter($new, $after)
                 }
+                $lastIn[$parent] = $after
+            }
+            $resultErrors = @(& $schemaErrors $doc)
+            if ($resultErrors) {
+                throw ("the result would not pass CyberArk's schema ($xsd), nothing written: " + ($resultErrors -join ' | '))
             }
             Copy-Item -LiteralPath $target -Destination ('{0}.{1}.bak' -f $target, (Get-Date -Format 'yyyyMMdd-HHmmss')) -Force
             $doc.Save($target)
