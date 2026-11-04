@@ -1,18 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  CONTROLLED AppLocker policy for the PSM (versioned with the deployment script).
-  Goal: keep control of the AppLocker policy instead of applying the default one
-  as-is, and include the additional binaries in it (see config\software.psd1).
+  OUR AppLocker exceptions for the PSM (CyberArk PSMConfigureAppLocker.xml format).
 
-  This file is a PLACEHOLDER: to be filled in at deployment time from the
-  CyberArk reference PSMConfigureAppLocker (version 12.6 / 14.0), extended with
-  the rules matching each application listed in software.psd1.
+  REPLACE this example with your own file - e.g. the production
+  D:\CyberArk\PSM\Hardening\PSMConfigureAppLocker.xml as is - and KEEP it when
+  copying a new version of PSM-Deploy over the sources.
 
-  TODO (deployment):
-    - Start from the CyberArk template of the target version.
-    - Add an Allow rule per additional installed binary.
-    - Check that the paths/publishers match the real installers.
+  Before every Hardening stage (deployment, -RedoHardening, -Upgrade) the script
+  takes the CyberArk ORIGINAL shipped in the media (media\PSM\...\PSMConfigureAppLocker.xml,
+  i.e. the installed version's own entries) and ADDS every <Application> of this
+  file it does not have yet (same Type + Path = already there). An entry whose
+  file is missing on the server is left out with an alert. The result is written
+  to <PSM>\Hardening\PSMConfigureAppLocker.xml, then applied by the RunApplocker step.
+
+  Only the <Application> lines are read; this example has none (= CyberArk's
+  file is used as is). Example of entries (uncomment / adapt):
+    <Application Name="SqlPlus" Type="Exe" Path="D:\oracle\instantclient\sqlplus.exe" Method="Hash" />
+    <Application Name="SqlDev"  Type="Exe" Path="D:\DBA\SQLDEVELOPPEUR_19.1\sqldeveloper\sqldeveloper\bin\sqldeveloper64.exe" Method="Hash" />
+  Any binary added in config\software.psd1 that PSM sessions run must be listed here.
 -->
-<AppLockerPolicy Version="1">
-  <!-- TODO: RuleCollections (Exe / Script / Dll / Msi) to define at deployment time. -->
-</AppLockerPolicy>
+<PSMAppLockerConfiguration>
+  <AllowedApplications>
+  </AllowedApplications>
+</PSMAppLockerConfiguration>
