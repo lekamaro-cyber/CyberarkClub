@@ -47,11 +47,12 @@ function Set-PSMConnectAccounts {
     $varMap = Get-PSMConfigValue -Config $h -Key 'ScriptAccountVariables'
     if ($null -eq $varMap) { throw "settings.psd1: Hardening.ScriptAccountVariables not set (zone accounts provided)." }
     if ($varMap.Keys.Count -eq 0) {
-        # DELIBERATELY empty mapping (14.0 flow): the framework's Hardening step
-        # dot-sources Consts.ps1 - which Set-PSMAutomationConsts already patches -
+        # DELIBERATELY empty mapping (14.0 flow): the framework's Hardening and
+        # AppLocker steps read InstallationConfiguration.json PSMConnectionUsersInfo -
+        # which Set-PSMAutomationConsts writes (Set-PSMConnectionUsersInfo) -
         # and passes the accounts to PSMHardening.ps1 as PARAMETERS
         # (-connectionUserName/-connectionAdminUserName...). Nothing to patch here.
-        Write-PSMLog -Level INFO -Message 'Hardening.ScriptAccountVariables is empty: accounts flow through Consts.ps1 (14.0 flow), no hardening script patch needed.'
+        Write-PSMLog -Level INFO -Message 'Hardening.ScriptAccountVariables is empty: accounts flow through InstallationConfiguration.json (14.0 flow), no hardening script patch needed.'
         return $false
     }
 

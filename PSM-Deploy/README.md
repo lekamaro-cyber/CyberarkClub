@@ -188,15 +188,21 @@ The resume is **interactive** (the PVWA `Get-Credential` prompts work) and
   - **PSMConnect / PSMAdminConnect** (session accounts, **domain**): **per zone**
     in `zones.psd1` (`PSMConnectUserName` / `PSMAdminConnectUserName`, format
     `DOMAIN\user`). They are **not** stage parameters — they are **patched
-    in place** (`.orig` backup, replayable) at **two levels**:
+    in place** (`.orig` backup, replayable) at **three levels**:
     1. **`InstallationAutomation\Consts.ps1`** (media) — `PSM_CONNECT` /
        `PSM_ADMIN_CONNECT` constants consumed by the automation steps
        (`Set-PSMAutomationConsts`, called before PostInstallation and Hardening);
-    2. **`PSMHardening.ps1` / `PSMConfigureAppLocker.ps1`** (generated at install time
+    2. **14.0: `InstallationAutomation\InstallationConfiguration\InstallationConfiguration.json`**
+       (media) — key `PSMConnectionUsersInfo` (`RegularUser` / `AdminUser`, each
+       `Name` + `Domain`), where the **Hardening and AppLocker** steps read the
+       accounts. Absent from the media: without it both fall back to the LOCAL
+       `PSMConnect` / `PSMAdminConnect` and the AppLocker rules never apply to the
+       domain session accounts (`Set-PSMConnectionUsersInfo`, with level 1);
+    3. **12.6: `PSMHardening.ps1` / `PSMConfigureAppLocker.ps1`** (generated at install time
        under `<InstallDir>\PSM\Hardening`) — variables `$PSM_CONNECT_USER` /
        `$PSM_ADMIN_CONNECT_USER` and `$PSM_CONNECT` / `$PSM_ADMIN_CONNECT`
        (`Set-PSMConnectAccounts`, called at the start of the Hardening phase; mapping
-       configurable in `settings.psd1` → `Hardening.ScriptAccountVariables`).
+       configurable in `settings.psd1` → `Hardening.ScriptAccountVariables`, empty in 14.0).
     **Empty zone accounts = inactive.** If a variable cannot be found (different media
     version), the script stops and lists the candidate variables. The
     **passwords** are never here: managed in the **PSM Safe** on the Vault side.

@@ -157,6 +157,95 @@ function Set-PSMAutomationConsts {
 
     Set-Content -Path $path -Value $content -NoNewline
     Write-PSMLog -Level INFO -Message "Consts.ps1 patched (domain accounts) -> $path"
+
+    # 14.0: the Hardening and AppLocker steps read the accounts from the
+    # installation configuration JSON, not from Consts.ps1 (see the function).
+    Set-PSMConnectionUsersInfo -Settings $Settings -SourcesRoot $SourcesRoot -ZoneConfig $ZoneConfig | Out-Null
+    return $true
+}
+
+function ConvertTo-PSMAccountParts {
+    # 'DOMAIN\user' (or 'user@domain') -> Name + Domain, as the CyberArk framework expects them.
+    param([Parameter(Mandatory)] [string] $Account)
+    if ($Account -match '^(?<d>[^\\@]+)\\(?<n>[^\\@]+)$') { return [pscustomobject]@{ Name = $Matches['n']; Domain = $Matches['d'] } }
+    if ($Account -match '^(?<n>[^\\@]+)@(?<d>[^\\@]+)$')   { return [pscustomobject]@{ Name = $Matches['n']; Domain = $Matches['d'] } }
+    throw "Account '$Account': expected DOMAIN\user (zones.psd1 PSMConnectUserName / PSMAdminConnectUserName)."
+}
+
+function Set-PSMConnectionUsersInfo {
+    <#
+        14.0: the Hardening (RunTheHardeningScript.psm1) and AppLocker
+        (SetupAppLockerRules.psm1) steps take the PSM session accounts from the
+        PSMConnectionUsersInfo key of
+        InstallationAutomation\InstallationConfiguration\InstallationConfiguration.json
+        (RegularUser / AdminUser, each with Name and Domain). The media has no such
+        key: both steps fall back to the LOCAL PSMConnect / PSMAdminConnect, so the
+        AppLocker deny rules never apply to the domain accounts the sessions run
+        under (seen on FRPRDSRV10012: "PSM connection user is PSMConnect").
+        Writes the key with the zone's accounts. Same rules as Consts.ps1: in place,
+        '.orig' backup made once, always rebuilt from it (replayable; a newly dropped
+        media is patched again). The rest of the file is kept as is (the key is
+        inserted after the opening brace); the result must parse, or nothing is written.
+        INACTIVE (returns $false) when the zone declares no session account.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)] $Settings,
+        [Parameter(Mandatory)] [string] $SourcesRoot,
+        $ZoneConfig
+    )
+    if (-not $ZoneConfig) { return $false }
+    $connect = Get-PSMConfigValue -Config $ZoneConfig -Key 'PSMConnectUserName'
+    $admin   = Get-PSMConfigValue -Config $ZoneConfig -Key 'PSMAdminConnectUserName'
+    if (-not $connect -and -not $admin) { return $false }
+
+    $iaRoot = Join-Path (Join-Path $SourcesRoot $Settings.Install.MediaRelativePath) $Settings.Install.InstallationAutomationSubPath
+    $path   = Join-Path $iaRoot 'InstallationConfiguration\InstallationConfiguration.json'
+    if (-not $PSCmdlet.ShouldProcess($path, 'Write PSMConnectionUsersInfo (domain PSM accounts)')) {
+        Write-PSMLog -Level INFO -Message 'WhatIf: InstallationConfiguration.json would get PSMConnectionUsersInfo (domain accounts).'
+        return $false
+    }
+    if (-not (Test-Path -LiteralPath $path)) {
+        # Not a 14.0-style media (e.g. 12.6: accounts are script variables there).
+        Write-PSMLog -Level WARN -Message "InstallationConfiguration.json not found ($path): PSMConnectionUsersInfo not written."
+        return $false
+    }
+
+    # Back up the original only once; ALWAYS start over from the original.
+    $backup = "$path.orig"
+    if (-not (Test-Path -LiteralPath $backup)) { Copy-Item -LiteralPath $path -Destination $backup -Force }
+    $content = Get-Content -LiteralPath $backup -Raw
+
+    $users = [ordered]@{}
+    if ($connect) { $users['RegularUser'] = ConvertTo-PSMAccountParts -Account $connect }
+    if ($admin)   { $users['AdminUser']   = ConvertTo-PSMAccountParts -Account $admin }
+    $esc   = { param($s) ([string]$s).Replace('\', '\\').Replace('"', '\"') }
+    $inner = @($users.Keys | ForEach-Object {
+        '"{0}": {{ "Name": "{1}", "Domain": "{2}" }}' -f $_, (& $esc $users[$_].Name), (& $esc $users[$_].Domain) }) -join ', '
+    $block = '"PSMConnectionUsersInfo": { ' + $inner + ' }'
+
+    if ($content -match '"PSMConnectionUsersInfo"\s*:') {
+        # A later media may ship the key: replace its value (the file is re-serialized).
+        $obj = $content | ConvertFrom-Json
+        $obj.PSMConnectionUsersInfo = ('{' + $block + '}' | ConvertFrom-Json).PSMConnectionUsersInfo
+        $new = $obj | ConvertTo-Json -Depth 20
+    }
+    else {
+        $i = $content.IndexOf('{')
+        if ($i -lt 0) { throw "InstallationConfiguration.json: no JSON object in $backup." }
+        $new = $content.Substring(0, $i + 1) + "`r`n  " + $block + ',' + $content.Substring($i + 1)
+    }
+    try   { $check = $new | ConvertFrom-Json }
+    catch { throw "InstallationConfiguration.json: the patched content does not parse ($($_.Exception.Message)) - left unchanged." }
+    foreach ($role in $users.Keys) {
+        if ($check.PSMConnectionUsersInfo.$role.Name -ne $users[$role].Name) {
+            throw "InstallationConfiguration.json: PSMConnectionUsersInfo.$role not written as expected - left unchanged."
+        }
+    }
+
+    Set-Content -LiteralPath $path -Value $new -NoNewline
+    Write-PSMLog -Level INFO -Message ("InstallationConfiguration.json: PSMConnectionUsersInfo <- " +
+        (($users.Keys | ForEach-Object { "$_ $($users[$_].Domain)\$($users[$_].Name)" }) -join ', ') + " -> $path")
     return $true
 }
 
@@ -316,4 +405,5 @@ function Invoke-PSMStage {
     }
 }
 
-Export-ModuleMember -Function Get-PSMStagePaths, Resolve-PSMStageConfig, Invoke-PSMStage, Update-PSMStageXml, Set-PSMAutomationConsts
+Export-ModuleMember -Function Get-PSMStagePaths, Resolve-PSMStageConfig, Invoke-PSMStage, Update-PSMStageXml, Set-PSMAutomationConsts,
+    Set-PSMConnectionUsersInfo, ConvertTo-PSMAccountParts

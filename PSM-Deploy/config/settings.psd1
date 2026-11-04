@@ -138,10 +138,12 @@
     # <InstallDir>\PSM\Hardening (NOT in the media).
     # The mechanism is VERSION-DEPENDENT (confirmed on both medias):
     #   - 14.0: NOTHING to patch in the hardening scripts -> EMPTY mapping.
-    #     RunTheHardeningScript.psm1 dot-sources InstallationAutomation\Consts.ps1
-    #     (which Set-PSMAutomationConsts already patches with the zone accounts)
-    #     and passes them to PSMHardening.ps1 as PARAMETERS
-    #     (-connectionUserName / -connectionAdminUserName ...).
+    #     RunTheHardeningScript.psm1 and SetupAppLockerRules.psm1 read the
+    #     accounts from the PSMConnectionUsersInfo key of
+    #     InstallationAutomation\InstallationConfiguration\InstallationConfiguration.json
+    #     (written automatically with the zone accounts, like Consts.ps1) and pass
+    #     them to PSMHardening.ps1 / PSMConfigureAppLocker.ps1 as PARAMETERS
+    #     (-connectionUserName / -connectionUserDomain ...).
     #   - 12.6: accounts are VARIABLES at the top of the installed scripts ->
     #     use the mapping shown in the commented block below.
     # If a configured name does not exist, the script stops and lists the file's
@@ -160,7 +162,7 @@
         NonBlocking  = $true
         HardeningDir = ''   # empty -> derived from Install.InstallDir (<InstallDir>\PSM\Hardening)
         # file -> name of the variables to patch (Connect / AdminConnect)
-        # 14.0: EMPTY (accounts flow through Consts.ps1, see note above).
+        # 14.0: EMPTY (accounts flow through InstallationConfiguration.json, see note above).
         # 12.6: uncomment the mapping below instead.
         ScriptAccountVariables = @{}
         # ScriptAccountVariables = @{

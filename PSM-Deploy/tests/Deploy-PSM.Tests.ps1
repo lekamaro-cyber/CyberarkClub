@@ -284,7 +284,7 @@ $PSM_ADMIN_CONNECT = 'PSMAdminConnect'
         Test-Path (Join-Path $script:hardDir 'PSMHardening.ps1.orig') | Should -BeFalse
     }
 
-    It 'Empty mapping = deliberate no-op (14.0 flow: accounts come from Consts.ps1)' {
+    It 'Empty mapping = deliberate no-op (14.0 flow: accounts come from InstallationConfiguration.json)' {
         Reset-HardeningScripts
         $empty = @{ Hardening = @{ HardeningDir = $script:hardDir; ScriptAccountVariables = @{} } }
         Set-PSMConnectAccounts -Settings $empty -ZoneConfig @{ PSMConnectUserName = 'CONTOSO\X' } -Confirm:$false |
@@ -356,6 +356,25 @@ Set-Variable OTHER_CONSTANT -value "unchanged"
         Set-PSMAutomationConsts -Settings $script:cSettings -SourcesRoot $script:cSrc -ZoneConfig @{ } -Confirm:$false |
             Should -BeFalse
         Test-Path "$script:consts.orig" | Should -BeFalse
+    }
+
+    It '14.0: writes PSMConnectionUsersInfo (Hardening/AppLocker accounts) into InstallationConfiguration.json, replayable' {
+        Reset-Consts
+        $jDir = Join-Path $script:cIa 'InstallationConfiguration'
+        New-Item -ItemType Directory -Path $jDir -Force | Out-Null
+        $json = Join-Path $jDir 'InstallationConfiguration.json'
+        Set-Content -Path $json -Value "{`r`n  `"ConnectivityPorts`": { `"Vault`": 1858 },`r`n  `"SupportedOSVersions`": [ { `"SupportedMajor`": 10 } ]`r`n}"
+        Remove-Item "$json.orig" -ErrorAction SilentlyContinue
+        $zone = @{ PSMConnectUserName = 'CONTOSO\SvcConnect'; PSMAdminConnectUserName = 'CONTOSO\SvcAdmin' }
+        Set-PSMAutomationConsts -Settings $script:cSettings -SourcesRoot $script:cSrc -ZoneConfig $zone -Confirm:$false | Out-Null
+        Set-PSMAutomationConsts -Settings $script:cSettings -SourcesRoot $script:cSrc -ZoneConfig $zone -Confirm:$false | Out-Null
+        $o = Get-Content $json -Raw | ConvertFrom-Json
+        $o.PSMConnectionUsersInfo.RegularUser.Name   | Should -Be 'SvcConnect'
+        $o.PSMConnectionUsersInfo.RegularUser.Domain | Should -Be 'CONTOSO'
+        $o.PSMConnectionUsersInfo.AdminUser.Name     | Should -Be 'SvcAdmin'
+        $o.ConnectivityPorts.Vault                   | Should -Be 1858      # rest of the file untouched
+        ([regex]::Matches((Get-Content $json -Raw), 'PSMConnectionUsersInfo')).Count | Should -Be 1
+        { ConvertTo-PSMAccountParts -Account 'NoDomain' } | Should -Throw '*DOMAIN\user*'
     }
 }
 

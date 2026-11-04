@@ -29,12 +29,15 @@ The 14.0 Hardening and AppLocker steps read the session accounts from the
 `PSMConnectionUsersInfo` key of `InstallationAutomation\InstallationConfiguration\InstallationConfiguration.json`
 (`RegularUser` / `AdminUser`, each with `Name` and `Domain`). The media's JSON has no such
 key, so both fall back to the LOCAL `<host>\PSMConnect` / `PSMAdminConnect`; the
-`Consts.ps1` patch does not reach them.
+`Consts.ps1` patch does not reach them. **Confirmed on 2026-11-04** (FRPRDSRV10012,
+`Hardening\Logs\PSMAppLockerLog.log`: "PSM connection user is PSMConnect"): the AppLocker
+deny rules then never apply to the domain accounts the sessions run under. Production got
+the domain accounts through hand-edited 12.6 `.ps1` files restored after each upgrade.
 
-To do:
-- [ ] Validate by hand: add the key to the JSON (`.orig` backup), replay the Hardening,
-      check that `FRSVCPRE` appears in the `PSMHardening-*.log`.
-- [ ] If confirmed: inject it from `zones.psd1` (domain and name split), like `Consts.ps1`.
+Done: `Set-PSMConnectionUsersInfo` (called with the `Consts.ps1` patch) writes the key from
+`zones.psd1` (`DOMAIN\user` split into Domain / Name), `.orig` backup, rebuilt every run.
+- [ ] Check on a server: `PSMAppLockerLog.log` says "PSM connection user is FRSVC…PSMConnect",
+      and the effective AppLocker rules target the domain accounts (as on FRDRPSRV4640).
 
 ## 3. Hardening blocked by the EDR on `C:\`
 
