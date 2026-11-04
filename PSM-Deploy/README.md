@@ -60,6 +60,7 @@ PSM-Deploy/
 │  └─ PSM.Software.psm1      # Generic config-driven install
 ├─ tools/Test-PSMRdsReadiness.ps1        # READ-ONLY check before (re)running InstallRDS
 ├─ tools/Test-PSMConfiguration.ps1       # READ-ONLY configuration check, any PSM, any time
+├─ tools/Get-PSMInventory.ps1            # READ-ONLY full inventory of a PSM (self-contained: compare a hand-installed PSM with ours)
 ├─ applocker/PSMConfigureAppLocker.xml   # Controlled AppLocker policy (placeholder)
 ├─ media/                    # (empty) PSM 12.6/14.0 media — not versioned
 ├─ installers/               # (empty) additional binaries — not versioned
