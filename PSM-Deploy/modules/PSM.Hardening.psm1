@@ -110,17 +110,18 @@ function Set-PSMConnectAccounts {
 
 function Merge-PSMAppLockerConfig {
     <#
-        AppLocker exceptions. The ORIGINAL is the CyberArk PSMConfigureAppLocker.xml
-        shipped in the MEDIA (the installed version's own file); ours is
-        applocker\PSMConfigureAppLocker.xml in the sources (it may be a complete
-        production file). Result = the original + every <Application> of ours it
-        does not have yet (same Type + Path = already there, whatever the Method:
-        the version's own entries always win). An entry whose file is missing on
-        this server is left out with an ALERT (the CyberArk AppLocker script would
-        fail on it). Written to <PSM>\Hardening\PSMConfigureAppLocker.xml right
-        before the Hardening stage (its RunApplocker step reads it); the file it
-        replaces is kept as .<stamp>.bak. Idempotent: same result = nothing written.
-        No custom file, or no <Application> in it: CyberArk's file is left as is.
+        AppLocker exceptions, ADDED to the file in place on this server:
+        <PSM>\Hardening\PSMConfigureAppLocker.xml (CyberArk's default after an
+        install or upgrade, or a file already customized by hand). That file is
+        never rebuilt: nothing in it is removed or changed. Every <Application>
+        of applocker\PSMConfigureAppLocker.xml (sources; it may be a complete
+        production file) that the file does not have yet - same Type + Path,
+        whatever the Name or Method - is appended to it, preceded by a
+        <!-- custom --> comment. An entry whose file is missing on this server is
+        left out with an ALERT (the CyberArk AppLocker script would fail on it).
+        Called right before the Hardening stage (its RunApplocker step applies the
+        file); the file is kept as .<stamp>.bak before a change. Nothing to add =
+        nothing written. No custom file, or no <Application> in it: nothing done.
         Returns OK | CHANGED | WHATIF | SKIPPED.
     #>
     [CmdletBinding(SupportsShouldProcess)]
@@ -131,60 +132,49 @@ function Merge-PSMAppLockerConfig {
     )
     $customPath = Join-Path $SourcesRoot 'applocker\PSMConfigureAppLocker.xml'
     if (-not (Test-Path -LiteralPath $customPath)) {
-        Write-PSMLog -Level INFO -Message "AppLocker: no $customPath - CyberArk's PSMConfigureAppLocker.xml kept as is."
+        Write-PSMLog -Level INFO -Message "AppLocker: no $customPath - PSMConfigureAppLocker.xml of the server left as is."
         return 'SKIPPED'
     }
     [xml]$custom = Get-Content -LiteralPath $customPath -Raw
     $customApps = @($custom.SelectNodes('//Application'))
     if (-not $customApps) {
-        Write-PSMLog -Level INFO -Message "AppLocker: no <Application> entry in $customPath - CyberArk's PSMConfigureAppLocker.xml kept as is."
+        Write-PSMLog -Level INFO -Message "AppLocker: no <Application> entry in $customPath - PSMConfigureAppLocker.xml of the server left as is."
         return 'SKIPPED'
     }
 
     if (-not $PsmDir) { $PsmDir = Get-PSMInstalledPsmDir -Settings $Settings }
     if (-not $PsmDir) { $PsmDir = (Get-PSMInstallPaths -Settings $Settings).PsmDir }
     $target = Join-Path $PsmDir 'Hardening\PSMConfigureAppLocker.xml'
-
-    # Original: the media's file (one under a Hardening folder first).
-    $mediaPsm  = Join-Path $SourcesRoot $Settings.Install.MediaRelativePath
-    $originals = @(Get-ChildItem -LiteralPath $mediaPsm -Recurse -File -Filter 'PSMConfigureAppLocker.xml' -ErrorAction SilentlyContinue |
-                   Sort-Object @{ Expression = { if ($_.FullName -match '[\\/]Hardening[\\/]') { 0 } else { 1 } } }, FullName)
-    if (-not $originals) {
-        throw ("AppLocker: no PSMConfigureAppLocker.xml in the media ($mediaPsm): the CyberArk original is needed to merge " +
-               "$customPath. Nothing changed.")
+    if (-not (Test-Path -LiteralPath $target)) {
+        throw "AppLocker: $target not found (laid down by the PSM installer) - is the PSM installed? Nothing changed."
     }
-    $original = $originals[0].FullName
-    [xml]$doc = Get-Content -LiteralPath $original -Raw
-    $origApps = @($doc.SelectNodes('//Application'))
-    if (-not $origApps) { throw "AppLocker: $original has no <Application> entry - is it the CyberArk PSMConfigureAppLocker.xml?" }
+    # Whitespace kept: the file in place is only appended to, its layout untouched.
+    $doc = New-Object System.Xml.XmlDocument
+    $doc.PreserveWhitespace = $true
+    $doc.Load($target)
+    $inPlace = @($doc.SelectNodes('//Application'))
+    if (-not $inPlace) { throw "AppLocker: $target has no <Application> entry - is it the CyberArk PSMConfigureAppLocker.xml? Nothing changed." }
 
+    $keyOf = { param($n) '{0}|{1}' -f ([string]$n.GetAttribute('Type')).Trim().ToLowerInvariant(),
+                                      ([string]$n.GetAttribute('Path')).Trim().TrimEnd('\').ToLowerInvariant() }
     $known = @{}
-    foreach ($n in $origApps) {
-        $known[('{0}|{1}' -f ([string]$n.GetAttribute('Type')).Trim().ToLowerInvariant(),
-                             ([string]$n.GetAttribute('Path')).Trim().TrimEnd('\').ToLowerInvariant())] = $true
-    }
-    $defaultParent = $origApps[0].ParentNode
-    $added = @(); $already = 0; $missing = @()
+    foreach ($n in $inPlace) { $known[(& $keyOf $n)] = $true }
+    $todo = @(); $already = 0; $missing = @()
     foreach ($n in $customApps) {
-        $k = '{0}|{1}' -f ([string]$n.GetAttribute('Type')).Trim().ToLowerInvariant(),
-                          ([string]$n.GetAttribute('Path')).Trim().TrimEnd('\').ToLowerInvariant()
+        $k = & $keyOf $n
         if ($known.ContainsKey($k)) { $already++; continue }
         $path = [Environment]::ExpandEnvironmentVariables(([string]$n.GetAttribute('Path')).Trim())
         if ($path -and $path -notmatch '[*?]' -and -not (Test-Path -LiteralPath $path)) {
             $missing += "$($n.GetAttribute('Name')): $path"
             continue
         }
-        # Same parent element as in our file when the original has it (e.g. AllowedApplications).
-        $parentName = $n.ParentNode.LocalName
-        $parent = @($doc.GetElementsByTagName($parentName))[0]
-        if (-not $parent) { $parent = $defaultParent }
-        [void]$parent.AppendChild($doc.ImportNode($n, $true))
         $known[$k] = $true
-        $added += [string]$n.GetAttribute('Name')
+        $todo += $n
     }
 
-    Write-PSMLog -Level INFO -Message ("AppLocker: original $original ($($origApps.Count) entries) + $customPath ($($customApps.Count) entries): " +
-        "$($added.Count) added$(if ($added) { " ($($added -join ', '))" }), $already already in the original, $($missing.Count) left out.")
+    Write-PSMLog -Level INFO -Message ("AppLocker: $target ($($inPlace.Count) entries) vs $customPath ($($customApps.Count) entries): " +
+        "$($todo.Count) to add$(if ($todo) { ' (' + (($todo | ForEach-Object { $_.GetAttribute('Name') }) -join ', ') + ')' }), " +
+        "$already already there, $($missing.Count) left out.")
     if ($missing) {
         Write-PSMAlert -Title 'APPLOCKER EXCEPTIONS LEFT OUT' -Lines (@(
             "Entries of $customPath whose file does not exist on this server (NOT allowed by AppLocker):") +
@@ -193,19 +183,24 @@ function Merge-PSMAppLockerConfig {
             "then: .\Deploy-PSM.ps1 -Zone <zone> -RedoHardening"))
     }
 
-    $merged  = $doc.OuterXml
-    $current = ''
-    if (Test-Path -LiteralPath $target) {
-        try { $current = ([xml](Get-Content -LiteralPath $target -Raw)).OuterXml } catch { $current = '' }
-    }
-    return Invoke-IdempotentStep -Name "AppLocker exceptions merged into $target" `
-        -Test { $current -eq $merged } `
+    return Invoke-IdempotentStep -Name "AppLocker exceptions added to $target" `
+        -Test { $todo.Count -eq 0 } `
         -Action {
-            $dir = Split-Path $target -Parent
-            if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-            if (Test-Path -LiteralPath $target) {
-                Copy-Item -LiteralPath $target -Destination ('{0}.{1}.bak' -f $target, (Get-Date -Format 'yyyyMMdd-HHmmss')) -Force
+            # Indentation of the existing entries; inserted before the closing tag's line break.
+            $first  = $inPlace[0]
+            $indent = if ($first.PreviousSibling -and $first.PreviousSibling.NodeType -eq 'Whitespace') { $first.PreviousSibling.Value } else { "`r`n    " }
+            foreach ($n in $todo) {
+                # Same parent element as in our file when the file has it (e.g. AllowedApplications).
+                $parent = @($doc.GetElementsByTagName($n.ParentNode.LocalName))[0]
+                if (-not $parent) { $parent = $first.ParentNode }
+                $anchor = $parent.LastChild
+                if (-not ($anchor -and $anchor.NodeType -eq 'Whitespace')) { $anchor = $null }
+                foreach ($new in @($doc.CreateWhitespace($indent), $doc.CreateComment(' custom '),
+                                   $doc.CreateWhitespace($indent), $doc.ImportNode($n, $true))) {
+                    if ($anchor) { [void]$parent.InsertBefore($new, $anchor) } else { [void]$parent.AppendChild($new) }
+                }
             }
+            Copy-Item -LiteralPath $target -Destination ('{0}.{1}.bak' -f $target, (Get-Date -Format 'yyyyMMdd-HHmmss')) -Force
             $doc.Save($target)
         } -WhatIf:$WhatIfPreference
 }
@@ -222,7 +217,7 @@ function Invoke-PSMHardening {
     # (the RunHardening / RunApplocker steps re-read these scripts afterwards).
     Set-PSMConnectAccounts -Settings $Settings -ZoneConfig $ZoneConfig | Out-Null
 
-    # Our AppLocker exceptions merged into the media's original BEFORE the stage
+    # Our missing AppLocker exceptions added to the server's file BEFORE the stage
     # (its RunApplocker step applies <PSM>\Hardening\PSMConfigureAppLocker.xml).
     Merge-PSMAppLockerConfig -Settings $Settings -SourcesRoot $SourcesRoot -WhatIf:$WhatIfPreference | Out-Null
 

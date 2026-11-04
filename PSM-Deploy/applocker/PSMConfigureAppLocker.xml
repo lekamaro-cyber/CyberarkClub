@@ -7,11 +7,12 @@
   copying a new version of PSM-Deploy over the sources.
 
   Before every Hardening stage (deployment, -RedoHardening, -Upgrade) the script
-  takes the CyberArk ORIGINAL shipped in the media (media\PSM\...\PSMConfigureAppLocker.xml,
-  i.e. the installed version's own entries) and ADDS every <Application> of this
-  file it does not have yet (same Type + Path = already there). An entry whose
-  file is missing on the server is left out with an alert. The result is written
-  to <PSM>\Hardening\PSMConfigureAppLocker.xml, then applied by the RunApplocker step.
+  compares the file IN PLACE on the server (<PSM>\Hardening\PSMConfigureAppLocker.xml:
+  CyberArk's default after an install/upgrade, or already customized) with this
+  one, and only ADDS the <Application> entries it does not have yet (same Type +
+  Path = already there), each preceded by a <!- - custom - -> comment. Nothing is
+  removed or changed in the server's file. An entry whose file is missing on the
+  server is left out with an alert. The RunApplocker step then applies the file.
 
   Only the <Application> lines are read; this example has none (= CyberArk's
   file is used as is). Example of entries (uncomment / adapt):

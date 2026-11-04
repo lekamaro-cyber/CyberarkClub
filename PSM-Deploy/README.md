@@ -61,7 +61,7 @@ PSM-Deploy/
 ├─ tools/Test-PSMRdsReadiness.ps1        # READ-ONLY check before (re)running InstallRDS
 ├─ tools/Test-PSMConfiguration.ps1       # READ-ONLY configuration check, any PSM, any time
 ├─ tools/Get-PSMInventory.ps1            # READ-ONLY full inventory of a PSM (self-contained: compare a hand-installed PSM with ours)
-├─ applocker/PSMConfigureAppLocker.xml   # OUR AppLocker exceptions, merged into the media's original before every Hardening
+├─ applocker/PSMConfigureAppLocker.xml   # OUR AppLocker exceptions, added (when missing) to the server's file before every Hardening
 ├─ media/                    # (empty) PSM 12.6/14.0 media — not versioned
 ├─ installers/               # (empty) additional binaries — not versioned
 ├─ state/                    # progress (post-reboot resume) — not versioned
@@ -309,16 +309,17 @@ readable (then NOT bound: TermService could not open it) or binding failure =
 in `progress.json`: every launch re-checks it, so after a manual fix or a
 certificate renewal, relaunching `.\Deploy-PSM.ps1 -Zone <zone>` is enough.
 
-**AppLocker exceptions (`applocker\PSMConfigureAppLocker.xml`).** The CyberArk
-installer and every upgrade put back the version's default
-`<PSM>\Hardening\PSMConfigureAppLocker.xml`. Before every Hardening stage
-(deployment, `-RedoHardening`, `-Upgrade`) the script takes the **original
-shipped in the media** and **adds** each `<Application>` of our file it does not
-have yet (same Type + Path = already there: the version's own entries, e.g. its
-Publisher rules, always win). Our file can simply be the production one, as is.
-An entry whose file is missing on the server is left out with an alert (the
-CyberArk AppLocker script would fail on it). The replaced file is kept as
-`.<stamp>.bak`; an unchanged result writes nothing. **Keep your own
+**AppLocker exceptions (`applocker\PSMConfigureAppLocker.xml`).** Before every
+Hardening stage (deployment, `-RedoHardening`, `-Upgrade`) the script compares
+the file **in place on the server**, `<PSM>\Hardening\PSMConfigureAppLocker.xml`
+(CyberArk's default after an install or an upgrade, or a file already
+customized by hand), with ours, and **only adds** the `<Application>` entries it
+does not have yet (same Type + Path = already there), each preceded by a
+`<!-- custom -->` comment. Nothing in the server's file is removed or changed,
+its layout is kept. Our file can simply be the production one, as is. An entry
+whose file is missing on the server is left out with an alert (the CyberArk
+AppLocker script would fail on it). The file is kept as `.<stamp>.bak` before a
+change; nothing to add = nothing written. **Keep your own
 `applocker\PSMConfigureAppLocker.xml` when copying a new PSM-Deploy version.**
 
 **Configuration check (read-only, end of every run).** After the deployment or

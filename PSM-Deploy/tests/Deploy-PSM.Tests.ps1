@@ -737,13 +737,14 @@ Describe 'Configuration check (read-only) and -RedoHardening' {
         $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'Deploy-PSM.ps1'), [ref]$null, [ref]$null)
         @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath }) | Should -Contain 'Upgrade'
     }
-    It 'AppLocker: our entries merged into the media original (duplicates, missing files, idempotent)' {
+    It 'AppLocker: only the missing custom entries are added to the server file (nothing removed, idempotent)' {
         $src = Join-Path $TestDrive 'al-src'; $psm = Join-Path $TestDrive 'al-psm'
-        foreach ($d in 'media\PSM\InstallationAutomation\Hardening', 'applocker') { New-Item -ItemType Directory -Path (Join-Path $src $d) -Force | Out-Null }
+        foreach ($d in (Join-Path $src 'applocker'), (Join-Path $psm 'Hardening')) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
         $tool = Join-Path $TestDrive 'tool.exe'; Set-Content -Path $tool -Value 'x'
-        Set-Content -Path (Join-Path $src 'media\PSM\InstallationAutomation\Hardening\PSMConfigureAppLocker.xml') -Value @'
+        Set-Content -Path (Join-Path $psm 'Hardening\PSMConfigureAppLocker.xml') -Value @'
 <PSMAppLockerConfiguration><AllowedApplications>
 <Application Name="RDPClip" Type="Exe" SessionType="*" Path="c:\windows\system32\rdpclip.exe" Method="Publisher" />
+<Application Name="HandMade" Type="Exe" Path="D:\Tools\hand.exe" Method="Hash" />
 </AllowedApplications></PSMAppLockerConfiguration>
 '@
         Set-Content -Path (Join-Path $src 'applocker\PSMConfigureAppLocker.xml') -Value @"
@@ -755,10 +756,12 @@ Describe 'Configuration check (read-only) and -RedoHardening' {
 "@
         $s = @{ Install = @{ MediaRelativePath = 'media\PSM'; InstallDir = $TestDrive } }
         Merge-PSMAppLockerConfig -Settings $s -SourcesRoot $src -PsmDir $psm | Should -Be 'CHANGED'
-        $x = [xml](Get-Content (Join-Path $psm 'Hardening\PSMConfigureAppLocker.xml') -Raw)
-        @($x.SelectNodes('//Application') | ForEach-Object { "$($_.GetAttribute('Name'))/$($_.GetAttribute('Method'))" }) |
-            Should -Be @('RDPClip/Publisher', 'Tool/Hash')
+        $raw = Get-Content (Join-Path $psm 'Hardening\PSMConfigureAppLocker.xml') -Raw
+        @(([xml]$raw).SelectNodes('//Application') | ForEach-Object { "$($_.GetAttribute('Name'))/$($_.GetAttribute('Method'))" }) |
+            Should -Be @('RDPClip/Publisher', 'HandMade/Hash', 'Tool/Hash')
+        $raw | Should -Match '<!-- custom -->\s*<Application Name="Tool"'
         Merge-PSMAppLockerConfig -Settings $s -SourcesRoot $src -PsmDir $psm | Should -Be 'OK'
+        { Merge-PSMAppLockerConfig -Settings $s -SourcesRoot $src -PsmDir (Join-Path $TestDrive 'no-psm') } | Should -Throw '*not found*'
     }
     It 'tools\Test-PSMConfiguration.ps1 parses without error' {
         $errors = $null
