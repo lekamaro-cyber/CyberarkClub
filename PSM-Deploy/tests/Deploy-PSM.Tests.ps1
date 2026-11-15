@@ -1034,6 +1034,31 @@ Describe 'AppLocker hash repair task (Repair-PSMAppLocker + Install-PSMAppLocker
         Test-PSMUnreachableError 'Access is denied. (Exception from HRESULT: 0x80070005)' | Should -BeFalse
         Format-PSMTaskResult 267011 | Should -Be 'never run yet'
     }
+    It 'Run detail: the ERROR lines of THIS run, else its last line; nothing written = hint' {
+        $old = @('[2026-11-01 03:00:01] [OK     ] old run - all up to date.')
+        Select-PSMRunDetail -Before $old -After ($old + '[2026-11-15 12:00:00] [OK     ] 41 pinned file(s) checked - all up to date.') |
+            Should -Be '41 pinned file(s) checked - all up to date.'
+        Select-PSMRunDetail -Before $old -After ($old + '[x] [WARN   ] a changed' + '[x] [ERROR  ] LEFT BLOCKED - b' + '[x] [CHANGED] a re-pinned') |
+            Should -Be 'LEFT BLOCKED - b'
+        Select-PSMRunDetail -Before $old -After $old | Should -Match 'execution policy'
+        Select-PSMRunDetail -Before ($old * 5) -After @('[x] [OK     ] after rotation') | Should -Be 'after rotation'
+    }
+    It 'Invoke-PSMTaskRun waits for THIS run (LastRunTime changed, no longer running)' {
+        $task = [pscustomobject]@{ State = 3; LastRunTime = [datetime]'2026-11-01 03:00'; LastTaskResult = 0; Polls = 0 }
+        $task | Add-Member ScriptMethod Run { param($a) $this.State = 4; $this.LastTaskResult = 267009 }
+        $folder = [pscustomobject]@{ T = $task }
+        $folder | Add-Member ScriptMethod GetTask { param($n)
+            $t = $this.T; $t.Polls++
+            if ($t.State -eq 4 -and $t.Polls -ge 3) { $t.State = 3; $t.LastRunTime = [datetime]'2026-11-15 12:00'; $t.LastTaskResult = 1 }
+            $t }
+        $svc = [pscustomobject]@{ F = $folder }
+        $svc | Add-Member ScriptMethod GetFolder { param($p) $this.F }
+        $r = Invoke-PSMTaskRun -Service $svc -Name 'x' -TimeoutSeconds 10 -PollSeconds 0
+        $r.Completed | Should -BeTrue
+        $r.Task.LastTaskResult | Should -Be 1
+        $task.State = 4; $task.Polls = -1000                       # never finishes
+        (Invoke-PSMTaskRun -Service $svc -Name 'x' -TimeoutSeconds 1 -PollSeconds 0).Completed | Should -BeFalse
+    }
 }
 
 Describe 'Show-PSMConfig (read-only configuration view)' {

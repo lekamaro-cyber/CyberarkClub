@@ -15,8 +15,12 @@
       2. checks the scheduled task (SYSTEM, highest privileges, at startup +5
          min and every day at 03:00) and registers it only when it is missing
          or different;
-      3. reports per server: script OK/CHANGED, task OK/CHANGED, and the task's
-         last run and result.
+      3. RUNS the task once and waits for the end of that run (-RunTimeoutSeconds),
+         then reads what it wrote in its log on the server;
+      4. reports per server: script OK/CHANGED, task OK/CHANGED, the run (OK /
+         KO / TIMEOUT) and what the repair did ("all up to date", "rdpclip.exe
+         re-pinned", "LEFT BLOCKED ..."). Running the repair is harmless: it
+         only changes the AppLocker policy when a pinned file has changed.
     Credential cascade (as for the push): current session, then the access lot's
     domain account (Vault), then the machine's local account (Vault), then a
     prompt. A NETWORK failure (RPC server unavailable, path not found) stops
@@ -28,7 +32,7 @@
     "RPC server is unavailable".
 
     -WhatIf = status report: reads each server with the CURRENT session only
-    (no Vault, no prompt), changes nothing.
+    (no Vault, no prompt), changes and runs nothing.
 
 .PARAMETER Type
     Restrict to one or more server types (PRD, DRP, PREPRD, PRDNPR).
@@ -39,12 +43,15 @@
 .PARAMETER Remove
     Removes the task and the script from the servers (the Logs folder stays).
 
-.PARAMETER RunNow
-    Starts the task right after the check/installation (test). Relaunch with
-    -WhatIf a minute later to read its result.
+.PARAMETER NoRun
+    Installs / checks only, without running the task.
+
+.PARAMETER RunTimeoutSeconds
+    How long to wait for the run of each server (default 180 s; the repair
+    takes seconds, plus gpupdate when it changes the policy).
 
 .EXAMPLE
-    .\Install-PSMAppLockerTask.ps1 -Server FRPRDSRV10013 -RunNow
+    .\Install-PSMAppLockerTask.ps1 -Server FRPRDSRV10013
 .EXAMPLE
     .\Install-PSMAppLockerTask.ps1 -WhatIf          # status of every server, changes nothing
 .EXAMPLE
@@ -56,7 +63,8 @@ param(
     [string[]] $Type,
     [string[]] $Server,
     [switch]   $Remove,
-    [switch]   $RunNow,
+    [switch]   $NoRun,
+    [int]      $RunTimeoutSeconds = 180,
     [string]   $DailyAt = '03:00',
     [int]      $StartupDelayMinutes = 5,
     [pscredential] $PvwaCredential
@@ -163,7 +171,7 @@ function Invoke-ServerTask {
     param([Parameter(Mandatory)] $Srv, [pscredential] $Credential)
     $remoteDir = ConvertTo-PSMAdminSharePath -ComputerName $Srv.Name -LocalPath $TargetDir
     $shareRoot = Get-PSMShareRoot -Path $remoteDir
-    $row = [ordered]@{ Script = '-'; Task = '-'; LastRun = '-'; LastResult = '-' }
+    $row = [ordered]@{ Script = '-'; Task = '-'; Run = '-'; LastRun = '-'; LastResult = '-'; Detail = '' }
     $drive = Open-PSMAdminShare -ShareRoot $shareRoot -Credential $Credential
     try {
         Assert-PSMAdminShare -ShareRoot $shareRoot
@@ -198,11 +206,28 @@ function Invoke-ServerTask {
         }
 
         $task = Get-PSMScheduledTask -Service $svc -Name $TaskName
-        if ($task) {
-            if ($RunNow -and -not $WhatIfPreference) {
-                [void]$task.Run($null)
-                Write-PSMLog -Level INFO -Message "$($Srv.Name): task started (-RunNow) - relaunch with -WhatIf in a minute to read its result."
+        if ($task -and -not $WhatIfPreference -and -not $NoRun) {
+            # Run it now and wait for THIS run. A run problem never throws:
+            # the installation is done, only the run is reported KO.
+            $logPath = Join-Path (Join-Path $remoteDir 'Logs') 'Repair-PSMAppLocker.log'
+            Write-PSMLog -Level INFO -Message "$($Srv.Name): running the task (waiting up to $RunTimeoutSeconds s)..."
+            try {
+                $before = @(Get-PSMRemoteLines -Path $logPath)
+                $run    = Invoke-PSMTaskRun -Service $svc -Name $TaskName -TimeoutSeconds $RunTimeoutSeconds
+                $task   = $run.Task
+                if (-not $run.Completed) {
+                    $row.Run = 'TIMEOUT'; $row.Detail = "the run did not finish within $RunTimeoutSeconds s"
+                }
+                else {
+                    $row.Run    = if ([int64]$task.LastTaskResult -eq 0) { 'OK' } else { 'KO' }
+                    $row.Detail = Select-PSMRunDetail -Before $before -After @(Get-PSMRemoteLines -Path $logPath)
+                }
             }
+            catch { $row.Run = 'KO'; $row.Detail = "run failed: $($_.Exception.Message)" }
+            $lvl = if ($row.Run -eq 'OK') { 'OK' } else { 'ERROR' }
+            Write-PSMLog -Level $lvl -Message "$($Srv.Name): task run $($row.Run) - $($row.Detail)"
+        }
+        if ($task) {
             $last = [datetime]$task.LastRunTime
             $row.LastRun    = if ($last.Year -lt 2000) { 'never' } else { $last.ToString('yyyy-MM-dd HH:mm') }
             $row.LastResult = Format-PSMTaskResult -Code $task.LastTaskResult
@@ -260,16 +285,17 @@ try {
         }
         if ($row) {
             $status = if ("$($row.Script) $($row.Task)" -match 'WOULD') { 'WOULD CHANGE' }
+                      elseif ($row.Run -in 'KO', 'TIMEOUT') { 'RUN KO' }
                       elseif ("$($row.Script) $($row.Task)" -match 'CHANGED|REMOVED') { 'CHANGED' }
                       else { 'OK' }
-            $results += [pscustomobject]@{ Server = $srv.Name; Type = $srv.Type; Status = $status; Script = $row.Script
-                                           Task = $row.Task; LastRun = $row.LastRun; LastResult = $row.LastResult; Detail = '' }
+            $results += [pscustomobject]@{ Server = $srv.Name; Type = $srv.Type; Status = $status; Script = $row.Script; Task = $row.Task
+                                           Run = $row.Run; LastRun = $row.LastRun; LastResult = $row.LastResult; Detail = $row.Detail }
         }
         else {
             $status = if ($WhatIfPreference) { 'NOT CHECKED' } else { 'FAILED' }
             Write-PSMLog -Level $(if ($WhatIfPreference) { 'WARN' } else { 'ERROR' }) -Message "$($srv.Name): $status - $lastError"
-            $results += [pscustomobject]@{ Server = $srv.Name; Type = $srv.Type; Status = $status; Script = '-'
-                                           Task = '-'; LastRun = '-'; LastResult = '-'; Detail = $lastError }
+            $results += [pscustomobject]@{ Server = $srv.Name; Type = $srv.Type; Status = $status; Script = '-'; Task = '-'
+                                           Run = '-'; LastRun = '-'; LastResult = '-'; Detail = $lastError }
         }
     }
 }
@@ -279,16 +305,22 @@ finally {
 
 # --- Summary -----------------------------------------------------------------
 Write-PSMLog -Level INFO -Message '=== AppLocker repair task - summary ==='
-Write-PSMLog -Level INFO -Message ('{0,-16} {1,-7} {2,-12} {3,-14} {4,-14} {5,-17} {6}' -f 'Server', 'Type', 'Status', 'Script', 'Task', 'Last run', 'Last result')
+$fmt = '{0,-16} {1,-7} {2,-12} {3,-13} {4,-13} {5,-8} {6,-17} {7}'
+Write-PSMLog -Level INFO -Message ($fmt -f 'Server', 'Type', 'Status', 'Script', 'Task', 'Run', 'Last run', 'Last result')
 foreach ($r in $results) {
-    $lvl = switch ($r.Status) { 'FAILED' { 'ERROR' } 'NOT CHECKED' { 'WARN' } 'WOULD CHANGE' { 'INFO' } 'CHANGED' { 'CHANGED' } default { 'OK' } }
-    $line = '{0,-16} {1,-7} {2,-12} {3,-14} {4,-14} {5,-17} {6}' -f $r.Server, $r.Type, $r.Status, $r.Script, $r.Task, $r.LastRun, $r.LastResult
+    $lvl = switch ($r.Status) { 'FAILED' { 'ERROR' } 'RUN KO' { 'ERROR' } 'NOT CHECKED' { 'WARN' } 'WOULD CHANGE' { 'INFO' } 'CHANGED' { 'CHANGED' } default { 'OK' } }
+    $line = $fmt -f $r.Server, $r.Type, $r.Status, $r.Script, $r.Task, $r.Run, $r.LastRun, $r.LastResult
     if ($r.Detail) { $line += " - $($r.Detail)" }
     Write-PSMLog -Level $lvl -Message $line
 }
 $failed = @($results | Where-Object { $_.Status -eq 'FAILED' })
+$runKo  = @($results | Where-Object { $_.Status -eq 'RUN KO' })
 if ($failed) {
     Write-PSMLog -Level ERROR -Message "$($failed.Count) server(s) FAILED - relaunch with -Server $(($failed | ForEach-Object { $_.Server }) -join ',')."
-    exit 1
 }
+if ($runKo) {
+    Write-PSMLog -Level ERROR -Message ("$($runKo.Count) server(s) with the task installed but its run KO: " +
+        "$(($runKo | ForEach-Object { $_.Server }) -join ',') - see the detail above and C:\Program Files\PSM-Deploy\Logs\ on the server.")
+}
+if ($failed -or $runKo) { exit 1 }
 exit 0

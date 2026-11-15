@@ -141,6 +141,6 @@ Done: `PSM-Deploy\tools\Repair-PSMAppLocker.ps1` (re-pins only signed files not 
 users, in place in the local policy) and `PSM-Distribute\Install-PSMAppLockerTask.ps1`
 (installs the SYSTEM task from the CPM, idempotent, status per server). Simulated off-Windows only.
 - [ ] From the CPM: `schtasks /Query /S FRPRDSRV10013 /TN "\Microsoft\Windows\Defrag\ScheduledDefrag"`
-      (Task Scheduler RPC flow open?), then `.\Install-PSMAppLockerTask.ps1 -Server FRPRDSRV10013 -RunNow`.
-- [ ] On FRPRDSRV10013: `Repair-PSMAppLocker.ps1 -WhatIf` by hand, and the log after the task run.
+      (Task Scheduler RPC flow open?), then `.\Install-PSMAppLockerTask.ps1 -Server FRPRDSRV10013`
+      (installs, runs the task once, shows what the repair did).
 - [ ] Check after the next patching weekend: log shows the re-pinned files, copy/paste OK.

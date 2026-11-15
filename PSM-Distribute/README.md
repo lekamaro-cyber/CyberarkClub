@@ -171,10 +171,11 @@ PSM by itself. Same inventory, filters and credential cascade as the push;
 **idempotent**; one status line per server.
 
 ```powershell
-.\Install-PSMAppLockerTask.ps1 -Server FRPRDSRV10013 -RunNow   # install + start once (test)
-.\Install-PSMAppLockerTask.ps1 -WhatIf                         # status of every server, changes nothing
-.\Install-PSMAppLockerTask.ps1 -Type PRD                       # install where missing / different
-.\Install-PSMAppLockerTask.ps1 -Server <srv> -Remove           # remove task + script
+.\Install-PSMAppLockerTask.ps1 -Server FRPRDSRV10013   # install where missing / different, run once, report
+.\Install-PSMAppLockerTask.ps1 -Type PRD
+.\Install-PSMAppLockerTask.ps1 -WhatIf                  # status of every server, changes and runs nothing
+.\Install-PSMAppLockerTask.ps1 -NoRun                   # install / check without running the task
+.\Install-PSMAppLockerTask.ps1 -Server <srv> -Remove    # remove task + script
 ```
 
 Per server:
@@ -185,8 +186,13 @@ Per server:
 2. checks the task **`PSM AppLocker hash repair`** (SYSTEM, highest privileges,
    at startup + 5 min and every day at 03:00 - `-DailyAt` / `-StartupDelayMinutes`)
    and registers it only when missing or different;
-3. reports `Script` / `Task` (OK, CHANGED, WOULD CHANGE, REMOVED, ABSENT) and the
-   task's **last run and result** - `-WhatIf` is the fleet status report.
+3. **runs the task once** and waits for the end of that run (`-RunTimeoutSeconds`,
+   180 s by default), then reads what it wrote in its log on the server.
+   Harmless: the repair only changes the policy when a pinned file changed;
+4. reports `Script` / `Task` (OK, CHANGED, WOULD CHANGE, REMOVED, ABSENT), the
+   run (OK / KO / TIMEOUT) and **what the repair did** ("all up to date",
+   "re-pinned...", "LEFT BLOCKED..."). Status `RUN KO` = task installed but its
+   run failed (exit code 1, like FAILED). `-WhatIf` is the fleet status report.
 
 What the task does on the PSM (`Repair-PSMAppLocker.ps1`, log in
 `C:\Program Files\PSM-Deploy\Logs\`):

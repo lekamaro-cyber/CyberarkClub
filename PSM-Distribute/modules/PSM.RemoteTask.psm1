@@ -215,6 +215,58 @@ function Test-PSMUnreachableError {
     return [bool]($Message -match '0x800706BA|RPC server is unavailable|network path was not found|network name cannot be found|No such host|0x80070035|0x800706D9')
 }
 
+function Invoke-PSMTaskRun {
+    <#
+        Starts the task and waits for the end of THIS run: its LastRunTime
+        changed (both values come from the server's clock) and it is no longer
+        queued / running. Returns { Completed; Task } (Task = last state read).
+    #>
+    param(
+        [Parameter(Mandatory)] $Service,
+        [Parameter(Mandatory)] [string] $Name,
+        [int] $TimeoutSeconds = 180,
+        [int] $PollSeconds = 3
+    )
+    $t = Get-PSMScheduledTask -Service $Service -Name $Name
+    if (-not $t) { throw "task '$Name' not found." }
+    $previous = [datetime]$t.LastRunTime
+    [void]$t.Run($null)
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        Start-Sleep -Seconds $PollSeconds
+        $t = Get-PSMScheduledTask -Service $Service -Name $Name
+        $started = ([datetime]$t.LastRunTime) -ne $previous
+        if ($started -and [int]$t.State -notin 2, 4 -and [int64]$t.LastTaskResult -ne 267009) {   # 2 queued, 4 running
+            return [pscustomobject]@{ Completed = $true; Task = $t }
+        }
+    } while ((Get-Date) -lt $deadline)
+    return [pscustomobject]@{ Completed = $false; Task = $t }
+}
+
+function Get-PSMRemoteLines {
+    # Lines of a remote text file (UNC), none when it does not exist yet.
+    param([Parameter(Mandatory)] [string] $Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return @() }
+    return @(Get-Content -LiteralPath $Path)
+}
+
+function Select-PSMRunDetail {
+    <#
+        The lines the run added to the repair log ($After minus the $Before
+        lines; the whole file if it was rotated) -> one readable line: the
+        ERROR lines if any, else the last line. Timestamps / levels stripped.
+    #>
+    param([string[]] $Before = @(), [string[]] $After = @())
+    $Before = @($Before); $After = @($After)
+    $new = if ($After.Count -ge $Before.Count) { @($After | Select-Object -Skip $Before.Count) } else { $After }
+    $new = @($new | Where-Object { $_ -and $_.Trim() })
+    if (-not $new) { return 'no line written to the repair log (did the script start? execution policy?)' }
+    $strip = { param($l) $l -replace '^\[[^\]]+\]\s*\[[^\]]+\]\s*', '' }
+    $errors = @($new | Where-Object { $_ -match '\[ERROR' })
+    if ($errors) { return (@($errors | ForEach-Object { & $strip $_ }) -join ' | ') }
+    return (& $strip $new[-1])
+}
+
 function Format-PSMTaskResult {
     # Readable last result of a task (LastTaskResult).
     param([int64] $Code)
@@ -230,4 +282,4 @@ function Format-PSMTaskResult {
 Export-ModuleMember -Function Get-PSMRepairTaskSpec, ConvertTo-PSMTaskSnapshot, Compare-PSMTaskSpec, `
     Split-PSMAccountName, Connect-PSMTaskScheduler, Get-PSMScheduledTask, Register-PSMRepairTask, `
     ConvertTo-PSMAdminSharePath, Get-PSMShareRoot, Assert-PSMAdminShare, Open-PSMAdminShare, Sync-PSMRemoteFile, Test-PSMUnreachableError, `
-    Format-PSMTaskResult
+    Invoke-PSMTaskRun, Get-PSMRemoteLines, Select-PSMRunDetail, Format-PSMTaskResult
