@@ -129,3 +129,18 @@ repair answers (`SdWelcomeMaint`, 302 = Repair) do not match the 14.0.6 update s
 home-made `.iss` (unsupported path). Operator: answer the wizard, choose "Yes, restart now"
 at the end; the script resumes and does the rest.
 - [ ] Only if CyberArk supports a silent upgrade on a later media: replace the wizard step.
+
+## 9. AppLocker blocks patched files (rdpclip.exe, Chrome) until the script is re-run
+
+**Seen on weekends after patching**: the production `PSMConfigureAppLocker.xml` allows
+everything by `Method="Hash"` (FRDRPSRV4640: rdpclip, conhost, taskhostw, sihost, mstsc,
+chrome.exe...). A patched file gets a new hash -> blocked (copy/paste gone, connectors).
+Publisher rules refused; alerting on event 8004 judged too heavy.
+
+Done: `PSM-Deploy\tools\Repair-PSMAppLocker.ps1` (re-pins only signed files not writable by
+users, in place in the local policy) and `PSM-Distribute\Install-PSMAppLockerTask.ps1`
+(installs the SYSTEM task from the CPM, idempotent, status per server). Simulated off-Windows only.
+- [ ] From the CPM: `schtasks /Query /S FRPRDSRV10013 /TN "\Microsoft\Windows\Defrag\ScheduledDefrag"`
+      (Task Scheduler RPC flow open?), then `.\Install-PSMAppLockerTask.ps1 -Server FRPRDSRV10013 -RunNow`.
+- [ ] On FRPRDSRV10013: `Repair-PSMAppLocker.ps1 -WhatIf` by hand, and the log after the task run.
+- [ ] Check after the next patching weekend: log shows the re-pinned files, copy/paste OK.

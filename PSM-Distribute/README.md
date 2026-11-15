@@ -161,6 +161,53 @@ Optional `Zone = '<zones.psd1 key>'` on a `Servers` entry: shown in the view and
 checked against the server's VIP (ignored by `Distribute-PSMSources.ps1`).
 Without it, the zone is deduced from the VIPs the server belongs to.
 
+## AppLocker repair task (`Install-PSMAppLockerTask.ps1`)
+
+A patch that replaces a file allowed by HASH in AppLocker (rdpclip.exe on
+Patch Tuesday → copy/paste gone; Chrome updating itself → web connectors
+blocked) leaves it blocked until the CyberArk AppLocker script is re-run. This
+script installs, from the CPM, a scheduled task that does that repair on each
+PSM by itself. Same inventory, filters and credential cascade as the push;
+**idempotent**; one status line per server.
+
+```powershell
+.\Install-PSMAppLockerTask.ps1 -Server FRPRDSRV10013 -RunNow   # install + start once (test)
+.\Install-PSMAppLockerTask.ps1 -WhatIf                         # status of every server, changes nothing
+.\Install-PSMAppLockerTask.ps1 -Type PRD                       # install where missing / different
+.\Install-PSMAppLockerTask.ps1 -Server <srv> -Remove           # remove task + script
+```
+
+Per server:
+1. copies `PSM-Deploy\tools\Repair-PSMAppLocker.ps1` (from `SourceRoot` on the
+   CPM) to `C:\Program Files\PSM-Deploy\` over the admin share, only when
+   missing or different. A Program Files folder: writable by administrators
+   only (a SYSTEM task must never run a script a user could edit);
+2. checks the task **`PSM AppLocker hash repair`** (SYSTEM, highest privileges,
+   at startup + 5 min and every day at 03:00 - `-DailyAt` / `-StartupDelayMinutes`)
+   and registers it only when missing or different;
+3. reports `Script` / `Task` (OK, CHANGED, WOULD CHANGE, REMOVED, ABSENT) and the
+   task's **last run and result** - `-WhatIf` is the fleet status report.
+
+What the task does on the PSM (`Repair-PSMAppLocker.ps1`, log in
+`C:\Program Files\PSM-Deploy\Logs\`):
+- for each file pinned by hash in the LOCAL AppLocker policy (the one CyberArk
+  wrote, paths from the server's `PSMConfigureAppLocker.xml`), compares the
+  pinned hash with the file's current one;
+- re-pins a changed file **only if** it has a valid signature (Microsoft,
+  Google... - catalog signature counts) **and** neither the file nor its
+  folder is writable by anyone but SYSTEM / Administrators / TrustedInstaller.
+  Otherwise it is **LEFT BLOCKED** and logged: a file a user could replace is
+  never re-allowed automatically (task result 1);
+- replaces the old hash by the new one in the same rules; nothing else changes
+  (users, rules, other files, the XML). Local policy backed up first (last 10
+  kept), `gpupdate /target:computer`, check on the effective policy.
+
+**Network**: SMB/445 (as for the push) **and** the Task Scheduler RPC from
+the CPM (TCP 135 + dynamic RPC ports, Windows firewall group "Remote Scheduled
+Tasks Management" on the PSM). Without it, the server is FAILED with "RPC
+server is unavailable" (the cascade stops: another account would not help).
+Quick test from the CPM: `schtasks /Query /S <psm> /TN "\Microsoft\Windows\Defrag\ScheduledDefrag"`.
+
 ## Behavior & warnings
 
 - Transport is `robocopy /MIR` over the admin share

@@ -61,6 +61,7 @@ PSM-Deploy/
 ├─ tools/Test-PSMRdsReadiness.ps1        # READ-ONLY check before (re)running InstallRDS
 ├─ tools/Test-PSMConfiguration.ps1       # READ-ONLY configuration check, any PSM, any time
 ├─ tools/Get-PSMInventory.ps1            # READ-ONLY full inventory of a PSM (self-contained: compare a hand-installed PSM with ours)
+├─ tools/Repair-PSMAppLocker.ps1         # re-pins the AppLocker hash of files replaced by a patch (scheduled task, see PSM-Distribute\Install-PSMAppLockerTask.ps1)
 ├─ applocker/PSMConfigureAppLocker.xml   # OUR AppLocker exceptions, added (when missing) to the server's file before every Hardening
 ├─ media/                    # (empty) PSM 12.6/14.0 media — not versioned
 ├─ installers/               # (empty) additional binaries — not versioned

@@ -958,6 +958,84 @@ Describe 'PSM-Distribute (source distribution from the CPM)' {
     }
 }
 
+Describe 'AppLocker hash repair task (Repair-PSMAppLocker + Install-PSMAppLockerTask)' {
+    BeforeAll {
+        $script:distRoot = Join-Path (Split-Path $root -Parent) 'PSM-Distribute'
+        . (Join-Path $root 'tools\Repair-PSMAppLocker.ps1')        # functions only when dot-sourced
+        Import-Module (Join-Path $script:distRoot 'modules\PSM.RemoteTask.psm1') -Force
+        $script:newPolicy = {
+            [xml]@'
+<AppLockerPolicy Version="1"><RuleCollection Type="Exe" EnforcementMode="Enabled">
+<FilePathRule Id="a" Name="deny" UserOrGroupSid="S-1-5-21-1" Action="Deny"><Conditions><FilePathCondition Path="*" /></Conditions><Exceptions>
+<FileHashCondition><FileHash Type="SHA256" Data="0xOLDCLIP" SourceFileName="RDPCLIP.EXE" SourceFileLength="10" /></FileHashCondition>
+<FileHashCondition><FileHash Type="SHA256" Data="0xIE32" SourceFileName="iexplore.exe" SourceFileLength="1" /><FileHash Type="SHA256" Data="0xOLDIE64" SourceFileName="iexplore.exe" SourceFileLength="2" /></FileHashCondition>
+<FileHashCondition><FileHash Type="SHA256" Data="0xOTHER" SourceFileName="other.exe" SourceFileLength="3" /></FileHashCondition>
+</Exceptions></FilePathRule></RuleCollection></AppLockerPolicy>
+'@
+        }
+        $script:current = @(
+            [pscustomobject]@{ Path = 'c:\windows\system32\rdpclip.exe'; Name = 'rdpclip.exe'; Type = 'SHA256'; Data = '0xNEWCLIP'; Length = '11' }
+            [pscustomobject]@{ Path = 'c:\pf86\iexplore.exe'; Name = 'iexplore.exe'; Type = 'SHA256'; Data = '0xIE32'; Length = '1' }
+            [pscustomobject]@{ Path = 'c:\pf\iexplore.exe';   Name = 'iexplore.exe'; Type = 'SHA256'; Data = '0xNEWIE64'; Length = '22' }
+        )
+    }
+    It 'Both scripts and the module parse' {
+        foreach ($f in (Join-Path $root 'tools\Repair-PSMAppLocker.ps1'), (Join-Path $script:distRoot 'Install-PSMAppLockerTask.ps1'),
+                       (Join-Path $script:distRoot 'modules\PSM.RemoteTask.psm1')) {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$null, [ref]$errors)
+            @($errors).Count | Should -Be 0
+        }
+    }
+    It 'Reads the hash-pinned paths of the XML (no Publisher, no wildcard)' {
+        [xml]$list = '<PSMAppLockerConfiguration><AllowedApplications>' +
+            '<Application Name="A" Type="Exe" Path="c:\a\a.exe" Method="Hash" /><Application Name="B" Type="Exe" Path="c:\b\b.exe" />' +
+            '<Application Name="P" Type="Exe" Path="c:\p\p.exe" Method="Publisher" /><Application Name="W" Type="Exe" Path="c:\w\*.exe" Method="Hash" />' +
+            '<Libraries /></AllowedApplications></PSMAppLockerConfiguration>'
+        Get-PSMAllowedFilePaths -Xml $list | Should -Be @('c:\a\a.exe', 'c:\b\b.exe')
+    }
+    It 'Finds only the stale pinned hashes (current hash already pinned = up to date)' {
+        $pol = & $script:newPolicy
+        $stale = @(Find-PSMStaleHashes -Policy $pol -Current $script:current)
+        @($stale | ForEach-Object { "$($_.Name)=$($_.OldData)" }) | Should -Be @('rdpclip.exe=0xOLDCLIP', 'iexplore.exe=0xOLDIE64')
+    }
+    It 'Replaces in place only the allowed names; other files and rules untouched; then nothing is stale' {
+        $pol = & $script:newPolicy
+        $n = Update-PSMPinnedHashes -Policy $pol -Current $script:current -AllowedNames @('rdpclip.exe') `
+                -Stale @(Find-PSMStaleHashes -Policy $pol -Current $script:current)
+        $n | Should -Be 1
+        $conds = @($pol.SelectNodes('//FileHashCondition') | ForEach-Object { (@($_.SelectNodes('FileHash')) | ForEach-Object { $_.GetAttribute('Data') }) -join '+' })
+        $conds | Should -Be @('0xNEWCLIP', '0xIE32+0xOLDIE64', '0xOTHER')     # iexplore not allowed: left as is
+        $n = Update-PSMPinnedHashes -Policy $pol -Current $script:current -AllowedNames @('iexplore.exe') `
+                -Stale @(Find-PSMStaleHashes -Policy $pol -Current $script:current)
+        $n | Should -Be 1
+        @(Find-PSMStaleHashes -Policy $pol -Current $script:current).Count | Should -Be 0
+        $pol.SelectNodes('//FilePathRule').Count | Should -Be 1
+    }
+    It 'Task definition: the expected one = no difference; any drift is reported' {
+        $spec = Get-PSMRepairTaskSpec -ScriptPath 'C:\Program Files\PSM-Deploy\Repair-PSMAppLocker.ps1'
+        $fake = {
+            param($Arguments, $UserId, $At, $Enabled)
+            [pscustomobject]@{ Enabled = $Enabled; Definition = [pscustomobject]@{
+                Actions   = @([pscustomobject]@{ Type = 0; Path = $spec.Execute; Arguments = $Arguments })
+                Triggers  = @([pscustomobject]@{ Type = 8; Delay = 'PT5M' }, [pscustomobject]@{ Type = 2; StartBoundary = "2026-01-01T$($At):00"; DaysInterval = 1 })
+                Principal = [pscustomobject]@{ UserId = $UserId; RunLevel = 1 } } }
+        }
+        @(Compare-PSMTaskSpec -Spec $spec -Snapshot (ConvertTo-PSMTaskSnapshot -Task (& $fake $spec.Arguments 'S-1-5-18' '03:00' $true))).Count | Should -Be 0
+        $diff = Compare-PSMTaskSpec -Spec $spec -Snapshot (ConvertTo-PSMTaskSnapshot -Task (& $fake '-File x.ps1' 'FRANCE\bob' '05:00' $false))
+        ($diff -join ' | ') | Should -Match 'disabled.*action.*FRANCE\\bob.*05:00'
+        { Get-PSMRepairTaskSpec -ScriptPath x -DailyAt '3h' } | Should -Throw '*HH:mm*'
+    }
+    It 'Admin share path, account split, network errors stop the credential cascade' {
+        ConvertTo-PSMAdminSharePath -ComputerName SRV1 -LocalPath 'C:\Program Files\PSM-Deploy' | Should -Be '\\SRV1\C$\Program Files\PSM-Deploy'
+        Get-PSMShareRoot -Path '\\SRV1\C$\Program Files\PSM-Deploy' | Should -Be '\\SRV1\C$'
+        (Split-PSMAccountName 'FRANCE\svc').Domain | Should -Be 'FRANCE'
+        Test-PSMUnreachableError 'The RPC server is unavailable. (Exception from HRESULT: 0x800706BA)' | Should -BeTrue
+        Test-PSMUnreachableError 'Access is denied. (Exception from HRESULT: 0x80070005)' | Should -BeFalse
+        Format-PSMTaskResult 267011 | Should -Be 'never run yet'
+    }
+}
+
 Describe 'Show-PSMConfig (read-only configuration view)' {
     BeforeAll {
         $script:showConfig = Join-Path (Split-Path $root -Parent) 'PSM-Distribute\Show-PSMConfig.ps1'
