@@ -144,3 +144,20 @@ users, in place in the local policy) and `PSM-Distribute\Install-PSMAppLockerTas
       (Task Scheduler RPC flow open?), then `.\Install-PSMAppLockerTask.ps1 -Server FRPRDSRV10013`
       (installs, runs the task once, shows what the repair did).
 - [ ] Check after the next patching weekend: log shows the re-pinned files, copy/paste OK.
+
+## 10. Local drives still visible in the sessions after the installs
+
+CyberArk's `HideLocalDrives` (Hardening stage, AfterHardening step) logs "Update NoDrives
+policy to 33554444 (PSM) completed successfully" (33554444 = C:, D:, Z:), yet the drives stay
+visible. The value was found neither in HKLM, nor in HKU, nor in GroupPolicyUsers
+(BEDRPSRV10649); production FRDRPSRV4640 has no `NoDrives` in HKLM either. Wanted: drives
+hidden for everyone on the PSM, not only the PSM accounts.
+
+To do:
+- [ ] Read CyberArk's HideLocalDrives code in the media (InstallationAutomation): which accounts,
+      which registry hive. If it reads `PSMConnectionUsersInfo`, the fix of #2 may already make it
+      target the domain accounts: check after `-RedoHardening` on FRPRDSRV10012.
+- [ ] During an open PSM session: `NoDrives` / `NoViewOnDrive` in the session user's hive
+      (FRDRPSRV4640 and FRPRDSRV10012).
+- [ ] Then choose: CyberArk's script as is / a machine-wide HKLM step in the script / one GPO per
+      zone (the same one as the RDS logon right, #7).
